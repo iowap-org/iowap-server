@@ -14,6 +14,8 @@ from relay_server.core.auth import (
     validate_token,
 )
 from relay_server.models import (
+    AdminNodeRegistration,
+    AdminNodeRegistrationResponse,
     NodeRegistration,
     NodeRegistrationResponse,
     RegistrationStatusRequest,
@@ -73,50 +75,29 @@ async def auth_init_master():
 
 @router.post("/register", response_model=NodeRegistrationResponse)
 async def auth_register(body: NodeRegistration):
-    """Register a new node. Admin nodes need a bootstrap_secret; others start pending."""
+    """Register a new worker/service node.
+
+    The cluster assigns a unique 8-character node_id. The node starts in
+    `pending` state and needs admin approval.
+    """
     from relay_server.config import settings
 
     caps = [c.model_dump() for c in body.capabilities]
-
-    if body.bootstrap_secret:
-        # Attempt admin registration.
-        token = register_admin_node(
-            node_id=body.node_id,
-            node_name=body.node_name,
-            bootstrap_secret=body.bootstrap_secret,
-            endpoint=body.endpoint,
-            capabilities=caps,
-        )
-        if not token:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid bootstrap secret or node already exists",
-            )
-        return _token_response(
-            node_id=body.node_id,
-            node_name=body.node_name,
-            status="approved",
-            token_type="runtime",
-            token=token,
-            ttl_hours=settings.token_ttl_hours,
-        )
-
-    token, registration_secret = register_pending_node(
-        node_id=body.node_id,
+    node_id, token, registration_secret = register_pending_node(
         node_name=body.node_name,
         endpoint=body.endpoint,
         capabilities=caps,
         role=body.role,
     )
-    if not token or not registration_secret:
+    if not node_id or not token or not registration_secret:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Node already exists",
+            detail="Could not generate unique node ID",
         )
 
     temporary_ttl = getattr(settings, "temporary_token_ttl_hours", 24)
     return {
-        "node_id": body.node_id,
+        "node_id": node_id,
         "node_name": body.node_name,
         "status": "pending",
         "token_type": "temporary",
@@ -124,6 +105,36 @@ async def auth_register(body: NodeRegistration):
         "expires_at": _format_time(_now() + timedelta(hours=temporary_ttl)),
         "registration_secret": registration_secret,
     }
+
+
+@router.post("/register-admin", response_model=AdminNodeRegistrationResponse)
+async def auth_register_admin(body: AdminNodeRegistration):
+    """Register an admin node using the master bootstrap secret.
+
+    The cluster assigns a unique 8-character node_id.
+    """
+    from relay_server.config import settings
+
+    caps = [c.model_dump() for c in body.capabilities]
+    node_id, token = register_admin_node(
+        node_name=body.node_name,
+        bootstrap_secret=body.bootstrap_secret,
+        endpoint=body.endpoint,
+        capabilities=caps,
+    )
+    if not node_id or not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid bootstrap secret or could not generate unique ID",
+        )
+    return _token_response(
+        node_id=node_id,
+        node_name=body.node_name,
+        status="approved",
+        token_type="runtime",
+        token=token,
+        ttl_hours=settings.token_ttl_hours,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)

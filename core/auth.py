@@ -7,11 +7,20 @@ from typing import Optional
 
 from relay_server.config import settings
 from relay_server.core.db import get_conn
+from relay_server.core.node_registry import NodeRegistry
 
 ADMIN_SEED_PREFIX = "adm_"
 BOOTSTRAP_SEED_PREFIX = "bs_"
 TEMPORARY_TOKEN_PREFIX = "tp_"
 RUNTIME_TOKEN_PREFIX = "rt_"
+
+# Cluster-side node registry. This is the only object that may mint new node IDs.
+_registry = NodeRegistry()
+
+
+def _mint_node_id() -> str:
+    """Generate a unique node ID that does not collide with an existing node."""
+    return _registry.generate_unique_node_id(exists_callback=_node_exists)
 
 
 def _now() -> datetime:
@@ -126,25 +135,23 @@ def _node_exists(node_id: str) -> bool:
 
 
 def register_admin_node(
-    node_id: str,
     node_name: str,
     bootstrap_secret: str,
     endpoint: Optional[str],
     capabilities: list,
-) -> Optional[str]:
-    """Register an admin node using the master seed. Returns runtime token or None."""
+) -> tuple[Optional[str], Optional[str]]:
+    """Register an admin node using the master seed. Returns (node_id, runtime token) or (None, None)."""
     conn = get_conn()
     try:
         row = conn.execute(
             "SELECT seed_hash FROM admin_seeds WHERE seed_id = ?", ("master",)
         ).fetchone()
         if not row:
-            return None
+            return None, None
         if not verify_secret(bootstrap_secret, row["seed_hash"]):
-            return None
-        if _node_exists(node_id):
-            return None
+            return None, None
 
+        node_id = _mint_node_id()
         now = _format_time(_now())
         caps_json = _serialize_capabilities(capabilities)
         conn.execute(
@@ -156,7 +163,7 @@ def register_admin_node(
             (node_id, node_name, endpoint, caps_json, now, now, "approved", "admin"),
         )
         conn.commit()
-        return _create_token(
+        token = _create_token(
             node_id,
             node_name,
             role="admin",
@@ -164,21 +171,22 @@ def register_admin_node(
             pending=False,
             ttl_hours=settings.token_ttl_hours,
         )
+        return node_id, token
     finally:
         conn.close()
 
 
 def register_pending_node(
-    node_id: str,
     node_name: str,
     endpoint: Optional[str],
     capabilities: list,
     role: str = "worker",
-) -> tuple[Optional[str], Optional[str]]:
-    """Register a worker/service node in pending state. Returns (temporary token, registration secret) or (None, None)."""
-    if _node_exists(node_id):
-        return None, None
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Register a worker/service node in pending state.
 
+    Returns (node_id, temporary_token, registration_secret) or (None, None, None).
+    """
+    node_id = _mint_node_id()
     conn = get_conn()
     try:
         now = _format_time(_now())
@@ -213,7 +221,7 @@ def register_pending_node(
             pending=True,
             ttl_hours=temporary_ttl,
         )
-        return token, registration_secret
+        return node_id, token, registration_secret
     finally:
         conn.close()
 

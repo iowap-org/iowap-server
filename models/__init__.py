@@ -13,12 +13,34 @@ class Capability(BaseModel):
 
 
 class NodeRegistration(BaseModel):
-    node_id: str = Field(..., min_length=1, max_length=128)
     node_name: str = Field(..., min_length=1, max_length=256)
     endpoint: Optional[str] = None
     capabilities: List[Capability] = Field(default_factory=list)
     role: str = "worker"
-    bootstrap_secret: Optional[str] = None
+
+
+class AdminNodeRegistration(BaseModel):
+    node_name: str = Field(..., min_length=1, max_length=256)
+    endpoint: Optional[str] = None
+    capabilities: List[Capability] = Field(default_factory=list)
+    bootstrap_secret: str = Field(..., min_length=1)
+
+
+class TokenResponse(BaseModel):
+    node_id: str
+    node_name: str
+    status: str
+    token_type: str
+    token: str
+    expires_at: str
+
+
+class AdminNodeRegistrationResponse(TokenResponse):
+    pass
+
+
+class NodeRegistrationResponse(TokenResponse):
+    registration_secret: Optional[str] = None
 
 
 class NodeApproval(BaseModel):
@@ -40,19 +62,6 @@ class RegistrationStatusResponse(BaseModel):
     token_type: Optional[str] = None
     expires_at: Optional[str] = None
     message: str
-
-
-class TokenResponse(BaseModel):
-    node_id: str
-    node_name: str
-    status: str
-    token_type: str
-    token: str
-    expires_at: str
-
-
-class NodeRegistrationResponse(TokenResponse):
-    registration_secret: Optional[str] = None
 
 
 class AuthContext(BaseModel):
