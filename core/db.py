@@ -73,7 +73,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             last_seen TEXT NOT NULL,
             registered_at TEXT NOT NULL,
             status TEXT DEFAULT 'pending',
-            role TEXT DEFAULT 'worker'
+            role TEXT DEFAULT 'worker',
+            first_heartbeat_seen BOOLEAN DEFAULT 0
         )
     """)
 

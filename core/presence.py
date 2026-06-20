@@ -37,10 +37,16 @@ def update_presence(
     """Update presence record for a node. Returns True if updated."""
     conn = get_conn()
     try:
-        # Ensure the node exists.
+        # Ensure the node exists and fetch current presence.
         node = conn.execute("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
         if not node:
             return False
+
+        old = conn.execute(
+            "SELECT status, mood, activity_json, progress, eta_seconds, next_available "
+            "FROM presence WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
 
         now = _format_time(_now())
         conn.execute(
@@ -76,7 +82,26 @@ def update_presence(
             ),
         )
         conn.commit()
-        event_bus.publish_sync("presence_changed", {"node_id": node_id, "status": status})
+
+        new = conn.execute(
+            "SELECT status, mood, activity_json, progress, eta_seconds, next_available "
+            "FROM presence WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+
+        changed = (
+            old is None
+            or old["status"] != new["status"]
+            or old["mood"] != new["mood"]
+            or old["activity_json"] != new["activity_json"]
+            or old["progress"] != new["progress"]
+            or old["eta_seconds"] != new["eta_seconds"]
+            or old["next_available"] != new["next_available"]
+        )
+        if changed:
+            event_bus.publish_sync(
+                "presence_changed", {"node_id": node_id, "status": new["status"]}
+            )
         return True
     finally:
         conn.close()

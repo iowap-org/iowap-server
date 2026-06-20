@@ -11,10 +11,18 @@ from typing import AsyncGenerator, Dict, Iterable, Optional, Set
 @dataclass
 class _Subscriber:
     subscriber_id: str
+    node_id: Optional[str]
     queue: asyncio.Queue
     loop: asyncio.AbstractEventLoop
     event_types: Optional[Set[str]] = None
     dropped: int = field(default=0, init=False)
+
+    def put_nowait(self, event: dict) -> None:
+        """Enqueue an event, dropping it and counting drops if the queue is full."""
+        try:
+            self.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self.dropped += 1
 
 
 class EventBus:
@@ -43,15 +51,19 @@ class EventBus:
 
     async def subscribe(
         self,
-        subscriber_id: Optional[str] = None,
+        node_id: Optional[str] = None,
         event_types: Optional[Iterable[str]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Yield SSE-formatted events until the client disconnects."""
-        sid = subscriber_id or self._generate_id()
+        """Yield SSE-formatted events until the client disconnects.
+
+        Each call receives a unique subscriber ID, so reconnects from the same
+        node do not overwrite or silently drop events from other streams.
+        """
+        sid = self._generate_id()
         types_set: Optional[Set[str]] = set(event_types) if event_types else None
         queue: asyncio.Queue = asyncio.Queue(maxsize=self._queue_size)
         loop = asyncio.get_running_loop()
-        self._subscribers[sid] = _Subscriber(sid, queue, loop, types_set)
+        self._subscribers[sid] = _Subscriber(sid, node_id, queue, loop, types_set)
         try:
             while True:
                 event = await queue.get()
@@ -72,7 +84,10 @@ class EventBus:
         for sub in list(self._subscribers.values()):
             if sub.event_types is not None and event_type not in sub.event_types:
                 continue
-            self._put_nowait(sub, event, current_loop)
+            if sub.loop is current_loop:
+                sub.put_nowait(event)
+            else:
+                sub.loop.call_soon_threadsafe(sub.put_nowait, event)
 
     def publish_sync(self, event_type: str, payload: dict) -> None:
         """Publish an event from a synchronous context without blocking."""
@@ -81,31 +96,10 @@ class EventBus:
             if sub.event_types is not None and event_type not in sub.event_types:
                 continue
             try:
-                sub.loop.call_soon_threadsafe(_put_nowait_callback, sub.queue, event)
+                sub.loop.call_soon_threadsafe(sub.put_nowait, event)
             except RuntimeError:
-                # Subscriber's event loop is closed; drop the event.
+                # Subscriber's event loop is closed; count the drop.
                 sub.dropped += 1
-
-    @staticmethod
-    def _put_nowait(
-        sub: _Subscriber,
-        event: dict,
-        current_loop: asyncio.AbstractEventLoop,
-    ) -> None:
-        try:
-            if sub.loop is current_loop:
-                sub.queue.put_nowait(event)
-            else:
-                sub.loop.call_soon_threadsafe(_put_nowait_callback, sub.queue, event)
-        except asyncio.QueueFull:
-            sub.dropped += 1
-
-
-def _put_nowait_callback(queue: asyncio.Queue, event: dict) -> None:
-    try:
-        queue.put_nowait(event)
-    except asyncio.QueueFull:
-        pass
 
 
 def _make_event(event_type: str, payload: dict) -> dict:

@@ -53,7 +53,7 @@ def heartbeat(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id, status, available FROM nodes WHERE node_id = ?",
+            "SELECT node_id, status, available, first_heartbeat_seen FROM nodes WHERE node_id = ?",
             (node_id,),
         ).fetchone()
         if not row:
@@ -80,17 +80,26 @@ def heartbeat(
             params.append(_serialize_capabilities(capabilities))
 
         # If the node was marked offline, bring it back online.
-        if row["status"] == "offline":
+        was_offline = row["status"] == "offline"
+        if was_offline:
             updates.append("status = ?")
             params.append("approved")
+
+        # Track first approved heartbeat for node_online semantics.
+        is_approved = row["status"] in ("approved", "offline")
+        first_heartbeat = is_approved and not row["first_heartbeat_seen"]
+        if first_heartbeat:
+            updates.append("first_heartbeat_seen = ?")
+            params.append(1)
 
         params.append(node_id)
         sql = f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?"
         conn.execute(sql, params)
         conn.commit()
 
-        # Publish event if node came back from offline.
-        if row["status"] == "offline":
+        # Publish event when node comes back from offline or on its first
+        # heartbeat after being approved.
+        if was_offline or first_heartbeat:
             event_bus.publish_sync("node_online", {"node_id": node_id})
 
         return True

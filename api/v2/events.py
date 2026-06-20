@@ -45,9 +45,15 @@ async def events_stream(
         # Flatten comma-separated values and repeated query params.
         flattened = [t.strip() for raw in types for t in raw.split(",") if t.strip()]
         event_types = set(flattened)
+        unknown = event_types - KNOWN_EVENT_TYPES
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown event types: {', '.join(sorted(unknown))}",
+            )
 
     return StreamingResponse(
-        event_bus.subscribe(node, event_types=event_types),
+        event_bus.subscribe(node_id=node, event_types=event_types),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
