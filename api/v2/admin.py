@@ -131,8 +131,19 @@ async def admin_delete_node(
         # (foreign keys are enabled, so deleting in the right order is required).
         conn.execute("DELETE FROM node_tokens WHERE node_id = ?", (node_id,))
         conn.execute("DELETE FROM presence WHERE node_id = ?", (node_id,))
-        conn.execute("UPDATE task_stages SET claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL WHERE claimed_by = ?", (node_id,))
-        conn.execute("UPDATE artifacts SET created_by = NULL WHERE created_by = ?", (node_id,))
+        conn.execute(
+            "UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?",
+            (node_id,),
+        )
+        conn.execute(
+            "UPDATE task_stages SET claimed_by = NULL, claimed_at = NULL, "
+            "claim_expires_at = NULL WHERE claimed_by = ?",
+            (node_id,),
+        )
+        conn.execute(
+            "UPDATE artifacts SET created_by = NULL WHERE created_by = ?",
+            (node_id,),
+        )
         conn.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
         conn.commit()
     finally:
