@@ -450,6 +450,8 @@ async function loadAll() {
       fetchJson('/relay/v2/dashboard/api/events/recent?limit=50'),
     ]);
 
+    const userNodes = (overview.nodes || []).filter(n => n.node_id !== '__dashboard_admin__');
+
     const s = overview.summary;
     const taskStatText = Object.entries(s.task_stats || {}).map(([k,v]) => k + ': ' + v).join(' · ') || '-';
     document.getElementById('summary').innerHTML = `
@@ -459,7 +461,7 @@ async function loadAll() {
       <div class="card"><h2>Artifacts</h2><div class="big">${s.total_artifacts}</div></div>
     `;
 
-    document.querySelector('#nodes tbody').innerHTML = (overview.nodes || []).map(n => `
+    document.querySelector('#nodes tbody').innerHTML = userNodes.map(n => `
       <tr class="${n.status === 'pending' ? 'pending-row' : ''}">
         <td class="mono">${n.node_id}</td>
         <td>${n.node_name}</td>

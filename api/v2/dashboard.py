@@ -165,6 +165,7 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc)
+        DASHBOARD_ADMIN_NODE = "__dashboard_admin__"
         node_rows = conn.execute(
             "SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen, first_heartbeat_seen, load, queue_depth "
             "FROM nodes ORDER BY registered_at DESC"
@@ -172,6 +173,8 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
         nodes = []
         online_count = 0
         for r in node_rows:
+            if r["node_id"] == DASHBOARD_ADMIN_NODE:
+                continue
             cap_list = _safe_json(r["capabilities"], [])
             nodes.append(
                 {

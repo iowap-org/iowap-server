@@ -21,7 +21,8 @@ async def admin_list_nodes(ctx: AuthContext = Depends(require_dashboard_user)):
     try:
         rows = conn.execute(
             "SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen "
-            "FROM nodes ORDER BY registered_at DESC"
+            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC",
+            ("__dashboard_admin__",),
         ).fetchall()
         return {
             "nodes": [
