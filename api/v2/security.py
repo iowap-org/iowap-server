@@ -58,7 +58,9 @@ async def get_approved_context(
         )
 
     if info["pending"] or info["status"] not in ("approved", "online"):
-        status_hint = "awaiting admin approval" if info["pending"] else f"status is {info['status']}"
+        status_hint = (
+            "awaiting admin approval" if info["pending"] else f"status is {info['status']}"
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Node not approved ({status_hint})",

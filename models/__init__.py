@@ -27,6 +27,21 @@ class NodeApproval(BaseModel):
     endpoint: Optional[str] = None
 
 
+class RegistrationStatusRequest(BaseModel):
+    node_id: str = Field(..., min_length=1, max_length=128)
+    registration_secret: str = Field(..., min_length=1)
+
+
+class RegistrationStatusResponse(BaseModel):
+    node_id: str
+    node_name: str
+    status: str
+    token: Optional[str] = None
+    token_type: Optional[str] = None
+    expires_at: Optional[str] = None
+    message: str
+
+
 class TokenResponse(BaseModel):
     node_id: str
     node_name: str
@@ -34,6 +49,10 @@ class TokenResponse(BaseModel):
     token_type: str
     token: str
     expires_at: str
+
+
+class NodeRegistrationResponse(TokenResponse):
+    registration_secret: Optional[str] = None
 
 
 class AuthContext(BaseModel):

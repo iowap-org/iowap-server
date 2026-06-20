@@ -124,10 +124,15 @@ def _schema(conn: sqlite3.Connection) -> None:
             registered_at TEXT NOT NULL,
             status TEXT DEFAULT 'pending',
             role TEXT DEFAULT 'worker',
-            first_heartbeat_seen BOOLEAN DEFAULT 0
+            first_heartbeat_seen BOOLEAN DEFAULT 0,
+            registration_secret_hash TEXT
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status)")
+
+    # Migration: add registration_secret_hash column if missing.
+    cols = {c["name"] for c in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+    if "registration_secret_hash" not in cols:
+        conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
 
     # --- PRESENCE ---
     conn.execute("""

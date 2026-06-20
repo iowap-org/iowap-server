@@ -6,13 +6,20 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, status
 
 from relay_server.core.auth import (
+    _create_token as create_runtime_token,
     init_master_seed,
     refresh_token,
     register_admin_node,
     register_pending_node,
     validate_token,
 )
-from relay_server.models import NodeRegistration, TokenResponse
+from relay_server.models import (
+    NodeRegistration,
+    NodeRegistrationResponse,
+    RegistrationStatusRequest,
+    RegistrationStatusResponse,
+    TokenResponse,
+)
 
 router = APIRouter()
 
@@ -64,7 +71,7 @@ async def auth_init_master():
     }
 
 
-@router.post("/register", response_model=TokenResponse)
+@router.post("/register", response_model=NodeRegistrationResponse)
 async def auth_register(body: NodeRegistration):
     """Register a new node. Admin nodes need a bootstrap_secret; others start pending."""
     from relay_server.config import settings
@@ -94,28 +101,29 @@ async def auth_register(body: NodeRegistration):
             ttl_hours=settings.token_ttl_hours,
         )
 
-    token = register_pending_node(
+    token, registration_secret = register_pending_node(
         node_id=body.node_id,
         node_name=body.node_name,
         endpoint=body.endpoint,
         capabilities=caps,
         role=body.role,
     )
-    if not token:
+    if not token or not registration_secret:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Node already exists",
         )
 
     temporary_ttl = getattr(settings, "temporary_token_ttl_hours", 24)
-    return _token_response(
-        node_id=body.node_id,
-        node_name=body.node_name,
-        status="pending",
-        token_type="temporary",
-        token=token,
-        ttl_hours=temporary_ttl,
-    )
+    return {
+        "node_id": body.node_id,
+        "node_name": body.node_name,
+        "status": "pending",
+        "token_type": "temporary",
+        "token": token,
+        "expires_at": _format_time(_now() + timedelta(hours=temporary_ttl)),
+        "registration_secret": registration_secret,
+    }
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -145,6 +153,70 @@ async def auth_refresh(authorization: Optional[str] = Header(None)):
         token=new_token,
         ttl_hours=settings.token_ttl_hours,
     )
+
+
+@router.post("/status", response_model=RegistrationStatusResponse)
+async def auth_status(body: RegistrationStatusRequest):
+    """Poll approval status using the long-lived registration secret.
+
+    Returns the runtime token once the node has been approved by an admin.
+    """
+    from relay_server.config import settings
+    from relay_server.core.auth import verify_secret
+    from relay_server.core.db import get_conn
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT node_id, node_name, status, role, registration_secret_hash "
+            "FROM nodes WHERE node_id = ?",
+            (body.node_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Node not found",
+            )
+        if not row["registration_secret_hash"]:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Registration secret not available",
+            )
+        if not verify_secret(body.registration_secret, row["registration_secret_hash"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid registration secret",
+            )
+
+        if row["status"] == "pending":
+            return RegistrationStatusResponse(
+                node_id=row["node_id"],
+                node_name=row["node_name"],
+                status=row["status"],
+                message="Awaiting admin approval",
+            )
+
+        # Approved or any other non-pending state: issue a fresh runtime token.
+        token = create_runtime_token(
+            node_id=row["node_id"],
+            node_name=row["node_name"],
+            role=row["role"],
+            token_type="runtime",
+            pending=False,
+            ttl_hours=settings.token_ttl_hours,
+        )
+        info = validate_token(token, require_approved=False)
+        return RegistrationStatusResponse(
+            node_id=row["node_id"],
+            node_name=row["node_name"],
+            status=row["status"],
+            token=token,
+            token_type="runtime",
+            expires_at=info.get("expires_at") if info else "",
+            message="Node approved — runtime token issued",
+        )
+    finally:
+        conn.close()
 
 
 def _extract_bearer(header: Optional[str]) -> Optional[str]:

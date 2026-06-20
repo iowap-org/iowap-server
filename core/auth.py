@@ -174,27 +174,38 @@ def register_pending_node(
     endpoint: Optional[str],
     capabilities: list,
     role: str = "worker",
-) -> Optional[str]:
-    """Register a worker/service node in pending state. Returns temporary token."""
+) -> tuple[Optional[str], Optional[str]]:
+    """Register a worker/service node in pending state. Returns (temporary token, registration secret) or (None, None)."""
     if _node_exists(node_id):
-        return None
+        return None, None
 
     conn = get_conn()
     try:
         now = _format_time(_now())
         caps_json = _serialize_capabilities(capabilities)
+        registration_secret = generate_secret("rs_")
         conn.execute(
             """
             INSERT INTO nodes
-            (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role, registration_secret_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (node_id, node_name, endpoint, caps_json, now, now, "pending", role),
+            (
+                node_id,
+                node_name,
+                endpoint,
+                caps_json,
+                now,
+                now,
+                "pending",
+                role,
+                hash_secret(registration_secret),
+            ),
         )
         conn.commit()
 
         temporary_ttl = getattr(settings, "temporary_token_ttl_hours", 24)
-        return _create_token(
+        token = _create_token(
             node_id,
             node_name,
             role=role,
@@ -202,6 +213,7 @@ def register_pending_node(
             pending=True,
             ttl_hours=temporary_ttl,
         )
+        return token, registration_secret
     finally:
         conn.close()
 
