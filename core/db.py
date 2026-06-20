@@ -127,6 +127,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             first_heartbeat_seen BOOLEAN DEFAULT 0
         )
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status)")
 
     # --- PRESENCE ---
     conn.execute("""
