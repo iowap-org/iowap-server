@@ -56,7 +56,51 @@ async def admin_approve_node(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pending node not found or already approved",
         )
+    return _build_token_response(token)
 
+
+@router.post("/nodes/{node_id}/token", response_model=TokenResponse)
+async def admin_issue_node_token(
+    node_id: str,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Issue a new runtime token for an already approved node."""
+    from relay_server.core.auth import _create_token
+    from relay_server.core.db import get_conn
+    from relay_server.config import settings
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT node_id, node_name, role FROM nodes WHERE node_id = ? AND status IN (?, ?)",
+            (node_id, "approved", "offline"),
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Approved/offline node not found",
+            )
+        # Invalidate old runtime tokens for this node to avoid ambiguity.
+        conn.execute(
+            "DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?",
+            (node_id, "runtime"),
+        )
+        conn.commit()
+        token = _create_token(
+            node_id=row["node_id"],
+            node_name=row["node_name"],
+            role=row["role"],
+            token_type="runtime",
+            pending=False,
+            ttl_hours=settings.token_ttl_hours,
+        )
+    finally:
+        conn.close()
+
+    return _build_token_response(token)
+
+
+def _build_token_response(token: str) -> TokenResponse:
     info = validate_token_safe(token)
     return TokenResponse(
         node_id=info["node_id"],

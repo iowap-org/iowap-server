@@ -57,7 +57,7 @@ async def get_approved_context(
         )
 
     # Then check approval status.
-    if info["pending"] or info["status"] != "approved":
+    if info["pending"] or info["status"] not in ("approved", "online"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Node not approved",

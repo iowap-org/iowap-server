@@ -171,7 +171,7 @@ class Scheduler:
             # Determine capabilities of the node if not provided.
             if not capability:
                 node_row = conn.execute(
-                    "SELECT capabilities FROM nodes WHERE node_id = ? AND status = 'approved'",
+                    "SELECT capabilities FROM nodes WHERE node_id = ? AND status IN ('approved', 'online')",
                     (node_id,),
                 ).fetchone()
                 if not node_row:

@@ -242,6 +242,12 @@ _ENDPOINTS = [
         "description": "Approve a pending node",
     },
     {
+        "method": "POST",
+        "path": "/relay/v2/admin/nodes/{node_id}/token",
+        "auth": "admin",
+        "description": "Issue a new runtime token for an approved/offline node",
+    },
+    {
         "method": "GET",
         "path": "/relay/v2/discovery/nodes",
         "auth": "bearer",

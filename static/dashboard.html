@@ -30,7 +30,14 @@
     .inline-select { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.25rem .4rem; border-radius:.35rem; font-size:.8rem; }
     .approve-btn { background:var(--ok); color:#041206; border:none; border-radius:.35rem; padding:.35rem .6rem; cursor:pointer; font-size:.8rem; margin-left:.5rem; }
     .approve-btn:disabled { opacity:.5; }
+    .token-btn { background:var(--accent); color:white; border:none; border-radius:.35rem; padding:.35rem .6rem; cursor:pointer; font-size:.8rem; }
     .pending-row { background:rgba(239,68,68,.1); }
+    .token-box { position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:var(--panel); border:1px solid #2a2f3a; border-radius:.75rem; padding:1.5rem; min-width:500px; max-width:90vw; z-index:100; }
+    .token-box h3 { margin:0 0 .75rem; }
+    .token-box pre { background:#10131a; padding:.75rem; border-radius:.5rem; word-break:break-all; }
+    .token-box button { margin-top:.75rem; margin-right:.5rem; }
+    .overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:99; }
+    .hidden { display:none; }
   </style>
 </head>
 <body>
@@ -72,6 +79,19 @@
     <div class="card"><table id="endpoints"><thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead><tbody></tbody></table></div>
   </div>
 
+  <div id="tokenOverlay" class="overlay hidden" onclick="hideToken()"></div>
+  <div id="tokenBox" class="token-box hidden">
+    <h3>Node Runtime Token</h3>
+    <p style="color:var(--muted); margin:.25rem 0 1rem; font-size:.85rem;">
+      Copy this token and provide it to the node via <code>RELAY_RUNTIME_TOKEN</code> or write it to
+      <code id="tokenPath">~/.relay/NODE_ID.token</code>.
+      The token is valid for 7 days.
+    </p>
+    <pre id="tokenValue">...</pre>
+    <button class="refresh" onclick="copyToken()">Copy to clipboard</button>
+    <button class="refresh" style="background:#6b7280;" onclick="hideToken()">Close</button>
+  </div>
+
 <script>
 const token = new URLSearchParams(location.search).get('token') || localStorage.getItem('relay_token') || '';
 if (token) localStorage.setItem('relay_token', token);
@@ -92,37 +112,58 @@ async function fetchJson(path, opts={}) {
   return res.json();
 }
 
-async function approveNode(nodeId, role, capabilities) {
-  const body = { role, capabilities: capabilities.split(',').map(s => s.trim()).filter(Boolean).map(name => ({ name, version: '1.0' })) };
-  await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/approve`, {
+function showToken(nodeId, tokenValue) {
+  document.getElementById('tokenPath').textContent = `~/.relay/${nodeId}.token`;
+  document.getElementById('tokenValue').textContent = tokenValue;
+  document.getElementById('tokenOverlay').classList.remove('hidden');
+  document.getElementById('tokenBox').classList.remove('hidden');
+}
+
+function hideToken() {
+  document.getElementById('tokenOverlay').classList.add('hidden');
+  document.getElementById('tokenBox').classList.add('hidden');
+}
+
+function copyToken() {
+  navigator.clipboard.writeText(document.getElementById('tokenValue').textContent).then(() => alert('Token copied.'));
+}
+
+async function approveNode(nodeId) {
+  const role = document.getElementById(`role-${nodeId}`).value;
+  const caps = document.getElementById(`caps-${nodeId}`).value.split(',').map(s => s.trim()).filter(Boolean).map(name => ({ name, version: '1.0' }));
+  const data = await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ role, capabilities: caps })
   });
+  showToken(nodeId, data.token);
   loadAll();
 }
 
-function renderApproveForm(n) {
-  if (n.status !== 'pending') return '-';
-  const caps = (n.capability_names || []).join(', ') || 'vault';
-  return `
-    <select id="role-${n.node_id}" class="inline-select">
-      <option value="service" selected>service</option>
-      <option value="worker">worker</option>
-    </select>
-    <input id="caps-${n.node_id}" class="inline-input" value="${caps}" />
-    <button id="btn-${n.node_id}" class="approve-btn" onclick="approveRow('${n.node_id}')">Approve</button>
-  `;
+async function newToken(nodeId) {
+  const data = await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  showToken(nodeId, data.token);
+  loadAll();
 }
 
-function approveRow(nodeId) {
-  const btn = document.getElementById(`btn-${nodeId}`);
-  const role = document.getElementById(`role-${nodeId}`).value;
-  const caps = document.getElementById(`caps-${nodeId}`).value;
-  btn.disabled = true;
-  approveNode(nodeId, role, caps).catch(err => {
-    alert('Approve failed: ' + err.message);
-  }).finally(() => btn.disabled = false);
+function renderAction(n) {
+  if (n.status === 'pending') {
+    const caps = (n.capability_names || []).join(', ') || 'vault';
+    return `
+      <select id="role-${n.node_id}" class="inline-select">
+        <option value="service" selected>service</option>
+        <option value="worker">worker</option>
+      </select>
+      <input id="caps-${n.node_id}" class="inline-input" value="${caps}" />
+      <button id="btn-${n.node_id}" class="approve-btn" onclick="approveNode('${n.node_id}')">Approve</button>
+    `;
+  }
+  return `
+    <button class="token-btn" onclick="newToken('${n.node_id}')">New Token</button>
+  `;
 }
 
 async function loadAll() {
@@ -155,7 +196,7 @@ async function loadAll() {
         <td>${n.load ?? '-'}</td>
         <td>${n.queue_depth ?? '-'}</td>
         <td>${fmt(n.last_seen)}</td>
-        <td>${renderApproveForm(n)}</td>
+        <td>${renderAction(n)}</td>
       </tr>
     `).join('');
 

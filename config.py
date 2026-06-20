@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     # Auth
     token_ttl_hours: int = 168
     claim_ttl_seconds: int = 60
-    heartbeat_interval_seconds: int = 30
-    heartbeat_timeout_multiplier: int = 2
+    heartbeat_interval_seconds: int = 10
+    heartbeat_timeout_multiplier: int = 5
 
     # Scheduler
     default_timeout_seconds: int = 300

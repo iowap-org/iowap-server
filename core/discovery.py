@@ -83,7 +83,7 @@ def heartbeat(
         was_offline = row["status"] == "offline"
         if was_offline:
             updates.append("status = ?")
-            params.append("approved")
+            params.append("online")
 
         # Track first approved heartbeat for node_online semantics.
         is_approved = row["status"] in ("approved", "offline")
