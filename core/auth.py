@@ -351,3 +351,52 @@ def _parse_capabilities(value: Optional[str]) -> list:
 
 def is_admin(token_info: dict) -> bool:
     return token_info.get("role") == "admin" and token_info.get("status") == "approved"
+
+
+def login_with_master_seed(seed: str) -> Optional[str]:
+    """Validate the master admin seed and create a runtime admin token.
+
+    This is intended for dashboard/browser login. It does not create a new
+    node entry; instead it mints a short-lived runtime token bound to a
+    synthetic admin node id.
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT seed_hash, role FROM admin_seeds WHERE seed_id = ?", ("master",)
+        ).fetchone()
+        if not row:
+            return None
+        if not verify_secret(seed, row["seed_hash"]):
+            return None
+
+        # Use a deterministic synthetic admin node for dashboard sessions.
+        dashboard_node_id = "__dashboard_admin__"
+        node_row = conn.execute(
+            "SELECT node_id, node_name FROM nodes WHERE node_id = ?", (dashboard_node_id,)
+        ).fetchone()
+        if not node_row:
+            now = _format_time(_now())
+            conn.execute(
+                """
+                INSERT INTO nodes
+                (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (dashboard_node_id, "Dashboard Admin", None, "[]", now, now, "approved", "admin"),
+            )
+            conn.commit()
+            node_name = "Dashboard Admin"
+        else:
+            node_name = node_row["node_name"]
+
+        return _create_token(
+            dashboard_node_id,
+            node_name,
+            role="admin",
+            token_type="runtime",
+            pending=False,
+            ttl_hours=settings.token_ttl_hours,
+        )
+    finally:
+        conn.close()

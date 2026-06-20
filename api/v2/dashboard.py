@@ -5,26 +5,72 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse, RedirectResponse
 
 from relay_server.api.v2.security import require_admin
+from relay_server.core.auth import login_with_master_seed
 from relay_server.core.db import get_conn
 from relay_server.models import AuthContext
 
 router = APIRouter()
 
 STATIC_DIR = Path(__file__).parent.parent.parent / "static"
+TOKEN_COOKIE = "relay_token"
+
+
+def _set_token_cookie(response, token: str) -> None:
+    response.set_cookie(
+        key=TOKEN_COOKIE,
+        value=token,
+        httponly=True,
+        max_age=604800,
+        samesite="strict",
+        secure=False,
+    )
+
+
+def _clear_token_cookie(response) -> None:
+    response.delete_cookie(key=TOKEN_COOKIE, httponly=True, samesite="strict")
 
 
 @router.get("/")
-async def dashboard_index():
+async def dashboard_index(request: Request, ctx: AuthContext = Depends(require_admin)):
     """Serve the main dashboard HTML from a static file."""
     return FileResponse(STATIC_DIR / "dashboard.html")
 
 
+@router.get("/login")
+async def dashboard_login_page() -> FileResponse:
+    """Serve the login page."""
+    return FileResponse(STATIC_DIR / "login.html")
+
+
+@router.post("/login")
+async def dashboard_login(request: Request, seed: str = Form(...)):
+    """Validate master admin seed and set session cookie."""
+    token = login_with_master_seed(seed)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master admin seed"
+        )
+    response = RedirectResponse(url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
+    _set_token_cookie(response, token)
+    return response
+
+
+@router.post("/logout")
+async def dashboard_logout(request: Request, ctx: AuthContext = Depends(require_admin)):
+    """Clear the dashboard session cookie."""
+    response = RedirectResponse(
+        url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
+    )
+    _clear_token_cookie(response)
+    return response
+
+
 @router.get("/api/overview")
-async def dashboard_overview(ctx: AuthContext = Depends(require_admin)):
+async def dashboard_overview(request: Request, ctx: AuthContext = Depends(require_admin)):
     """Aggregated cluster overview for the dashboard."""
     conn = get_conn()
     try:
@@ -132,13 +178,14 @@ async def dashboard_overview(ctx: AuthContext = Depends(require_admin)):
 
 
 @router.get("/api/endpoints")
-async def dashboard_endpoints(ctx: AuthContext = Depends(require_admin)):
+async def dashboard_endpoints(request: Request, ctx: AuthContext = Depends(require_admin)):
     """Return the list of exposed v2 API endpoints."""
     return {"endpoints": _ENDPOINTS}
 
 
 @router.get("/api/events/recent")
 async def dashboard_recent_events(
+    request: Request,
     limit: int = Query(50, ge=1, le=200),
     ctx: AuthContext = Depends(require_admin),
 ):
@@ -283,6 +330,24 @@ _ENDPOINTS = [
         "path": "/relay/v2/dashboard/",
         "auth": "admin",
         "description": "Web dashboard HTML",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/login",
+        "auth": "none",
+        "description": "Dashboard login page",
+    },
+    {
+        "method": "POST",
+        "path": "/relay/v2/dashboard/login",
+        "auth": "none",
+        "description": "Dashboard login endpoint",
+    },
+    {
+        "method": "POST",
+        "path": "/relay/v2/dashboard/logout",
+        "auth": "admin",
+        "description": "Dashboard logout endpoint",
     },
     {
         "method": "GET",

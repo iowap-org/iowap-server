@@ -34,6 +34,9 @@
     <div>
       <span id="status">loading...</span>
       <button class="refresh" id="btnRefresh" onclick="loadAll()">Refresh</button>
+      <form method="POST" action="/relay/v2/dashboard/logout" style="display:inline">
+        <button type="submit" class="refresh" style="background:#ef4444; margin-left:.5rem;">Logout</button>
+      </form>
     </div>
   </header>
 
@@ -75,7 +78,11 @@ function fmt(d) {
 }
 
 async function fetchJson(path, opts={}) {
-  const res = await fetch(path, { headers: { 'Authorization': 'Bearer ' + token, ...opts.headers }, ...opts });
+  const res = await fetch(path, { headers: { ...opts.headers }, ...opts });
+  if (res.status === 401 || res.status === 403) {
+    location.href = '/relay/v2/dashboard/login';
+    return new Promise(() => {});
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -156,7 +163,7 @@ async function loadAll() {
 }
 
 if (!token) {
-  document.body.innerHTML = '<div style="padding:2rem;"><h1>Token required</h1><p>Add ?token=YOUR_RUNTIME_TOKEN to the URL or set it in localStorage.</p></div>';
+  location.href = '/relay/v2/dashboard/login';
 } else {
   loadAll();
   setInterval(loadAll, 10000);

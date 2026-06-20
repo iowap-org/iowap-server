@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import Header, HTTPException, status
+from fastapi import Cookie, Header, HTTPException, status
 
 from relay_server.core.auth import validate_token
 from relay_server.models import AuthContext
@@ -18,9 +18,10 @@ def extract_bearer(authorization: Optional[str]) -> Optional[str]:
 
 async def get_auth_context(
     authorization: Optional[str] = Header(None),
+    relay_token: Optional[str] = Cookie(None),
 ) -> AuthContext:
     """Dependency: authenticate any valid token (pending or approved)."""
-    token = extract_bearer(authorization)
+    token = extract_bearer(authorization) or relay_token
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -37,9 +38,10 @@ async def get_auth_context(
 
 async def get_approved_context(
     authorization: Optional[str] = Header(None),
+    relay_token: Optional[str] = Cookie(None),
 ) -> AuthContext:
     """Dependency: authenticate and require approved node status."""
-    token = extract_bearer(authorization)
+    token = extract_bearer(authorization) or relay_token
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,9 +68,10 @@ async def get_approved_context(
 
 async def require_admin(
     authorization: Optional[str] = Header(None),
+    relay_token: Optional[str] = Cookie(None),
 ) -> AuthContext:
     """Dependency: require admin role and approved status."""
-    ctx = await get_approved_context(authorization)
+    ctx = await get_approved_context(authorization, relay_token)
     if not ctx.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
