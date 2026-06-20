@@ -94,7 +94,6 @@ async def auth_register(body: NodeRegistration):
             ttl_hours=settings.token_ttl_hours,
         )
 
-    # Worker/service registration goes into pending state.
     token = register_pending_node(
         node_id=body.node_id,
         node_name=body.node_name,

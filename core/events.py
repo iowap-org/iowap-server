@@ -34,10 +34,15 @@ class EventBus:
     """
 
     DEFAULT_QUEUE_SIZE = 1000
+    DEFAULT_HISTORY_SIZE = 500
 
-    def __init__(self, queue_size: int = DEFAULT_QUEUE_SIZE):
+    def __init__(
+        self, queue_size: int = DEFAULT_QUEUE_SIZE, history_size: int = DEFAULT_HISTORY_SIZE
+    ):
         self._queue_size = queue_size
         self._subscribers: Dict[str, _Subscriber] = {}
+        self._history: list = []
+        self._history_size = history_size
 
     def subscriber_count(self) -> int:
         return len(self._subscribers)
@@ -45,6 +50,11 @@ class EventBus:
     def clear(self) -> None:
         """Remove all subscribers. Intended for test isolation."""
         self._subscribers.clear()
+        self._history.clear()
+
+    def recent(self, limit: int = 50) -> list:
+        """Return recent published events (newest first)."""
+        return list(reversed(self._history[-limit:]))
 
     def _generate_id(self, prefix: str = "sub") -> str:
         return f"{prefix}_{secrets.token_urlsafe(8)}"
@@ -80,6 +90,9 @@ class EventBus:
         rather than back-pressuring the caller.
         """
         event = _make_event(event_type, payload)
+        self._history.append(event)
+        if len(self._history) > self._history_size:
+            self._history.pop(0)
         current_loop = asyncio.get_running_loop()
         for sub in list(self._subscribers.values()):
             if sub.event_types is not None and event_type not in sub.event_types:
@@ -92,6 +105,9 @@ class EventBus:
     def publish_sync(self, event_type: str, payload: dict) -> None:
         """Publish an event from a synchronous context without blocking."""
         event = _make_event(event_type, payload)
+        self._history.append(event)
+        if len(self._history) > self._history_size:
+            self._history.pop(0)
         for sub in list(self._subscribers.values()):
             if sub.event_types is not None and event_type not in sub.event_types:
                 continue

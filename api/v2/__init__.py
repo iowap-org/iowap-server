@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from relay_server.api.v2.admin import router as admin_router
 from relay_server.api.v2.auth import router as auth_router
+from relay_server.api.v2.dashboard import router as dashboard_router
 from relay_server.api.v2.discovery import router as discovery_router
 from relay_server.api.v2.events import router as events_router
 from relay_server.api.v2.presence import router as presence_router
@@ -16,3 +17,4 @@ router.include_router(discovery_router, prefix="/discovery", tags=["discovery"])
 router.include_router(scheduler_router, prefix="/scheduler", tags=["scheduler"])
 router.include_router(presence_router, prefix="/presence", tags=["presence"])
 router.include_router(events_router, prefix="/events", tags=["events"])
+router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
