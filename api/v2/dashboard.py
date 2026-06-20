@@ -5,18 +5,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Form, Query, Request, status
 from fastapi.responses import FileResponse, RedirectResponse
 
-from relay_server.api.v2.security import require_admin
-from relay_server.core.auth import login_with_master_seed
+from relay_server.api.v2.security import (
+    check_dashboard_permission,
+    require_dashboard_user,
+)
+from relay_server.config import settings
 from relay_server.core.db import get_conn
+from relay_server.core.session import SESSION_MAX_AGE_SECONDS, sign_user_cookie
+from relay_server.core.users import (
+    authenticate_master_seed,
+    authenticate_user,
+    create_user,
+    delete_user,
+    get_user_permissions,
+    list_groups,
+    list_permissions,
+    list_users,
+    set_group_permissions,
+    set_user_active,
+    set_user_groups,
+    set_user_password,
+)
 from relay_server.models import AuthContext
 
 router = APIRouter()
 
 STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 TOKEN_COOKIE = "relay_token"
+USER_COOKIE = "relay_user"
 
 
 def _set_token_cookie(response, token: str) -> None:
@@ -26,17 +45,40 @@ def _set_token_cookie(response, token: str) -> None:
         httponly=True,
         max_age=604800,
         samesite="strict",
-        secure=False,
+        secure=settings.session_cookie_secure,
     )
 
 
-def _clear_token_cookie(response) -> None:
-    response.delete_cookie(key=TOKEN_COOKIE, httponly=True, samesite="strict")
+def _set_user_cookie(response, user: dict) -> None:
+    response.set_cookie(
+        key=USER_COOKIE,
+        value=sign_user_cookie(user),
+        httponly=True,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        samesite="strict",
+        secure=settings.session_cookie_secure,
+    )
+
+
+def _clear_cookies(response) -> None:
+    response.delete_cookie(
+        key=TOKEN_COOKIE,
+        httponly=True,
+        samesite="strict",
+        secure=settings.session_cookie_secure,
+    )
+    response.delete_cookie(
+        key=USER_COOKIE,
+        httponly=True,
+        samesite="strict",
+        secure=settings.session_cookie_secure,
+    )
 
 
 @router.get("/")
-async def dashboard_index(request: Request, ctx: AuthContext = Depends(require_admin)):
+async def dashboard_index(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Serve the main dashboard HTML from a static file."""
+    check_dashboard_permission(ctx, "dashboard:view")
     return FileResponse(STATIC_DIR / "dashboard.html")
 
 
@@ -47,35 +89,76 @@ async def dashboard_login_page() -> FileResponse:
 
 
 @router.post("/login")
-async def dashboard_login(request: Request, seed: str = Form(...)):
-    """Validate master admin seed and set session cookie."""
-    token = login_with_master_seed(seed)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master admin seed"
-        )
+async def dashboard_login(
+    request: Request,
+    mode: str = Form("user"),
+    username: str = Form(""),
+    password: str = Form(""),
+    seed: str = Form(""),
+):
+    """Validate username/password or master admin seed and set session cookie."""
+    if mode == "seed":
+        user = authenticate_master_seed(seed)
+        if not user:
+            return RedirectResponse(
+                url="/relay/v2/dashboard/login?error=Invalid%20master%20seed",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+    else:
+        user = authenticate_user(username, password)
+        if not user:
+            return RedirectResponse(
+                url="/relay/v2/dashboard/login?error=Invalid%20credentials",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+
     response = RedirectResponse(url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
-    _set_token_cookie(response, token)
+    _set_user_cookie(response, user)
+    # Clear any stale node runtime token so the human session takes precedence.
+    response.delete_cookie(
+        key=TOKEN_COOKIE,
+        httponly=True,
+        samesite="strict",
+        secure=settings.session_cookie_secure,
+    )
     return response
 
 
 @router.post("/logout")
-async def dashboard_logout(request: Request, ctx: AuthContext = Depends(require_admin)):
+async def dashboard_logout(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Clear the dashboard session cookie."""
     response = RedirectResponse(
         url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
     )
-    _clear_token_cookie(response)
+    _clear_cookies(response)
     return response
 
 
+@router.get("/api/me")
+async def dashboard_me(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
+    """Return current dashboard user info."""
+    if ctx.user_id == "__master__":
+        permissions = [p["permission_name"] for p in list_permissions()]
+    elif ctx.user_id:
+        permissions = get_user_permissions(ctx.user_id)
+    else:
+        permissions = []
+    return {
+        "user_id": ctx.user_id,
+        "username": ctx.username,
+        "role": ctx.role,
+        "is_master": ctx.user_id == "__master__",
+        "permissions": permissions,
+    }
+
+
 @router.get("/api/overview")
-async def dashboard_overview(request: Request, ctx: AuthContext = Depends(require_admin)):
+async def dashboard_overview(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Aggregated cluster overview for the dashboard."""
+    check_dashboard_permission(ctx, "dashboard:view")
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc)
-
         node_rows = conn.execute(
             "SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen, first_heartbeat_seen, load, queue_depth "
             "FROM nodes ORDER BY registered_at DESC"
@@ -178,8 +261,9 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
 
 
 @router.get("/api/endpoints")
-async def dashboard_endpoints(request: Request, ctx: AuthContext = Depends(require_admin)):
+async def dashboard_endpoints(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Return the list of exposed v2 API endpoints."""
+    check_dashboard_permission(ctx, "dashboard:view")
     return {"endpoints": _ENDPOINTS}
 
 
@@ -187,12 +271,135 @@ async def dashboard_endpoints(request: Request, ctx: AuthContext = Depends(requi
 async def dashboard_recent_events(
     request: Request,
     limit: int = Query(50, ge=1, le=200),
-    ctx: AuthContext = Depends(require_admin),
+    ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Return recent events from the in-memory event log."""
+    check_dashboard_permission(ctx, "dashboard:view")
     from relay_server.core.events import event_bus
 
     return {"events": event_bus.recent(limit=limit)}
+
+
+# --- RBAC MANAGEMENT ---
+
+
+@router.get("/api/users")
+async def dashboard_list_users(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """List human users."""
+    check_dashboard_permission(ctx, "users:manage")
+    return {"users": list_users()}
+
+
+@router.post("/api/users")
+async def dashboard_create_user(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    email: str = Form(""),
+    groups: str = Form("user"),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Create a new human user. Requires users:manage permission."""
+    check_dashboard_permission(ctx, "users:manage")
+    group_list = [g.strip() for g in groups.split(",") if g.strip()]
+    created_by = ctx.username or ctx.node_id
+    user = create_user(
+        username=username,
+        password=password,
+        group_names=group_list,
+        email=email or None,
+        created_by=created_by,
+    )
+    return user
+
+
+@router.post("/api/users/{user_id}/groups")
+async def dashboard_set_user_groups(
+    request: Request,
+    user_id: str,
+    groups: str = Form(...),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Set groups for a user."""
+    check_dashboard_permission(ctx, "users:manage")
+    group_list = [g.strip() for g in groups.split(",") if g.strip()]
+    set_user_groups(user_id, group_list)
+    return {"status": "ok"}
+
+
+@router.post("/api/users/{user_id}/password")
+async def dashboard_set_user_password(
+    request: Request,
+    user_id: str,
+    password: str = Form(...),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Reset a user's password."""
+    check_dashboard_permission(ctx, "users:manage")
+    set_user_password(user_id, password)
+    return {"status": "ok"}
+
+
+@router.post("/api/users/{user_id}/active")
+async def dashboard_set_user_active(
+    request: Request,
+    user_id: str,
+    active: bool = Form(...),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Activate or deactivate a user."""
+    check_dashboard_permission(ctx, "users:manage")
+    set_user_active(user_id, active)
+    return {"status": "ok"}
+
+
+@router.delete("/api/users/{user_id}")
+async def dashboard_delete_user(
+    request: Request,
+    user_id: str,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Delete a human user."""
+    check_dashboard_permission(ctx, "users:manage")
+    delete_user(user_id)
+    return {"status": "deleted", "user_id": user_id}
+
+
+@router.get("/api/groups")
+async def dashboard_list_groups(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """List groups and their permissions."""
+    check_dashboard_permission(ctx, "groups:manage")
+    return {"groups": list_groups()}
+
+
+@router.get("/api/permissions")
+async def dashboard_list_permissions(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """List all available permissions."""
+    check_dashboard_permission(ctx, "groups:manage")
+    return {"permissions": list_permissions()}
+
+
+@router.post("/api/groups/{group_id}/permissions")
+async def dashboard_set_group_permissions(
+    request: Request,
+    group_id: str,
+    permissions: str = Form(...),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Set permissions for a group."""
+    check_dashboard_permission(ctx, "groups:manage")
+    perm_list = [p.strip() for p in permissions.split(",") if p.strip()]
+    set_group_permissions(group_id, perm_list)
+    return {"status": "ok"}
 
 
 def _safe_json(value: Any, default: Any):
@@ -232,20 +439,20 @@ _ENDPOINTS = [
     {
         "method": "GET",
         "path": "/relay/v2/admin/nodes",
-        "auth": "admin",
-        "description": "List all registered nodes",
+        "auth": "dashboard",
+        "description": "List all registered nodes (requires dashboard:view)",
     },
     {
         "method": "POST",
         "path": "/relay/v2/admin/nodes/{node_id}/approve",
-        "auth": "admin",
-        "description": "Approve a pending node",
+        "auth": "dashboard",
+        "description": "Approve a pending node (requires nodes:approve)",
     },
     {
         "method": "POST",
         "path": "/relay/v2/admin/nodes/{node_id}/token",
-        "auth": "admin",
-        "description": "Issue a new runtime token for an approved/offline node",
+        "auth": "dashboard",
+        "description": "Issue a new runtime token for an approved/offline node (requires nodes:token)",
     },
     {
         "method": "GET",

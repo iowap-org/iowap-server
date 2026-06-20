@@ -2,15 +2,19 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from relay_server.api.v2.security import get_auth_context, require_admin
+from relay_server.api.v2.security import (
+    check_dashboard_permission,
+    require_dashboard_user,
+)
 from relay_server.core.auth import approve_node
 from relay_server.models import AuthContext, NodeApproval, TokenResponse
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter()
 
 
 @router.get("/nodes")
-async def admin_list_nodes(ctx: AuthContext = Depends(get_auth_context)):
+async def admin_list_nodes(ctx: AuthContext = Depends(require_dashboard_user)):
+    check_dashboard_permission(ctx, "dashboard:view")
     from relay_server.core.db import get_conn
 
     conn = get_conn()
@@ -41,9 +45,9 @@ async def admin_list_nodes(ctx: AuthContext = Depends(get_auth_context)):
 async def admin_approve_node(
     node_id: str,
     body: NodeApproval,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_dashboard_user),
 ):
-
+    check_dashboard_permission(ctx, "nodes:approve")
     caps = [c.model_dump() for c in body.capabilities] if body.capabilities else None
     token = approve_node(
         node_id=node_id,
@@ -62,9 +66,10 @@ async def admin_approve_node(
 @router.post("/nodes/{node_id}/token", response_model=TokenResponse)
 async def admin_issue_node_token(
     node_id: str,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Issue a new runtime token for an already approved node."""
+    check_dashboard_permission(ctx, "nodes:token")
     from relay_server.core.auth import _create_token
     from relay_server.core.db import get_conn
     from relay_server.config import settings

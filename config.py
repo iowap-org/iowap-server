@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     heartbeat_interval_seconds: int = 10
     heartbeat_timeout_multiplier: int = 5
 
+    # Dashboard session cookie
+    session_secret: Optional[str] = None
+    session_cookie_secure: bool = False
+
     # Scheduler
     default_timeout_seconds: int = 300
     max_retries: int = 2

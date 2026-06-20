@@ -5,54 +5,66 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI Relay Dashboard — Login</title>
   <style>
-    :root { --bg:#0f1115; --panel:#171a21; --text:#e6e6e6; --muted:#8892a0; --accent:#3b82f6; --bad:#ef4444; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; }
-    .login { background:var(--panel); border:1px solid #2a2f3a; border-radius:.75rem; padding:2rem; width:min(360px, 90vw); }
-    h1 { margin:0 0 .25rem; font-size:1.25rem; }
-    p { margin:0 0 1.25rem; color:var(--muted); }
-    label { display:block; margin-bottom:.25rem; font-size:.85rem; color:var(--muted); }
-    input { width:100%; padding:.65rem; background:#10131a; border:1px solid #2a2f3a; border-radius:.5rem; color:var(--text); font-size:.95rem; }
-    button { width:100%; padding:.65rem; margin-top:1rem; background:var(--accent); color:white; border:none; border-radius:.5rem; font-size:1rem; cursor:pointer; }
-    button:disabled { opacity:.5; }
-    .error { color:var(--bad); margin-top:.75rem; font-size:.85rem; min-height:1.2em; }
-    .hint { margin-top:1rem; font-size:.75rem; color:var(--muted); }
+    :root { --bg:#0f1115; --panel:#171a21; --text:#e6e6e6; --muted:#8892a0; --accent:#3b82f6; --ok:#22c55e; --bad:#ef4444; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-height:100vh; display:grid; place-items:center; }
+    .login-card { background:var(--panel); border:1px solid #2a2f3a; border-radius:1rem; padding:2rem; width:min(420px, 90vw); }
+    h1 { margin:0 0 .25rem; font-size:1.5rem; }
+    p.sub { color:var(--muted); margin:0 0 1.5rem; }
+    .tabs { display:flex; gap:.5rem; margin-bottom:1rem; }
+    .tab { flex:1; padding:.5rem; background:#10131a; border:1px solid #2a2f3a; color:var(--muted); border-radius:.5rem; cursor:pointer; }
+    .tab.active { background:var(--accent); color:white; border-color:var(--accent); }
+    label { display:block; color:var(--muted); font-size:.85rem; margin:.75rem 0 .25rem; }
+    input { width:100%; background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.75rem; border-radius:.5rem; font-size:1rem; }
+    input:focus { outline:none; border-color:var(--accent); }
+    button[type="submit"] { width:100%; margin-top:1.25rem; padding:.75rem; background:var(--accent); color:white; border:none; border-radius:.5rem; font-size:1rem; cursor:pointer; }
+    .error { color:var(--bad); margin-top:.75rem; font-size:.9rem; }
+    .hint { color:var(--muted); font-size:.8rem; margin-top:1rem; }
+    .hidden { display:none; }
   </style>
 </head>
 <body>
-  <div class="login">
+  <div class="login-card">
     <h1>AI Relay Dashboard</h1>
-    <p>Enter the master admin seed to open the dashboard.</p>
-    <form id="loginForm" method="POST" action="/relay/v2/dashboard/login">
-      <label for="seed">Master Admin Seed</label>
-      <input id="seed" name="seed" type="password" autocomplete="off" autofocus required />
-      <div class="error" id="error"></div>
-      <button type="submit" id="btn">Sign in</button>
+    <p class="sub">Login to manage cluster nodes, tasks and users.</p>
+
+    <div class="tabs">
+      <button id="tabUser" class="tab active" onclick="showTab('user')">User Login</button>
+      <button id="tabSeed" class="tab" onclick="showTab('seed')">Master Seed</button>
+    </div>
+
+    <form id="formUser" method="POST" action="/relay/v2/dashboard/login">
+      <input type="hidden" name="mode" value="user" />
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required />
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button type="submit">Login</button>
+      <p class="hint">Contact an admin if you need an account.</p>
     </form>
-    <div class="hint">The seed starts with <code>adm_</code>. It is destroyed after login; the session cookie remains valid for 7 days.</div>
+
+    <form id="formSeed" class="hidden" method="POST" action="/relay/v2/dashboard/login">
+      <input type="hidden" name="mode" value="seed" />
+      <label for="seed">Master Seed</label>
+      <input id="seed" name="seed" type="password" autocomplete="off" required />
+      <button type="submit">Login with Master Seed</button>
+      <p class="hint">The master seed is the emergency backup credential.</p>
+    </form>
+
+    <div id="error" class="error"></div>
   </div>
+
   <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = document.getElementById('btn');
-      const err = document.getElementById('error');
-      btn.disabled = true;
-      err.textContent = '';
-      try {
-        const fd = new URLSearchParams(new FormData(e.target));
-        const res = await fetch('/relay/v2/dashboard/login', { method: 'POST', body: fd });
-        if (res.ok) {
-          location.href = '/relay/v2/dashboard/';
-        } else {
-          const body = await res.json();
-          err.textContent = body.detail || ('Login failed: ' + res.status);
-        }
-      } catch (e) {
-        err.textContent = e.message;
-      } finally {
-        btn.disabled = false;
-      }
-    });
+    function showTab(mode) {
+      document.getElementById('formUser').classList.toggle('hidden', mode !== 'user');
+      document.getElementById('formSeed').classList.toggle('hidden', mode !== 'seed');
+      document.getElementById('tabUser').classList.toggle('active', mode === 'user');
+      document.getElementById('tabSeed').classList.toggle('active', mode === 'seed');
+    }
+    const params = new URLSearchParams(location.search);
+    if (params.get('error')) {
+      document.getElementById('error').textContent = decodeURIComponent(params.get('error'));
+    }
   </script>
 </body>
 </html>

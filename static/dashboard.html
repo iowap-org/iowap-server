@@ -38,6 +38,22 @@
     .token-box button { margin-top:.75rem; margin-right:.5rem; }
     .overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:99; }
     .hidden { display:none; }
+    .tabs { display:flex; gap:.5rem; padding:1rem 1.5rem 0; }
+    .tab { padding:.5rem 1rem; background:#10131a; border:1px solid #2a2f3a; color:var(--muted); border-radius:.5rem; cursor:pointer; }
+    .tab.active { background:var(--accent); color:white; border-color:var(--accent); }
+    .form-row { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:.5rem; align-items:center; }
+    .form-row input, .form-row select { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.5rem; border-radius:.35rem; font-size:.85rem; }
+    .danger { background:var(--bad) !important; }
+    .muted { background:#6b7280 !important; }
+    .perm-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:.35rem; max-height:300px; overflow:auto; }
+    .perm-grid label { display:flex; align-items:center; gap:.35rem; font-size:.85rem; cursor:pointer; }
+    .modal h3 { margin:0 0 1rem; }
+    .modal p { color:var(--muted); font-size:.85rem; margin:0 0 1rem; }
+    .admin-actions { display:flex; gap:.35rem; flex-wrap:wrap; }
+    .admin-actions button { font-size:.75rem; padding:.25rem .45rem; }
+    .badge-active { background:var(--ok); color:#041206; }
+    .badge-inactive { background:#6b7280; color:white; }
+    #adminMsg { padding:0 1.5rem; min-height:1.5rem; }
   </style>
 </head>
 <body>
@@ -52,31 +68,63 @@
     </div>
   </header>
 
-  <div class="grid" id="summary"></div>
-
-  <div class="section">
-    <h2>Nodes</h2>
-    <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th><th>Action</th></tr></thead><tbody></tbody></table></div>
+  <div class="tabs">
+    <button id="tabDashboard" class="tab active" onclick="showTab('dashboard')">Dashboard</button>
+    <button id="tabAdmin" class="tab hidden" onclick="showTab('admin')">Admin</button>
   </div>
 
-  <div class="section">
-    <h2>Tasks</h2>
-    <div class="card"><table id="tasks"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody></tbody></table></div>
+  <div id="viewDashboard">
+    <div class="grid" id="summary"></div>
+
+    <div class="section">
+      <h2>Nodes</h2>
+      <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th><th>Action</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="section">
+      <h2>Tasks</h2>
+      <div class="card"><table id="tasks"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="section">
+      <h2>Active Stages</h2>
+      <div class="card"><table id="stages"><thead><tr><th>Stage</th><th>Task</th><th>Capability</th><th>Status</th><th>Claimed By</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="section">
+      <h2>Recent Events</h2>
+      <div class="card"><pre id="events">loading...</pre></div>
+    </div>
+
+    <div class="section">
+      <h2>API Endpoints</h2>
+      <div class="card"><table id="endpoints"><thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead><tbody></tbody></table></div>
+    </div>
   </div>
 
-  <div class="section">
-    <h2>Active Stages</h2>
-    <div class="card"><table id="stages"><thead><tr><th>Stage</th><th>Task</th><th>Capability</th><th>Status</th><th>Claimed By</th></tr></thead><tbody></tbody></table></div>
-  </div>
+  <div id="viewAdmin" class="hidden">
+    <div id="adminMsg"></div>
 
-  <div class="section">
-    <h2>Recent Events</h2>
-    <div class="card"><pre id="events">loading...</pre></div>
-  </div>
+    <div class="section" id="usersSection">
+      <h2>Users</h2>
+      <div class="card">
+        <form id="createUserForm" class="form-row" onsubmit="return createUser(event)">
+          <input name="username" placeholder="Username" required pattern="[a-zA-Z0-9_.-]{3,40}" title="3-40 chars, alphanumeric/_/.-/">
+          <input name="password" type="password" placeholder="Password" required minlength="8">
+          <input name="email" type="email" placeholder="Email">
+          <input name="groups" placeholder="Groups (comma)" value="user">
+          <button type="submit" class="refresh">Create User</button>
+        </form>
+        <table id="users"><thead><tr><th>Username</th><th>Email</th><th>Groups</th><th>Active</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
 
-  <div class="section">
-    <h2>API Endpoints</h2>
-    <div class="card"><table id="endpoints"><thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead><tbody></tbody></table></div>
+    <div class="section" id="groupsSection">
+      <h2>Groups &amp; Permissions</h2>
+      <div class="card">
+        <table id="groups"><thead><tr><th>Group</th><th>Description</th><th>Permissions</th><th>Actions</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
   </div>
 
   <div id="tokenOverlay" class="overlay hidden" onclick="hideToken()"></div>
@@ -92,9 +140,25 @@
     <button class="refresh" style="background:#6b7280;" onclick="hideToken()">Close</button>
   </div>
 
+  <div id="permOverlay" class="overlay hidden" onclick="hidePermModal()"></div>
+  <div id="permBox" class="token-box modal hidden">
+    <h3>Edit Group Permissions</h3>
+    <p id="permGroupName">Group</p>
+    <div id="permCheckboxes" class="perm-grid"></div>
+    <div style="margin-top:1rem;">
+      <button class="refresh" onclick="saveGroupPerms()">Save Permissions</button>
+      <button class="refresh muted" onclick="hidePermModal()">Cancel</button>
+    </div>
+  </div>
+
 <script>
 const token = new URLSearchParams(location.search).get('token') || localStorage.getItem('relay_token') || '';
 if (token) localStorage.setItem('relay_token', token);
+
+let currentUser = null;
+let allPermissions = [];
+let groupsData = [];
+let editingGroupId = null;
 
 function fmt(d) {
   if (!d) return '-';
@@ -108,8 +172,19 @@ async function fetchJson(path, opts={}) {
     location.href = '/relay/v2/dashboard/login';
     return new Promise(() => {});
   }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status} ${text || res.statusText}`);
+  }
   return res.json();
+}
+
+async function postForm(path, formData) {
+  return fetchJson(path, { method: 'POST', body: formData });
+}
+
+async function delJson(path) {
+  return fetchJson(path, { method: 'DELETE' });
 }
 
 function showToken(nodeId, tokenValue) {
@@ -126,6 +201,39 @@ function hideToken() {
 
 function copyToken() {
   navigator.clipboard.writeText(document.getElementById('tokenValue').textContent).then(() => alert('Token copied.'));
+}
+
+function showTab(mode) {
+  document.getElementById('viewDashboard').classList.toggle('hidden', mode !== 'dashboard');
+  document.getElementById('viewAdmin').classList.toggle('hidden', mode !== 'admin');
+  document.getElementById('tabDashboard').classList.toggle('active', mode === 'dashboard');
+  document.getElementById('tabAdmin').classList.toggle('active', mode === 'admin');
+}
+
+function can(perm) {
+  return currentUser && (currentUser.is_master || (currentUser.permissions || []).includes(perm));
+}
+
+function adminMsg(text, isError) {
+  const el = document.getElementById('adminMsg');
+  el.textContent = text;
+  el.className = isError ? 'error' : 'ok';
+  setTimeout(() => { el.textContent = ''; el.className = ''; }, 5000);
+}
+
+async function loadMe() {
+  try {
+    currentUser = await fetchJson('/relay/v2/dashboard/api/me');
+    if (can('users:manage') || can('groups:manage')) {
+      document.getElementById('tabAdmin').classList.remove('hidden');
+    } else {
+      document.getElementById('tabAdmin').classList.add('hidden');
+    }
+    document.getElementById('usersSection').classList.toggle('hidden', !can('users:manage'));
+    document.getElementById('groupsSection').classList.toggle('hidden', !can('groups:manage'));
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 async function approveNode(nodeId) {
@@ -164,6 +272,157 @@ function renderAction(n) {
   return `
     <button class="token-btn" onclick="newToken('${n.node_id}')">New Token</button>
   `;
+}
+
+async function loadAdmin() {
+  if (!can('users:manage') && !can('groups:manage')) return;
+  try {
+    const reqs = [];
+    if (can('users:manage')) reqs.push(fetchJson('/relay/v2/dashboard/api/users'));
+    else reqs.push(Promise.resolve({users: []}));
+    if (can('groups:manage')) {
+      reqs.push(fetchJson('/relay/v2/dashboard/api/groups'));
+      reqs.push(fetchJson('/relay/v2/dashboard/api/permissions'));
+    } else {
+      reqs.push(Promise.resolve({groups: []}));
+      reqs.push(Promise.resolve({permissions: []}));
+    }
+    const [usersData, groupsDataRaw, permsData] = await Promise.all(reqs);
+    allPermissions = permsData.permissions || [];
+    groupsData = groupsDataRaw.groups || [];
+    renderUsers(usersData.users || []);
+    renderGroups(groupsData);
+  } catch (err) {
+    adminMsg('Admin load failed: ' + err.message, true);
+    console.error(err);
+  }
+}
+
+function renderUsers(users) {
+  document.querySelector('#users tbody').innerHTML = users.map(u => `
+    <tr>
+      <td>${u.username}</td>
+      <td>${u.email || '-'}</td>
+      <td><input id="groups-${u.user_id}" class="inline-input" value="${(u.groups || []).join(', ')}" /></td>
+      <td><span class="tag ${u.is_active ? 'badge-active' : 'badge-inactive'}">${u.is_active ? 'active' : 'inactive'}</span></td>
+      <td>${fmt(u.created_at)}</td>
+      <td class="admin-actions">
+        <button class="token-btn" onclick="updateUserGroups('${u.user_id}')">Save Groups</button>
+        <button class="token-btn" onclick="resetPassword('${u.user_id}')">Reset Password</button>
+        <button class="approve-btn" onclick="toggleActive('${u.user_id}', ${!u.is_active})">${u.is_active ? 'Deactivate' : 'Activate'}</button>
+        <button class="refresh danger" onclick="deleteUser('${u.user_id}')">Delete</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">No users found.</td></tr>';
+}
+
+function renderGroups(groups) {
+  document.querySelector('#groups tbody').innerHTML = groups.map(g => `
+    <tr>
+      <td>${g.group_name}</td>
+      <td>${g.description || '-'}</td>
+      <td>${(g.permissions || []).map(p => `<span class="tag">${p}</span>`).join(' ')}</td>
+      <td class="admin-actions">
+        <button class="token-btn" onclick="editGroupPerms('${g.group_id}', '${g.group_name}')">Edit Permissions</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="4">No groups found.</td></tr>';
+}
+
+async function createUser(e) {
+  e.preventDefault();
+  const form = e.target;
+  const data = new FormData(form);
+  try {
+    await postForm('/relay/v2/dashboard/api/users', data);
+    adminMsg('User created.');
+    form.reset();
+    form.groups.value = 'user';
+    loadAdmin();
+  } catch (err) {
+    adminMsg('Create user failed: ' + err.message, true);
+  }
+  return false;
+}
+
+async function updateUserGroups(userId) {
+  const groups = document.getElementById(`groups-${userId}`).value;
+  try {
+    await postForm(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}/groups`,
+      new URLSearchParams({ groups }));
+    adminMsg('Groups updated.');
+    loadAdmin();
+  } catch (err) {
+    adminMsg('Update groups failed: ' + err.message, true);
+  }
+}
+
+async function resetPassword(userId) {
+  const password = prompt('Enter new password (min 8 chars):');
+  if (!password) return;
+  try {
+    await postForm(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}/password`,
+      new URLSearchParams({ password }));
+    adminMsg('Password reset.');
+  } catch (err) {
+    adminMsg('Password reset failed: ' + err.message, true);
+  }
+}
+
+async function toggleActive(userId, active) {
+  try {
+    await postForm(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}/active`,
+      new URLSearchParams({ active: active ? 'true' : 'false' }));
+    adminMsg(`User ${active ? 'activated' : 'deactivated'}.`);
+    loadAdmin();
+  } catch (err) {
+    adminMsg('Toggle active failed: ' + err.message, true);
+  }
+}
+
+async function deleteUser(userId) {
+  if (!confirm('Delete this user?')) return;
+  try {
+    await delJson(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}`);
+    adminMsg('User deleted.');
+    loadAdmin();
+  } catch (err) {
+    adminMsg('Delete user failed: ' + err.message, true);
+  }
+}
+
+function editGroupPerms(groupId, groupName) {
+  editingGroupId = groupId;
+  document.getElementById('permGroupName').textContent = groupName;
+  const group = groupsData.find(g => g.group_id === groupId) || { permissions: [] };
+  const currentPerms = group.permissions || [];
+  document.getElementById('permCheckboxes').innerHTML = allPermissions.map(p => `
+    <label><input type="checkbox" value="${p.permission_name}" ${currentPerms.includes(p.permission_name) ? 'checked' : ''}>
+      <span>${p.permission_name}</span>
+    </label>
+  `).join('');
+  document.getElementById('permOverlay').classList.remove('hidden');
+  document.getElementById('permBox').classList.remove('hidden');
+}
+
+function hidePermModal() {
+  document.getElementById('permOverlay').classList.add('hidden');
+  document.getElementById('permBox').classList.add('hidden');
+  editingGroupId = null;
+}
+
+async function saveGroupPerms() {
+  if (!editingGroupId) return;
+  const checked = Array.from(document.querySelectorAll('#permCheckboxes input:checked')).map(i => i.value);
+  try {
+    await postForm(`/relay/v2/dashboard/api/groups/${encodeURIComponent(editingGroupId)}/permissions`,
+      new URLSearchParams({ permissions: checked.join(',') }));
+    adminMsg('Group permissions saved.');
+    hidePermModal();
+    loadAdmin();
+  } catch (err) {
+    adminMsg('Save permissions failed: ' + err.message, true);
+  }
 }
 
 async function loadAll() {
@@ -242,11 +501,9 @@ async function loadAll() {
   }
 }
 
-if (!token) {
-  location.href = '/relay/v2/dashboard/login';
-} else {
-  loadAll();
-  setInterval(loadAll, 10000);
+loadMe().then(() => { loadAll(); loadAdmin(); });
+if (token) {
+  setInterval(() => { loadAll(); if (!document.getElementById('viewAdmin').classList.contains('hidden')) loadAdmin(); }, 10000);
 }
 </script>
 </body>

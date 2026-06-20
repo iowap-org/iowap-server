@@ -1,6 +1,7 @@
 """Database layer — SQLite connection pool and core schema management."""
 
 import sqlite3
+from datetime import datetime, timezone
 
 from relay_server.config import settings
 
@@ -57,6 +58,55 @@ def _schema(conn: sqlite3.Connection) -> None:
             role TEXT DEFAULT 'worker',
             expires_at TEXT,
             created_at TEXT NOT NULL
+        )
+    """)
+
+    # --- HUMAN USERS & RBAC ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT,
+            password_hash TEXT NOT NULL,
+            is_active BOOLEAN DEFAULT 1,
+            created_at TEXT NOT NULL,
+            created_by TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS groups (
+            group_id TEXT PRIMARY KEY,
+            group_name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_groups (
+            user_id TEXT NOT NULL,
+            group_id TEXT NOT NULL,
+            granted_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, group_id),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+            FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS permissions (
+            permission_id TEXT PRIMARY KEY,
+            permission_name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS group_permissions (
+            group_id TEXT NOT NULL,
+            permission_id TEXT NOT NULL,
+            granted_at TEXT NOT NULL,
+            PRIMARY KEY (group_id, permission_id),
+            FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(permission_id) ON DELETE CASCADE
         )
     """)
 
@@ -161,4 +211,90 @@ def _schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_presence_status ON presence(status)")
 
+    # --- RBAC DEFAULTS ---
+    _seed_default_rbac(conn)
+
     conn.commit()
+
+
+def _seed_default_rbac(conn: sqlite3.Connection) -> None:
+    """Seed default groups and permissions if none exist."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Default groups.
+    default_groups = [
+        ("grp_admin", "admin", "Full system access", now),
+        ("grp_user", "user", "Standard user with limited access", now),
+        ("grp_viewer", "viewer", "Read-only access", now),
+    ]
+    for group_id, group_name, description, created_at in default_groups:
+        conn.execute(
+            """
+            INSERT INTO groups (group_id, group_name, description, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(group_id) DO UPDATE SET group_name=excluded.group_name
+            """,
+            (group_id, group_name, description, created_at),
+        )
+
+    # Default permissions.
+    default_permissions = [
+        ("perm_dashboard", "dashboard:view", "Access the web dashboard", now),
+        ("perm_nodes_view", "nodes:view", "View nodes", now),
+        ("perm_nodes_approve", "nodes:approve", "Approve pending nodes", now),
+        ("perm_nodes_token", "nodes:token", "Issue runtime tokens for approved nodes", now),
+        ("perm_nodes_delete", "nodes:delete", "Delete nodes", now),
+        ("perm_tasks_create", "tasks:create", "Create tasks", now),
+        ("perm_tasks_view", "tasks:view", "View tasks", now),
+        ("perm_tasks_admin", "tasks:admin", "Administer any task", now),
+        ("perm_users_manage", "users:manage", "Manage human users", now),
+        ("perm_groups_manage", "groups:manage", "Manage groups and permissions", now),
+        ("perm_system_config", "system:config", "Change system configuration", now),
+    ]
+    for perm_id, perm_name, description, created_at in default_permissions:
+        conn.execute(
+            """
+            INSERT INTO permissions (permission_id, permission_name, description, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(permission_id) DO UPDATE SET permission_name=excluded.permission_name
+            """,
+            (perm_id, perm_name, description, created_at),
+        )
+
+    # Admin group gets all permissions.
+    admin_group_id = "grp_admin"
+    for perm_id, _, _, _ in default_permissions:
+        conn.execute(
+            """
+            INSERT INTO group_permissions (group_id, permission_id, granted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(group_id, permission_id) DO NOTHING
+            """,
+            (admin_group_id, perm_id, now),
+        )
+
+    # User group gets dashboard, view and task create permissions.
+    user_group_id = "grp_user"
+    user_permissions = ["perm_dashboard", "perm_nodes_view", "perm_tasks_view", "perm_tasks_create"]
+    for perm_id in user_permissions:
+        conn.execute(
+            """
+            INSERT INTO group_permissions (group_id, permission_id, granted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(group_id, permission_id) DO NOTHING
+            """,
+            (user_group_id, perm_id, now),
+        )
+
+    # Viewer group gets read-only permissions.
+    viewer_group_id = "grp_viewer"
+    viewer_permissions = ["perm_dashboard", "perm_nodes_view", "perm_tasks_view"]
+    for perm_id in viewer_permissions:
+        conn.execute(
+            """
+            INSERT INTO group_permissions (group_id, permission_id, granted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(group_id, permission_id) DO NOTHING
+            """,
+            (viewer_group_id, perm_id, now),
+        )
