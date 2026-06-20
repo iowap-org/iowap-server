@@ -1,6 +1,6 @@
 """Pydantic models for the AI-Relay-Service v2 API."""
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,7 @@ class AuthContext(BaseModel):
     role: str
     token_type: str
     pending: bool
+    expires_at: Optional[str] = None
 
     @property
     def is_admin(self) -> bool:
@@ -54,3 +55,83 @@ class AuthContext(BaseModel):
     @property
     def is_approved(self) -> bool:
         return self.status == "approved" and not self.pending
+
+
+# --- Scheduler models ---
+
+
+class StageInput(BaseModel):
+    stage_name: str
+    capability: str
+    depends_on: Optional[List[str]] = None
+    timeout_seconds: Optional[int] = None
+    payload: Optional[Dict[str, Any]] = None
+
+
+class TaskRequest(BaseModel):
+    task_name: str
+    stages: List[StageInput]
+    priority: int = Field(default=0, ge=0, le=10)
+    owner_node_id: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+
+
+class TaskSummary(BaseModel):
+    task_id: str
+    task_name: str
+    status: str
+    priority: int
+    owner_node_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class StageSummary(BaseModel):
+    stage_id: str
+    task_id: str
+    stage_name: str
+    capability: str
+    status: str
+    depends_on: Optional[List[str]] = None
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, Any]] = None
+
+
+class ArtifactReference(BaseModel):
+    artifact_id: str
+    name: str
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    created_by: Optional[str] = None
+
+
+class TaskView(BaseModel):
+    task: TaskSummary
+    stages: List[StageSummary]
+    artifacts: List[ArtifactReference]
+
+
+class ClaimRequest(BaseModel):
+    capability: Optional[str] = None
+
+
+class ClaimResponse(BaseModel):
+    claimed: bool
+    stage: Optional[StageSummary] = None
+
+
+class CompleteRequest(BaseModel):
+    result: Optional[Dict[str, Any]] = None
+    artifacts: Optional[List[str]] = None
+
+
+class ArtifactUploadResponse(BaseModel):
+    artifact_id: str
+    name: str
+    path: str
+    size_bytes: int
+    mime_type: Optional[str] = None
+    created_by: str

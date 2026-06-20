@@ -96,22 +96,15 @@ def _schema(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
             task_id TEXT PRIMARY KEY,
-            type TEXT DEFAULT 'atomic',
-            description TEXT,
-            status TEXT DEFAULT 'queued',
-            priority TEXT DEFAULT 'normal',
-            requirements_json TEXT,
-            payload_json TEXT,
-            result_json TEXT,
-            assigned_node TEXT,
-            claim_expires TEXT,
-            created_at TEXT NOT NULL,
+            task_name TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            priority INTEGER DEFAULT 0,
+            owner_node_id TEXT,
             timeout_seconds INTEGER DEFAULT 300,
-            retries INTEGER DEFAULT 0,
-            max_retries INTEGER DEFAULT 2,
-            parent_task_id TEXT,
-            stage_index INTEGER,
-            FOREIGN KEY (assigned_node) REFERENCES nodes(node_id)
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (owner_node_id) REFERENCES nodes(node_id)
         )
     """)
 
@@ -119,18 +112,22 @@ def _schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS task_stages (
             stage_id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
             capability TEXT NOT NULL,
-            status TEXT DEFAULT 'queued',
-            assigned_node TEXT,
-            payload_json TEXT,
-            result_json TEXT,
             depends_on TEXT,
-            inputs_json TEXT,
-            outputs_json TEXT,
-            created_at TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            sequence INTEGER DEFAULT 0,
+            timeout_seconds INTEGER DEFAULT 300,
+            payload TEXT,
+            result TEXT,
+            claimed_by TEXT,
+            claimed_at TEXT,
+            claim_expires_at TEXT,
             completed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
             FOREIGN KEY (task_id) REFERENCES tasks(task_id),
-            FOREIGN KEY (assigned_node) REFERENCES nodes(node_id)
+            FOREIGN KEY (claimed_by) REFERENCES nodes(node_id)
         )
     """)
 
@@ -139,14 +136,16 @@ def _schema(conn: sqlite3.Connection) -> None:
             artifact_id TEXT PRIMARY KEY,
             task_id TEXT,
             stage_id TEXT,
-            node_id TEXT,
-            type TEXT,
-            path TEXT,
+            name TEXT NOT NULL,
+            mime_type TEXT,
             size_bytes INTEGER,
+            checksum TEXT,
+            storage_path TEXT NOT NULL,
+            created_by TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY (task_id) REFERENCES tasks(task_id),
             FOREIGN KEY (stage_id) REFERENCES task_stages(stage_id),
-            FOREIGN KEY (node_id) REFERENCES nodes(node_id)
+            FOREIGN KEY (created_by) REFERENCES nodes(node_id)
         )
     """)
 
@@ -155,8 +154,9 @@ def _schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_capabilities ON nodes(capabilities)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_node)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_task_stages_task ON task_stages(task_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_stages_status ON task_stages(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_stages_capability ON task_stages(capability)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_presence_status ON presence(status)")
 

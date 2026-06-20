@@ -31,15 +31,32 @@ async def lifespan(app: FastAPI):
     logger.info("AI-Relay-Service v%s starting on %s:%s", __version__, settings.host, settings.port)
 
     watchdog_task = asyncio.create_task(_heartbeat_watchdog())
+    claim_watchdog_task = asyncio.create_task(_claim_ttl_watchdog())
     try:
         yield
     finally:
         watchdog_task.cancel()
-        try:
-            await watchdog_task
-        except asyncio.CancelledError:
-            pass
+        claim_watchdog_task.cancel()
+        for task in (watchdog_task, claim_watchdog_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         logger.info("Shutting down AI-Relay-Service")
+
+
+async def _claim_ttl_watchdog():
+    """Periodically release expired stage claims."""
+    from relay_server.core.scheduler import Scheduler
+
+    while True:
+        try:
+            released = await asyncio.to_thread(Scheduler.release_expired_claims)
+            if released:
+                logger.info("Released expired stage claims: %s", released)
+        except Exception as e:
+            logger.exception("Claim TTL watchdog error: %s", e)
+        await asyncio.sleep(settings.claim_ttl_seconds)
 
 
 async def _heartbeat_watchdog():
