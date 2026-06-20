@@ -5,13 +5,11 @@ import sqlite3
 from relay_server.config import settings
 
 
-DB = settings.db_path
-
-
 def get_conn() -> sqlite3.Connection:
     """Create a fresh database connection with WAL mode and Row factory."""
-    DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB), check_same_thread=False)
+    db_path = settings.db_path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -20,6 +18,7 @@ def get_conn() -> sqlite3.Connection:
 
 def init_db() -> None:
     """Initialize core tables for the relay server."""
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = get_conn()
     try:
         _schema(conn)
@@ -31,6 +30,14 @@ def _schema(conn: sqlite3.Connection) -> None:
     """Create core tables only."""
 
     # --- AUTH ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS admin_seeds (
+            seed_id TEXT PRIMARY KEY DEFAULT 'master',
+            seed_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'admin',
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS node_seeds (
             node_name TEXT PRIMARY KEY,
@@ -45,6 +52,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             node_id TEXT NOT NULL,
             node_name TEXT NOT NULL,
             token_hash TEXT NOT NULL UNIQUE,
+            token_type TEXT DEFAULT 'runtime',
+            pending BOOLEAN DEFAULT 0,
             role TEXT DEFAULT 'worker',
             expires_at TEXT,
             created_at TEXT NOT NULL
@@ -63,7 +72,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             available BOOLEAN DEFAULT 1,
             last_seen TEXT NOT NULL,
             registered_at TEXT NOT NULL,
-            status TEXT DEFAULT 'online'
+            status TEXT DEFAULT 'pending',
+            role TEXT DEFAULT 'worker'
         )
     """)
 

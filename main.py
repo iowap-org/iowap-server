@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -52,12 +53,27 @@ async def health():
 
 def main():
     parser = argparse.ArgumentParser(description="AI-Relay-Service v2")
-    parser.add_argument("--host", default=settings.host)
-    parser.add_argument("--port", type=int, default=settings.port)
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Server command (default)
+    server_parser = subparsers.add_parser("server", help="Run the relay server")
+    server_parser.add_argument("--host", default=settings.host)
+    server_parser.add_argument("--port", type=int, default=settings.port)
+    server_parser.add_argument(
         "--config", help="Path to config YAML (overrides default ~/.relay/config.yaml)"
     )
+
+    # Admin command
+    admin_parser = subparsers.add_parser("admin", help="Administration commands")
+    admin_sub = admin_parser.add_subparsers(dest="admin_command", help="Admin subcommands")
+    init_master_parser = admin_sub.add_parser("init-master", help="Initialize master admin seed")
+    init_master_parser.add_argument("--config", help="Path to config YAML")
+
     args = parser.parse_args()
+
+    if args.command == "admin":
+        _run_admin_command(args)
+        return
 
     uvicorn.run(
         "relay_server.main:app",
@@ -66,6 +82,25 @@ def main():
         log_level=settings.log_level,
         reload=settings.reload,
     )
+
+
+def _run_admin_command(args):
+    from relay_server.core.auth import init_master_seed
+    from relay_server.core.db import init_db
+
+    init_db()
+    if args.admin_command == "init-master":
+        secret = init_master_seed()
+        if secret:
+            print("Master admin seed created.")
+            print("WARNING: Store this secret securely. It will not be shown again.")
+            print(f"SECRET: {secret}")
+        else:
+            print("Master admin seed already exists.")
+            sys.exit(1)
+    else:
+        print("Unknown admin command")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
