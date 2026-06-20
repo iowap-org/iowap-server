@@ -71,9 +71,9 @@ async def admin_issue_node_token(
 ):
     """Issue a new runtime token for an already approved node."""
     check_dashboard_permission(ctx, "nodes:token")
+    from relay_server.config import settings
     from relay_server.core.auth import _create_token
     from relay_server.core.db import get_conn
-    from relay_server.config import settings
 
     conn = get_conn()
     try:

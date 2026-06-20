@@ -7,6 +7,8 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from relay_server.core.auth import (
     _create_token as create_runtime_token,
+)
+from relay_server.core.auth import (
     init_master_seed,
     refresh_token,
     register_admin_node,
