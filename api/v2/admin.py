@@ -105,6 +105,41 @@ async def admin_issue_node_token(
     return _build_token_response(token)
 
 
+@router.delete("/nodes/{node_id}")
+async def admin_delete_node(
+    node_id: str,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Delete a node and all its associated tokens and presence data."""
+    check_dashboard_permission(ctx, "nodes:delete")
+    from relay_server.core.db import get_conn
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT node_id FROM nodes WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Node not found",
+            )
+
+        # Clean up dependent records before removing the node itself
+        # (foreign keys are enabled, so deleting in the right order is required).
+        conn.execute("DELETE FROM node_tokens WHERE node_id = ?", (node_id,))
+        conn.execute("DELETE FROM presence WHERE node_id = ?", (node_id,))
+        conn.execute("UPDATE task_stages SET claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL WHERE claimed_by = ?", (node_id,))
+        conn.execute("UPDATE artifacts SET created_by = NULL WHERE created_by = ?", (node_id,))
+        conn.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"deleted": True, "node_id": node_id}
+
+
 def _build_token_response(token: str) -> TokenResponse:
     info = validate_token_safe(token)
     return TokenResponse(

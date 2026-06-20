@@ -257,10 +257,21 @@ async function newToken(nodeId) {
   loadAll();
 }
 
+async function deleteNode(nodeId, nodeName) {
+  if (!confirm(`Delete node ${nodeName} (${nodeId})? This cannot be undone.`)) return;
+  try {
+    await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}`, { method: 'DELETE' });
+    loadAll();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+  }
+}
+
 function renderAction(n) {
+  let actions = '';
   if (n.status === 'pending') {
     const caps = (n.capability_names || []).join(', ') || 'vault';
-    return `
+    actions = `
       <select id="role-${n.node_id}" class="inline-select">
         <option value="service" selected>service</option>
         <option value="worker">worker</option>
@@ -268,10 +279,13 @@ function renderAction(n) {
       <input id="caps-${n.node_id}" class="inline-input" value="${caps}" />
       <button id="btn-${n.node_id}" class="approve-btn" onclick="approveNode('${n.node_id}')">Approve</button>
     `;
+  } else {
+    actions = `<button class="token-btn" onclick="newToken('${n.node_id}')">New Token</button>`;
   }
-  return `
-    <button class="token-btn" onclick="newToken('${n.node_id}')">New Token</button>
-  `;
+  if (can('nodes:delete')) {
+    actions += ` <button class="refresh danger" onclick="deleteNode('${n.node_id}', '${n.node_name.replace(/'/g, "\\'")}')">Delete</button>`;
+  }
+  return actions;
 }
 
 async function loadAdmin() {
