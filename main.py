@@ -1,6 +1,7 @@
 """AI-Relay-Service — Main Entry Point"""
 
 import argparse
+import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -28,8 +29,31 @@ async def lifespan(app: FastAPI):
     init_db()
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
     logger.info("AI-Relay-Service v%s starting on %s:%s", __version__, settings.host, settings.port)
-    yield
-    logger.info("Shutting down AI-Relay-Service")
+
+    watchdog_task = asyncio.create_task(_heartbeat_watchdog())
+    try:
+        yield
+    finally:
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Shutting down AI-Relay-Service")
+
+
+async def _heartbeat_watchdog():
+    """Periodically mark nodes offline when heartbeats time out."""
+    from relay_server.core.discovery import mark_offline_nodes
+
+    while True:
+        try:
+            offline = await asyncio.to_thread(mark_offline_nodes)
+            if offline:
+                logger.info("Marked nodes offline: %s", offline)
+        except Exception as e:
+            logger.exception("Heartbeat watchdog error: %s", e)
+        await asyncio.sleep(settings.heartbeat_interval_seconds)
 
 
 app = FastAPI(

@@ -31,10 +31,23 @@ class EventBus:
             self._queues.pop(node_id, None)
 
     async def publish(self, event_type: str, payload: dict) -> None:
-        """Publish event to all subscribers."""
+        """Publish event to all subscribers asynchronously."""
         event = {"type": event_type, "payload": payload}
         dead = []
-        for node_id, queue in self._queues.items():
+        for node_id, queue in list(self._queues.items()):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                dead.append(node_id)
+        for node_id in dead:
+            self._queues.pop(node_id, None)
+            self._subscribers.discard(node_id)
+
+    def publish_sync(self, event_type: str, payload: dict) -> None:
+        """Publish event from a synchronous context."""
+        event = {"type": event_type, "payload": payload}
+        dead = []
+        for node_id, queue in list(self._queues.items()):
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:

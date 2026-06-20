@@ -296,6 +296,7 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
             "role": node_row["role"],
             "token_type": token_row["token_type"],
             "pending": bool(token_row["pending"]),
+            "expires_at": token_row["expires_at"],
         }
 
         if require_approved:
