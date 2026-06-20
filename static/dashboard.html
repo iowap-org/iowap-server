@@ -26,6 +26,11 @@
     .section h2 { color:var(--muted); font-size:1rem; text-transform:uppercase; letter-spacing:.05em; margin:1.5rem 0 .75rem; }
     pre { background:#10131a; padding:.75rem; border-radius:.5rem; overflow:auto; max-height:300px; font-size:.8rem; }
     .error { color:var(--bad); }
+    .inline-input { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.25rem .4rem; border-radius:.35rem; font-size:.8rem; width:120px; }
+    .inline-select { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.25rem .4rem; border-radius:.35rem; font-size:.8rem; }
+    .approve-btn { background:var(--ok); color:#041206; border:none; border-radius:.35rem; padding:.35rem .6rem; cursor:pointer; font-size:.8rem; margin-left:.5rem; }
+    .approve-btn:disabled { opacity:.5; }
+    .pending-row { background:rgba(239,68,68,.1); }
   </style>
 </head>
 <body>
@@ -44,7 +49,7 @@
 
   <div class="section">
     <h2>Nodes</h2>
-    <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th></tr></thead><tbody></tbody></table></div>
+    <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th><th>Action</th></tr></thead><tbody></tbody></table></div>
   </div>
 
   <div class="section">
@@ -78,13 +83,46 @@ function fmt(d) {
 }
 
 async function fetchJson(path, opts={}) {
-  const res = await fetch(path, { headers: { ...opts.headers }, ...opts });
+  const res = await fetch(path, { headers: { ...opts.headers, 'Accept': 'application/json' }, ...opts });
   if (res.status === 401 || res.status === 403) {
     location.href = '/relay/v2/dashboard/login';
     return new Promise(() => {});
   }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
+}
+
+async function approveNode(nodeId, role, capabilities) {
+  const body = { role, capabilities: capabilities.split(',').map(s => s.trim()).filter(Boolean).map(name => ({ name, version: '1.0' })) };
+  await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  loadAll();
+}
+
+function renderApproveForm(n) {
+  if (n.status !== 'pending') return '-';
+  const caps = (n.capability_names || []).join(', ') || 'vault';
+  return `
+    <select id="role-${n.node_id}" class="inline-select">
+      <option value="service" selected>service</option>
+      <option value="worker">worker</option>
+    </select>
+    <input id="caps-${n.node_id}" class="inline-input" value="${caps}" />
+    <button id="btn-${n.node_id}" class="approve-btn" onclick="approveRow('${n.node_id}')">Approve</button>
+  `;
+}
+
+function approveRow(nodeId) {
+  const btn = document.getElementById(`btn-${nodeId}`);
+  const role = document.getElementById(`role-${nodeId}`).value;
+  const caps = document.getElementById(`caps-${nodeId}`).value;
+  btn.disabled = true;
+  approveNode(nodeId, role, caps).catch(err => {
+    alert('Approve failed: ' + err.message);
+  }).finally(() => btn.disabled = false);
 }
 
 async function loadAll() {
@@ -108,7 +146,7 @@ async function loadAll() {
     `;
 
     document.querySelector('#nodes tbody').innerHTML = (overview.nodes || []).map(n => `
-      <tr>
+      <tr class="${n.status === 'pending' ? 'pending-row' : ''}">
         <td class="mono">${n.node_id}</td>
         <td>${n.node_name}</td>
         <td><span class="tag">${n.role}</span></td>
@@ -117,6 +155,7 @@ async function loadAll() {
         <td>${n.load ?? '-'}</td>
         <td>${n.queue_depth ?? '-'}</td>
         <td>${fmt(n.last_seen)}</td>
+        <td>${renderApproveForm(n)}</td>
       </tr>
     `).join('');
 
