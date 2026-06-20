@@ -7,7 +7,8 @@ import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 
 from relay_server import __version__
 from relay_server.api.v2 import router as v2_router
@@ -80,6 +81,18 @@ app = FastAPI(
 )
 
 app.include_router(v2_router, prefix="/relay/v2")
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def dashboard_root_redirect(request: Request):
+    """Redirect shorthand /dashboard to the canonical dashboard path."""
+    return RedirectResponse(url="/relay/v2/dashboard/", status_code=307)
+
+
+@app.get("/dashboard/login", include_in_schema=False)
+async def dashboard_login_redirect(request: Request):
+    """Redirect shorthand /dashboard/login to the canonical login page."""
+    return RedirectResponse(url="/relay/v2/dashboard/login", status_code=307)
 
 
 @app.get("/health")

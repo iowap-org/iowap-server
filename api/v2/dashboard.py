@@ -88,6 +88,12 @@ async def dashboard_login_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "login.html")
 
 
+@router.get("/agent-readme", include_in_schema=False)
+async def dashboard_agent_readme() -> FileResponse:
+    """Serve the public agent/node connection guide."""
+    return FileResponse(STATIC_DIR / "agent-readme.html")
+
+
 @router.post("/login")
 async def dashboard_login(
     request: Request,
