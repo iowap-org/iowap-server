@@ -17,6 +17,7 @@
     .endpoint { color:var(--ok); }
     .method { color:var(--accent); font-weight:bold; }
     .note { background:#1a2332; border-left:3px solid var(--accent); padding:1rem; margin:1rem 0; border-radius:0 .5rem .5rem 0; }
+    .warning { background:#281515; border-left:3px solid var(--bad); padding:1rem; margin:1rem 0; border-radius:0 .5rem .5rem 0; }
     a { color:var(--accent); text-decoration:none; }
     ul { padding-left:1.25rem; }
     li { margin:.4rem 0; }
@@ -25,35 +26,67 @@
 <body>
   <div class="container">
     <h1>AI Relay — Agent / Node Connection Guide</h1>
-    <p>This document explains how an autonomous agent or node connects to the AI Relay cluster and starts receiving tasks.</p>
+    <p>This document explains how an autonomous agent or worker node connects to the AI Relay cluster and starts receiving tasks.</p>
 
     <h2>1. What is a node?</h2>
     <p>A <strong>node</strong> is any worker that registers with the relay, announces its capabilities, and claims tasks. Nodes can be Python scripts, containers, remote workers, or agents like this one.</p>
 
-    <h2>2. Register or reuse a token</h2>
-    <p>Every node needs a runtime token. The first time a node runs it registers itself:</p>
-    <pre><code>POST /relay/v2/discovery/register
+    <h2>2. Server address</h2>
+    <p>Pick the address that matches where your agent is running:</p>
+    <ul>
+      <li><strong>Same machine as the relay:</strong> <code>http://127.0.0.1:8788</code></li>
+      <li><strong>Another host on your Tailscale / local network:</strong> use the relay host's Tailscale or LAN IP, e.g. <code>http://100.64.0.1:8788</code></li>
+    </ul>
+    <p>Always include the path prefix shown below. Do <strong>not</strong> register against the dashboard HTML pages; use the API endpoints.</p>
+
+    <h2>3. Register or reuse a token</h2>
+
+    <h3>3.1 Worker / service node</h3>
+    <p>Worker nodes do <strong>not</strong> choose their own ID. The cluster assigns an 8-character ADR-001 node ID when registration succeeds.</p>
+    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/auth/register</span>
 Content-Type: application/json
 
 {
-  "node_id": "&lt;assigned_node_id&gt;",
   "node_name": "My first agent",
   "endpoint": "http://192.168.1.50:7777",
   "capabilities": [
     {"name": "chat", "version": "1.0"}
   ]
-}
-</code></pre>
-    <p>The server returns a <code>pending</code> token. An admin must approve the node in the dashboard before it can claim work.</p>
+}</code></pre>
+    <p>The server returns a temporary token (<code>tp_...</code>), a registration secret (<code>rs_...</code>), the assigned <code>node_id</code>, and status <code>pending</code>. An admin must approve the node in the dashboard before it can claim work.</p>
+
+    <h3>3.2 Admin / dashboard node</h3>
+    <p>Admin nodes use the master bootstrap secret and the dedicated registration endpoint:</p>
+    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/auth/register-admin</span>
+Content-Type: application/json
+
+{
+  "node_name": "My admin client",
+  "bootstrap_secret": "&lt;master-seed&gt;",
+  "capabilities": [
+    {"name": "admin", "version": "1.0"}
+  ]
+}</code></pre>
 
     <div class="note">
-      <strong>Tip:</strong> Save the returned token to a file (e.g. <code>~/.relay/my-agent-01.token</code>). On restart, reuse it instead of registering again.
+      <strong>Tip:</strong> Save the returned runtime token to a file (e.g. <code>~/.relay/&lt;assigned_node_id&gt;.token</code>). On restart, reuse it instead of registering again.
     </div>
 
-    <h2>3. Send heartbeats</h2>
+    <h2>4. Poll approval status</h2>
+    <p>Use the <code>node_id</code> returned at registration time for status polling and heartbeats.</p>
+    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/auth/status</span>
+Content-Type: application/json
+
+{
+  "node_id": "&lt;assigned_node_id&gt;",
+  "registration_secret": "rs_..."
+}</code></pre>
+    <p>Once approved, the response contains the <code>rt_...</code> runtime token. Use it for all further API calls.</p>
+
+    <h2>5. Send heartbeats</h2>
     <p>A node must prove it is alive. Send a heartbeat every few seconds:</p>
-    <pre><code>POST /relay/v2/discovery/heartbeat
-Authorization: Bearer &lt;token&gt;
+    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/discovery/heartbeat</span>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
@@ -61,33 +94,30 @@ Content-Type: application/json
   "status": "online",
   "load": 0.0,
   "queue_depth": 0
-}
-</code></pre>
+}</code></pre>
     <p>Recommended interval: <strong>8 seconds</strong>. Server timeout is 5 × heartbeat interval.</p>
 
-    <h2>4. Claim tasks</h2>
+    <h2>6. Claim tasks</h2>
     <p>Once approved and online, claim available work:</p>
-    <pre><code>POST /relay/v2/scheduler/claim
-Authorization: Bearer &lt;token&gt;
+    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/scheduler/claim</span>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
   "capability": "chat"
-}
-</code></pre>
+}</code></pre>
     <p>If a stage is available, the response contains the stage details. Execute the work, then complete the stage:</p>
-    <pre><code>POST /relay/v2/scheduler/complete
-Authorization: Bearer &lt;token&gt;
+    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/scheduler/complete</span>
+Authorization: Bearer ***
 Content-Type: application/json
 
 {
   "stage_id": "stage_...",
   "task_id": "task_...",
   "result": {"status": "ok", "answer": "..."}
-}
-</code></pre>
+}</code></pre>
 
-    <h2>5. Capabilities</h2>
+    <h2>7. Capabilities</h2>
     <p>Common capability names you can register:</p>
     <ul>
       <li><code>chat</code> — general conversational agent work</li>
@@ -97,13 +127,8 @@ Content-Type: application/json
     </ul>
     <p>You can invent your own capability names; tasks must then reference exactly those names.</p>
 
-    <h2>6. Dashboard</h2>
-    <p>Humans manage the cluster at <a href="/dashboard">/dashboard</a>.</p>
-
-    <h2>7. Example node base code</h2>
-    <p>Look at <code>examples/nodes/node_base.py</code> in the ai-relay-service repository for a ready-to-use base class that handles registration, heartbeat, claim and complete loops.</p>
-
-    <p style="margin-top:2rem; color:var(--muted);">Endpoint base URL: <span class="endpoint">http://127.0.0.1:8788</span></p>
+    <h2>8. Example node code</h2>
+    <p>Look at <code>examples/nodes/node_base.py</code> in this repository for a ready-to-use base class that handles registration, heartbeat, claim and complete loops.</p>
   </div>
 </body>
 </html>
