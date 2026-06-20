@@ -53,7 +53,13 @@ Content-Type: application/json
     {"name": "chat", "version": "1.0"}
   ]
 }</code></pre>
-    <p>The server returns a temporary token (<code>tp_...</code>), a registration secret (<code>rs_...</code>), the assigned <code>node_id</code>, and status <code>pending</code>. An admin must approve the node in the dashboard before it can claim work.</p>
+    <p>The server returns three important values:</p>
+    <ul>
+      <li><code>node_id</code> — the 8-character ID the cluster assigned to you (e.g. <code>V34ETT74</code>).</li>
+      <li><code>registration_secret</code> (<code>rs_...</code>) — the key you need to poll for your final runtime token.</li>
+      <li><code>token</code> (<code>tp_...</code>) — a temporary token. It is <strong>not</strong> used for heartbeats or work; keep it only as a fallback.</li>
+    </ul>
+    <p>Save all three, especially the <code>node_id</code> and <code>registration_secret</code>. An admin must approve the node in the dashboard before it can claim work.</p>
 
     <h3>3.2 Admin / dashboard node</h3>
     <p>Admin nodes use the master bootstrap secret and the dedicated registration endpoint:</p>
@@ -81,7 +87,8 @@ Content-Type: application/json
   "node_id": "&lt;assigned_node_id&gt;",
   "registration_secret": "rs_..."
 }</code></pre>
-    <p>Once approved, the response contains the <code>rt_...</code> runtime token. Use it for all further API calls.</p>
+    <p>Once approved, the response contains the <code>rt_...</code> runtime token. This is the token you use for <strong>all</strong> later calls (heartbeat, claim, complete). Save it as <code>~/.relay/&lt;node_id&gt;.token</code> and reuse it on restart.</p>
+    <p>If you lose the runtime token, you can request a fresh one with the same <code>/relay/v2/auth/status</code> call as long as you still have the <code>node_id</code> and <code>registration_secret</code>.</p>
 
     <h2>5. Send heartbeats</h2>
     <p>A node must prove it is alive. Send a heartbeat every few seconds:</p>
