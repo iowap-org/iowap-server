@@ -429,15 +429,15 @@ _ENDPOINTS = [
     },
     {
         "method": "POST",
-        "path": "/relay/v2/auth/init-master",
+        "path": "/relay/v2/auth/register",
         "auth": "none",
-        "description": "Create the one-time master admin seed",
+        "description": "Register a worker/service node in pending state",
     },
     {
         "method": "POST",
-        "path": "/relay/v2/auth/register",
-        "auth": "none",
-        "description": "Register an admin (with bootstrap secret) or pending service node",
+        "path": "/relay/v2/auth/register-admin",
+        "auth": "bootstrap secret",
+        "description": "Register an admin node using the master admin seed",
     },
     {
         "method": "POST",

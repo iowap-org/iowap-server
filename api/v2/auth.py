@@ -9,7 +9,6 @@ from relay_server.core.auth import (
     _create_token as create_runtime_token,
 )
 from relay_server.core.auth import (
-    init_master_seed,
     refresh_token,
     register_admin_node,
     register_pending_node,
@@ -53,26 +52,6 @@ def _token_response(
         token=token,
         expires_at=_format_time(expires),
     )
-
-
-@router.post("/init-master")
-async def auth_init_master():
-    """Initialize the master admin seed. Only callable when no master seed exists."""
-    from relay_server.config import settings
-
-    ttl = getattr(settings, "token_ttl_hours", 168)
-    secret = init_master_seed()
-    if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Master admin seed already initialized",
-        )
-    return {
-        "status": "created",
-        "warning": "Store this secret securely. It will not be shown again.",
-        "temporary_token_ttl_hours": 24,
-        "runtime_token_ttl_hours": ttl,
-    }
 
 
 @router.post("/register", response_model=NodeRegistrationResponse)
