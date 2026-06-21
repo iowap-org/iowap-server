@@ -200,8 +200,6 @@ def _schema(conn: sqlite3.Connection) -> None:
             storage_path TEXT NOT NULL,
             created_by TEXT,
             created_at TEXT NOT NULL,
-            FOREIGN KEY (task_id) REFERENCES tasks(task_id),
-            FOREIGN KEY (stage_id) REFERENCES task_stages(stage_id),
             FOREIGN KEY (created_by) REFERENCES nodes(node_id)
         )
     """)

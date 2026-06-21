@@ -169,3 +169,21 @@ class ArtifactUploadResponse(BaseModel):
     size_bytes: int
     mime_type: Optional[str] = None
     created_by: str
+
+
+class StorageStatusResponse(BaseModel):
+    node_id: str
+    node_name: str
+    storage_path: str
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    file_count: int
+
+
+class StorageFileReference(BaseModel):
+    artifact_id: str
+    name: str
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    created_by: Optional[str] = None
