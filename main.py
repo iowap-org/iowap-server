@@ -36,7 +36,8 @@ async def lifespan(app: FastAPI):
     claim_watchdog_task = asyncio.create_task(_claim_ttl_watchdog())
     mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
     if settings.enable_mdns:
-        mdns.start()
+        # Start mDNS in the background so it cannot block server startup.
+        asyncio.get_running_loop().run_in_executor(None, mdns.start)
     try:
         yield
     finally:
