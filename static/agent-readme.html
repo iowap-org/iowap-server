@@ -1,141 +1,290 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Relay — Agent Connection Guide</title>
-  <style>
-    :root { --bg:#0f1115; --panel:#171a21; --text:#e6e6e6; --muted:#8892a0; --accent:#3b82f6; --ok:#22c55e; --bad:#ef4444; }
-    * { box-sizing:border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height:1.6; }
-    .container { max-width:760px; margin:0 auto; padding:2rem 1rem; }
-    h1 { margin:0 0 .5rem; }
-    h2 { margin-top:2rem; color:#9aa4b2; border-bottom:1px solid #2a2f3a; padding-bottom:.35rem; }
-    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:.9rem; }
-    pre { background:#10131a; border:1px solid #2a2f3a; border-radius:.5rem; padding:1rem; overflow-x:auto; }
-    code { background:#10131a; padding:.15rem .35rem; border-radius:.35rem; }
-    .endpoint { color:var(--ok); }
-    .method { color:var(--accent); font-weight:bold; }
-    .note { background:#1a2332; border-left:3px solid var(--accent); padding:1rem; margin:1rem 0; border-radius:0 .5rem .5rem 0; }
-    .warning { background:#281515; border-left:3px solid var(--bad); padding:1rem; margin:1rem 0; border-radius:0 .5rem .5rem 0; }
-    a { color:var(--accent); text-decoration:none; }
-    ul { padding-left:1.25rem; }
-    li { margin:.4rem 0; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Relay — Node Connection Guide</title>
+<style>
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #222; }
+h1 { border-bottom: 2px solid #eee; padding-bottom: .5rem; }
+h2 { margin-top: 2rem; }
+code { background: #f4f4f4; padding: .1rem .3rem; border-radius: 4px; }
+pre { background: #f4f4f4; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+th, td { border: 1px solid #ddd; padding: .5rem; text-align: left; }
+th { background: #f0f0f0; }
+a { color: #0366d6; }
+</style>
 </head>
 <body>
-  <div class="container">
-    <h1>AI Relay — Agent / Node Connection Guide</h1>
-    <p>This document explains how an autonomous agent or worker node connects to the AI Relay cluster and starts receiving tasks.</p>
+<h1>AI Relay — Node README</h1>
 
-    <h2>1. What is a node?</h2>
-    <p>A <strong>node</strong> is any worker that registers with the relay, announces its capabilities, and claims tasks. Nodes can be Python scripts, containers, remote workers, or agents like this one.</p>
+<p>This document is written from the perspective of a node that wants to join an AI</p>
+<p>Relay cluster. It explains what a node must do: discover or be told the relay</p>
+<p>address, register, wait for approval, and keep itself alive.</p>
 
-    <h2>2. Server address</h2>
-    <p>Pick the address that matches where your agent is running:</p>
-    <ul>
-      <li><strong>Same machine as the relay:</strong> <code>http://127.0.0.1:8788</code></li>
-      <li><strong>Another host on your Tailscale / local network:</strong> use the relay host's Tailscale or LAN IP, e.g. <code>http://100.64.0.1:8788</code></li>
-    </ul>
-    <p>Always include the path prefix shown below. Do <strong>not</strong> register against the dashboard HTML pages; use the API endpoints.</p>
+<h2>1. What is a node?</h2>
 
-    <h2>3. Register or reuse a token</h2>
+<p>A node is any program that connects to the AI Relay and performs work. Nodes can</p>
+<p>be:</p>
 
-    <h3>3.1 Worker / service node</h3>
-    <p>Worker nodes do <strong>not</strong> choose their own ID. The cluster assigns an 8-character ADR-001 node ID when registration succeeds.</p>
-    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/auth/register</span>
-Content-Type: application/json
+<ul><li><strong>KI nodes</strong> — agents that reason, plan, generate content, or talk to users</li>
+<li><strong>Service nodes</strong> — dumb workers that execute raw actions like storing files,</li>
+</ul><p>  toggling switches, running backups, or printing documents</p>
 
-{
-  "node_name": "My first agent",
-  "endpoint": "http://192.168.1.50:7777",
-  "capabilities": [
-    {"name": "chat", "version": "1.0"}
-  ]
-}</code></pre>
-    <p>The server returns three important values:</p>
-    <ul>
-      <li><code>node_id</code> — the 8-character ID the cluster assigned to you (e.g. <code>V34ETT74</code>).</li>
-      <li><code>registration_secret</code> (<code>rs_...</code>) — the key you need to poll for your final runtime token.</li>
-      <li><code>token</code> (<code>tp_...</code>) — a temporary token. It is <strong>not</strong> used for heartbeats or work; keep it only as a fallback.</li>
-    </ul>
-    <p>Save all three, especially the <code>node_id</code> and <code>registration_secret</code>. An admin must approve the node in the dashboard before it can claim work.</p>
+<p>Every node registers with the relay, advertises one or more <strong>capabilities</strong>,</p>
+<p>and claims matching tasks.</p>
 
-    <h3>3.2 Admin / dashboard node</h3>
-    <p>Admin nodes use the master bootstrap secret and the dedicated registration endpoint:</p>
-    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/auth/register-admin</span>
-Content-Type: application/json
+<h2>2. Configure the relay URL</h2>
 
-{
-  "node_name": "My admin client",
-  "bootstrap_secret": "&lt;master-seed&gt;",
-  "capabilities": [
-    {"name": "admin", "version": "1.0"}
-  ]
-}</code></pre>
+<p>Every node needs a relay URL. How the URL is determined depends on the</p>
+<p>deployment:</p>
 
-    <div class="note">
-      <strong>Tip:</strong> Save the returned runtime token to a file (e.g. <code>~/.relay/&lt;assigned_node_id&gt;.token</code>). On restart, reuse it instead of registering again.
-    </div>
+<ul><li>In a static network the relay host has a fixed IP such as</li>
+</ul><p>  <code>http://192.168.1.50:8788</code>.</p>
+<ul><li>In a home or office network the relay may be advertised via mDNS as</li>
+</ul><p>  <code>http://ai-relay.local:8788</code>.</p>
+<ul><li>Over a VPN such as Tailscale the address may look like <code>http://100.64.0.5:8788</code>.</li>
+<li>In cloud or container environments a DNS name or load balancer may be used.</li>
+</ul>
+<p>Set the URL before starting the node:</p>
 
-    <h2>4. Poll approval status</h2>
-    <p>Use the <code>node_id</code> returned at registration time for status polling and heartbeats.</p>
-    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/auth/status</span>
-Content-Type: application/json
+<pre><code>export RELAY_BASE_URL=http://192.168.1.50:8788</code></pre>
 
-{
-  "node_id": "&lt;assigned_node_id&gt;",
+<p>If the node does not know the URL, it must ask the user or read it from its</p>
+<p>configuration file. It should not assume mDNS is available.</p>
+
+<p>Examples in this document use <code>http://${RELAY_HOST}:8788</code> as a placeholder.</p>
+<p>Replace <code>${RELAY_HOST}</code> with the actual IP, hostname, or mDNS name of the relay.</p>
+
+<h2>3. Register the node</h2>
+
+<p>A node registers by calling <code>/relay/v2/auth/register</code>. It does not choose its</p>
+<p>own ID; the relay assigns an 8-character node ID.</p>
+
+<pre><code>curl -X POST "http://${RELAY_HOST}:8788/relay/v2/auth/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "node_name": "my-node",
+    "endpoint": null,
+    "capabilities": [
+      {"name": "chat", "version": "1.0.0"}
+    ],
+    "role": "worker"
+  }'</code></pre>
+
+<p>The relay returns:</p>
+
+<pre><code>{
+  "node_id": "V34ETT74",
+  "status": "pending",
+  "token_type": "temporary",
+  "token": "tp_...",
+  "expires_at": "2026-06-22T14:00:00+00:00",
   "registration_secret": "rs_..."
 }</code></pre>
-    <p>Once approved, the response contains the <code>rt_...</code> runtime token. This is the token you use for <strong>all</strong> later calls (heartbeat, claim, complete). Save it as <code>~/.relay/&lt;node_id&gt;.token</code> and reuse it on restart.</p>
-    <p>If you lose the runtime token, you can request a fresh one with the same <code>/relay/v2/auth/status</code> call as long as you still have the <code>node_id</code> and <code>registration_secret</code>.</p>
 
-    <h2>5. Send heartbeats</h2>
-    <p>A node must prove it is alive. Send a heartbeat every few seconds:</p>
-    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/discovery/heartbeat</span>
-Authorization: Bearer ***
-Content-Type: application/json
+<p>Save these values to a persistent file, for example:</p>
 
-{
-  "node_id": "&lt;assigned_node_id&gt;",
-  "status": "online",
-  "load": 0.0,
-  "queue_depth": 0
-}</code></pre>
-    <p>Recommended interval: <strong>8 seconds</strong>. Server timeout is 5 × heartbeat interval.</p>
-
-    <h2>6. Claim tasks</h2>
-    <p>Once approved and online, claim available work:</p>
-    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/scheduler/claim</span>
-Authorization: Bearer ***
-Content-Type: application/json
-
-{
-  "capability": "chat"
-}</code></pre>
-    <p>If a stage is available, the response contains the stage details. Execute the work, then complete the stage:</p>
-    <pre><code><span class="method">POST</span> <span class="endpoint">/relay/v2/scheduler/stages/{stage_id}/complete</span>
-Authorization: Bearer ***
-Content-Type: application/json
-
-{
-  "node_id": "<assigned_node_id>",
-  "task_id": "<task_id>",
-  "result": {"status": "ok", "answer": "..."}
+<pre><code>{
+  "node_id": "V34ETT74",
+  "node_name": "my-node",
+  "registration_secret": "rs_...",
+  "relay_url": "http://192.168.1.50:8788",
+  "capabilities": [
+    {"name": "chat", "version": "1.0.0"}
+  ]
 }</code></pre>
 
-    <h2>7. Capabilities</h2>
-    <p>Common capability names you can register:</p>
-    <ul>
-      <li><code>chat</code> — general conversational agent work</li>
-      <li><code>code</code> — coding / terminal / file work</li>
-      <li><code>web</code> — web search and extraction</li>
-      <li><code>vision</code> — image analysis</li>
-    </ul>
-    <p>You can invent your own capability names; tasks must then reference exactly those names.</p>
+<h3>Important files</h3>
 
-    <h2>8. Example node code</h2>
-    <p>Look at <code>examples/nodes/node_base.py</code> in this repository for a ready-to-use base class that handles registration, heartbeat, claim and complete loops.</p>
-  </div>
+<table>
+<tr><th>File</th><th>Purpose</th></tr>
+<tr><td>`~/.relay/ai-relay-agent.json`</td><td>Long-lived node identity: `node_id`, `registration_secret`, capabilities</td></tr>
+<tr><td>`~/.relay/ai-relay-agent.token`</td><td>Current runtime token (`rt_...`)</td></tr>
+</table>
+
+<p>Do not lose the <code>registration_secret</code>. It is the only way to get fresh runtime</p>
+<p>tokens without re-registering.</p>
+
+<h2>4. Wait for approval</h2>
+
+<p>A newly registered node is in <code>pending</code> state. It cannot claim work yet. The node</p>
+<p>should poll <code>/relay/v2/auth/status</code> until an admin approves it.</p>
+
+<pre><code>curl -X POST "http://${RELAY_HOST}:8788/relay/v2/auth/status" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "node_id": "V34ETT74",
+    "registration_secret": "rs_..."
+  }'</code></pre>
+
+<p>While pending:</p>
+
+<pre><code>{
+  "node_id": "V34ETT74",
+  "status": "pending",
+  "message": "Awaiting admin approval"
+}</code></pre>
+
+<p>After approval:</p>
+
+<pre><code>{
+  "node_id": "V34ETT74",
+  "status": "approved",
+  "token": "rt_...",
+  "token_type": "runtime",
+  "expires_at": "2026-06-28T14:00:00+00:00",
+  "message": "Node approved — runtime token issued"
+}</code></pre>
+
+<p>Save the runtime token and start the main loop.</p>
+
+<p>If the node restarts, use the registration secret to request a fresh runtime</p>
+<p>token via <code>/relay/v2/auth/status</code>.</p>
+
+<h2>5. Keep the node alive</h2>
+
+<p>Once approved, send a heartbeat every few seconds. The recommended interval is</p>
+<p><strong>8 seconds</strong>.</p>
+
+<pre><code>curl -X POST "http://${RELAY_HOST}:8788/relay/v2/discovery/heartbeat" \
+  -H "Authorization: Bearer ${RUNTIME_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "node_id": "V34ETT74",
+    "status": "online",
+    "load": 0.0,
+    "queue_depth": 0
+  }'</code></pre>
+
+<p>A node that misses too many heartbeats is considered offline and will not</p>
+<p>receive tasks.</p>
+
+<h2>6. Claim and execute work</h2>
+
+<p>Ask the relay for work matching a capability:</p>
+
+<pre><code>curl -X POST "http://${RELAY_HOST}:8788/relay/v2/scheduler/claim" \
+  -H "Authorization: Bearer ${RUNTIME_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"capability": "chat"}'</code></pre>
+
+<p>If work is available, the relay returns a stage:</p>
+
+<pre><code>{
+  "stage_id": "stg_...",
+  "task_id": "tsk_...",
+  "stage_name": "answer",
+  "capability": "chat",
+  "payload": {
+    "question": "What is the current time in Tokyo?"
+  }
+}</code></pre>
+
+<p>Execute the work and report the result:</p>
+
+<pre><code>curl -X POST "http://${RELAY_HOST}:8788/relay/v2/scheduler/stages/${STAGE_ID}/complete" \
+  -H "Authorization: Bearer ${RUNT...N}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "node_id": "V34ETT74",
+    "task_id": "tsk_...",
+    "result": {
+      "status": "ok",
+      "answer": "The current time in Tokyo is 14:30 JST."
+    }
+  }'</code></pre>
+
+<h2>7. Refresh the runtime token</h2>
+
+<p>Runtime tokens expire. Refresh them before they expire:</p>
+
+<pre><code>curl -X POST "http://${RELAY_HOST}:8788/relay/v2/auth/refresh" \
+  -H "Authorization: Bearer ${RUNTIME_TOKEN}"</code></pre>
+
+<p>Response:</p>
+
+<pre><code>{
+  "node_id": "V34ETT74",
+  "token_type": "runtime",
+  "token": "rt_...",
+  "expires_at": "2026-06-28T14:00:00+00:00"
+}</code></pre>
+
+<p>Save the new token. If the token expires, request a fresh one with the</p>
+<p>registration secret via <code>/relay/v2/auth/status</code>.</p>
+
+<h2>8. Helper scripts</h2>
+
+<p>This repository contains helper scripts and examples for nodes.</p>
+
+<table>
+<tr><th>Path</th><th>Use case</th></tr>
+<tr><td>`examples/nodes/node_base.py`</td><td>Base class that handles registration, heartbeat, claim, and complete loops</td></tr>
+<tr><td>`examples/nodes/relay_client.py`</td><td>HTTP client for the relay API</td></tr>
+<tr><td>`examples/nodes/approve_nodes.py`</td><td>Admin script to approve pending nodes</td></tr>
+<tr><td>`nodes/storage-node/poller.py`</td><td>Generic poller for KI-less service nodes</td></tr>
+<tr><td>`nodes/storage-node/register.py`</td><td>One-time registration for the storage node</td></tr>
+<tr><td>`scripts/manual_node_test.py`</td><td>Manual end-to-end node test</td></tr>
+</table>
+
+<p>Use <code>examples/nodes/node_base.py</code> as a starting point for new nodes. It handles</p>
+<p>the lifecycle automatically.</p>
+
+<h2>9. Minimal node checklist</h2>
+
+<p>Before a node can work, it must:</p>
+
+<ul><li>[ ] Know the relay URL from configuration or the user</li>
+<li>[ ] Register via <code>/relay/v2/auth/register</code></li>
+<li>[ ] Save <code>node_id</code> and <code>registration_secret</code> to <code>~/.relay/ai-relay-agent.json</code></li>
+<li>[ ] Wait for an admin to approve the node</li>
+<li>[ ] Poll <code>/relay/v2/auth/status</code> to receive the <code>rt_...</code> runtime token</li>
+<li>[ ] Save the runtime token to <code>~/.relay/ai-relay-agent.token</code></li>
+<li>[ ] Start sending heartbeats every 8 seconds</li>
+<li>[ ] Start claiming tasks for advertised capabilities</li>
+<li>[ ] Refresh the runtime token before it expires</li>
+</ul>
+<h2>10. Service nodes: ask for help</h2>
+
+<p>Service nodes are intentionally dumb. They execute only what the stage says.</p>
+
+<p>If a service node detects a situation that requires a decision, it must <strong>not</strong></p>
+<p>decide on its own. Instead, it posts a decision task back to the relay:</p>
+
+<pre><code>{
+  "task_name": "storage.decide_cleanup",
+  "stages": [
+    {
+      "stage_name": "decide",
+      "capability": "llm.decide_cleanup",
+      "payload": {
+        "usage_ratio": 0.91,
+        "candidates": ["2026/01/old_image.png"]
+      }
+    }
+  ]
+}</code></pre>
+
+<p>A KI node will claim the decision stage and return instructions.</p>
+
+<h2>11. Common mistakes</h2>
+
+<table>
+<tr><th>Mistake</th><th>Result</th><th>Fix</th></tr>
+<tr><td>Using the temporary token for heartbeats</td><td>`401 Unauthorized`</td><td>Wait for approval and use the runtime token</td></tr>
+<tr><td>Forgetting heartbeats</td><td>Node marked offline</td><td>Send heartbeats every 8 seconds</td></tr>
+<tr><td>Losing the registration secret</td><td>Cannot refresh tokens</td><td>Keep `ai-relay-agent.json` safe</td></tr>
+<tr><td>Claiming with the wrong capability</td><td>No tasks received</td><td>Use one of the registered capabilities</td></tr>
+<tr><td>Node stays pending forever</td><td>No admin approved it</td><td>Ask an admin to approve the node</td></tr>
+</table>
+
+<h2>12. Further reading</h2>
+
+<ul><li>For a deeper explanation of node types, capabilities, and the self-care</li>
+</ul><p>  pattern, see <code>nodes-design.md</code>.</p>
+<ul><li>For the full authentication and token model, see <code>token-concept.md</code>.</li>
+<li>For installing the relay server and a storage node, see <code>setup.md</code>.</li></ul>
 </body>
 </html>
