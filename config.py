@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     port: int = 8788
     log_level: str = "info"
     reload: bool = False
+    enable_mdns: bool = False
+    mdns_hostname: str = "ai-relay"
 
     # Paths
     db_path: Path = Path.home() / ".relay" / "server.db"

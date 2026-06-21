@@ -15,6 +15,7 @@ from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
 from relay_server.core.db import init_db
 from relay_server.core.events import event_bus
+from relay_server.core.zeroconf import RelayZeroconf
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
@@ -33,9 +34,14 @@ async def lifespan(app: FastAPI):
 
     watchdog_task = asyncio.create_task(_heartbeat_watchdog())
     claim_watchdog_task = asyncio.create_task(_claim_ttl_watchdog())
+    mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
+    if settings.enable_mdns:
+        mdns.start()
     try:
         yield
     finally:
+        if settings.enable_mdns:
+            mdns.stop()
         watchdog_task.cancel()
         claim_watchdog_task.cancel()
         for task in (watchdog_task, claim_watchdog_task):
