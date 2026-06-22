@@ -43,17 +43,87 @@ def _sha256(value: str) -> str:
 
 def generate_secret(prefix: str = "sec") -> str:
     """Generate a cryptographically secure secret string."""
-    return f"{prefix}{secrets.token_urlsafe(32)}"
+    token = secrets.token_urlsafe(32)
+    return f"{prefix}{token}"
+
+
+def secret_entropy_bits(secret: str) -> int:
+    """Return the Shannon-ish entropy of a secret in bits.
+
+    This is a rough estimate based on the printable ASCII range. The actual
+    entropy of a generated secret is ``32 * 8 = 256`` bits because the token
+    is base64url encoded.
+    """
+    if not secret:
+        return 0
+    unique_chars = set(secret)
+    if len(unique_chars) <= 1:
+        return 0
+    import math
+
+    length = len(secret)
+    entropy = 0.0
+    for ch in unique_chars:
+        p = secret.count(ch) / length
+        entropy -= p * math.log2(p)
+    return int(entropy * length)
 
 
 def hash_secret(secret: str) -> str:
-    """Hash a secret for storage."""
-    return _sha256(secret)
+    """Hash a high-entropy secret for storage using bcrypt (12 rounds).
+
+    This replaces the previous unsalted SHA-256 implementation. bcrypt is a
+    deliberately slow hash that raises the cost for an attacker who obtains
+    the database. verify_secret() remains compatible with legacy SHA-256 hashes.
+    """
+    import bcrypt
+
+    return bcrypt.hashpw(secret.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def _hash_with_salt(secret: str) -> str:
+    """Deprecated transitional helper.
+
+    Kept only for backward compatibility with databases that already contain
+    ``$sha256-salt$`` hashes. New hashes are always bcrypt.
+    """
+    salt = secrets.token_hex(16)
+    digest = hashlib.sha256((salt + secret).encode("utf-8")).hexdigest()
+    return f"$sha256-salt${salt}${digest}"
 
 
 def verify_secret(secret: str, secret_hash: str) -> bool:
-    """Verify a secret against a stored hash."""
-    return secrets.compare_digest(hash_secret(secret), secret_hash)
+    """Verify a secret against a stored hash.
+
+    Accepts legacy unsalted SHA-256, legacy salted SHA-256, and modern bcrypt
+    hashes. Legacy formats are verified but new secrets are always stored with
+    bcrypt.
+    """
+    if not secret_hash:
+        return False
+
+    # Modern bcrypt hashes.
+    if secret_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        import bcrypt
+
+        try:
+            return bcrypt.checkpw(secret.encode("utf-8"), secret_hash.encode("utf-8"))
+        except ValueError:
+            return False
+
+    # Legacy salted SHA-256.
+    if secret_hash.startswith("$sha256-salt$"):
+        _, salt, digest = secret_hash.split("$")
+        candidate = hashlib.sha256((salt + secret).encode("utf-8")).hexdigest()
+        return secrets.compare_digest(candidate, digest)
+
+    # Legacy unsalted SHA-256.
+    return secrets.compare_digest(_sha256(secret), secret_hash)
+
+
+def _is_legacy_sha256(secret_hash: str) -> bool:
+    """Return True if the hash is an unsalted SHA-256 hex digest."""
+    return len(secret_hash) == 64 and all(c in "0123456789abcdef" for c in secret_hash.lower())
 
 
 def _token_id() -> str:
@@ -279,17 +349,25 @@ def approve_node(
 
 def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
     """Validate a bearer token. Returns node info or None."""
-    token_hash = hash_secret(token)
     conn = get_conn()
     try:
-        token_row = conn.execute(
+        # Query candidate tokens and compare bcrypt hashes in constant time.
+        # Deterministic hash lookups do not exist for bcrypt because of random salts.
+        token_rows = conn.execute(
             """
-            SELECT token_id, node_id, node_name, token_type, pending, role, expires_at
+            SELECT token_id, node_id, node_name, token_type, pending, role, expires_at, token_hash
             FROM node_tokens
-            WHERE token_hash = ?
+            WHERE expires_at > ? OR expires_at IS NULL
             """,
-            (token_hash,),
-        ).fetchone()
+            (_format_time(_now() - timedelta(seconds=1)),),
+        ).fetchall()
+
+        token_row = None
+        for row in token_rows:
+            if verify_secret(token, row["token_hash"]):
+                token_row = row
+                break
+
         if not token_row:
             return None
 
@@ -336,9 +414,8 @@ def refresh_token(token: str) -> Optional[str]:
 
     conn = get_conn()
     try:
-        # Invalidate old token.
-        old_hash = hash_secret(token)
-        conn.execute("DELETE FROM node_tokens WHERE token_hash = ?", (old_hash,))
+        # Delete the old token by its primary key; bcrypt hashes are not deterministic.
+        conn.execute("DELETE FROM node_tokens WHERE token_id = ?", (info["token_id"],))
         conn.commit()
         return _create_token(
             info["node_id"],

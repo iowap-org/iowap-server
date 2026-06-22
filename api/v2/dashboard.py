@@ -1,3 +1,4 @@
+import secrets
 """Dashboard router for the relay service — static UI + API endpoints."""
 
 import json
@@ -7,6 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Query, Request, status
 from fastapi.responses import FileResponse, RedirectResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from relay_server.api.v2.security import (
     check_dashboard_permission,
@@ -14,13 +17,20 @@ from relay_server.api.v2.security import (
 )
 from relay_server.config import settings
 from relay_server.core.db import get_conn
-from relay_server.core.session import SESSION_MAX_AGE_SECONDS, sign_user_cookie
+from relay_server.core.session import (
+    CSRF_MAX_AGE_SECONDS,
+    SESSION_MAX_AGE_SECONDS,
+    generate_csrf_token,
+    sign_user_cookie,
+)
 from relay_server.core.users import (
     authenticate_master_seed,
     authenticate_user,
+    change_user_password,
     create_user,
     delete_user,
     get_user_permissions,
+    has_admin_user,
     list_groups,
     list_permissions,
     list_users,
@@ -32,21 +42,12 @@ from relay_server.core.users import (
 from relay_server.models import AuthContext
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 STATIC_DIR = Path(__file__).parent.parent.parent / "static"
-TOKEN_COOKIE = "relay_token"
 USER_COOKIE = "relay_user"
-
-
-def _set_token_cookie(response, token: str) -> None:
-    response.set_cookie(
-        key=TOKEN_COOKIE,
-        value=token,
-        httponly=True,
-        max_age=604800,
-        samesite="strict",
-        secure=settings.session_cookie_secure,
-    )
+CSRF_COOKIE = "relay_csrf"
+CSRF_HEADER = "x-csrf-token"
 
 
 def _set_user_cookie(response, user: dict) -> None:
@@ -55,24 +56,46 @@ def _set_user_cookie(response, user: dict) -> None:
         value=sign_user_cookie(user),
         httponly=True,
         max_age=SESSION_MAX_AGE_SECONDS,
-        samesite="strict",
+        samesite="lax",
+        secure=settings.session_cookie_secure,
+    )
+
+
+def _set_csrf_cookie(response) -> None:
+    response.set_cookie(
+        key=CSRF_COOKIE,
+        value=generate_csrf_token(),
+        httponly=False,
+        max_age=CSRF_MAX_AGE_SECONDS,
+        samesite="lax",
         secure=settings.session_cookie_secure,
     )
 
 
 def _clear_cookies(response) -> None:
     response.delete_cookie(
-        key=TOKEN_COOKIE,
+        key=USER_COOKIE,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         secure=settings.session_cookie_secure,
     )
     response.delete_cookie(
-        key=USER_COOKIE,
-        httponly=True,
-        samesite="strict",
+        key=CSRF_COOKIE,
+        samesite="lax",
         secure=settings.session_cookie_secure,
     )
+
+
+def _verify_csrf(request: Request) -> None:
+    cookie_token = request.cookies.get(CSRF_COOKIE)
+    header_token = request.headers.get(CSRF_HEADER)
+    if not cookie_token or not header_token or cookie_token != header_token:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF token mismatch",
+        )
 
 
 @router.get("/")
@@ -95,6 +118,7 @@ async def dashboard_agent_readme() -> FileResponse:
 
 
 @router.post("/login")
+@limiter.limit("5/minute")
 async def dashboard_login(
     request: Request,
     mode: str = Form("user"),
@@ -102,8 +126,18 @@ async def dashboard_login(
     password: str = Form(""),
     seed: str = Form(""),
 ):
-    """Validate username/password or master admin seed and set session cookie."""
+    """Validate username/password or master admin seed and set session cookie.
+
+    Master-seed login is only available while no human admin user exists.
+    Once a human admin has been created, seed login is disabled to avoid
+    leaking the long-lived master seed through the browser.
+    """
     if mode == "seed":
+        if has_admin_user() and not settings.enable_master_seed_login:
+            return RedirectResponse(
+                url="/relay/v2/dashboard/login?error=Seed%20login%20disabled",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
         user = authenticate_master_seed(seed)
         if not user:
             return RedirectResponse(
@@ -117,22 +151,77 @@ async def dashboard_login(
                 url="/relay/v2/dashboard/login?error=Invalid%20credentials",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
+        if user.get("force_password_change"):
+            # Issue a short-lived signed token that only allows password change.
+            from relay_server.core.session import sign_user_cookie
+            response = RedirectResponse(
+                url="/relay/v2/dashboard/change-password",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+            _set_user_cookie(response, user)
+            _set_csrf_cookie(response)
+            return response
 
-    response = RedirectResponse(url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
+    if mode == "seed":
+        response = RedirectResponse(
+            url="/relay/v2/dashboard/bootstrap", status_code=status.HTTP_303_SEE_OTHER
+        )
+    else:
+        response = RedirectResponse(url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
     _set_user_cookie(response, user)
-    # Clear any stale node runtime token so the human session takes precedence.
-    response.delete_cookie(
-        key=TOKEN_COOKIE,
-        httponly=True,
-        samesite="strict",
-        secure=settings.session_cookie_secure,
-    )
+    _set_csrf_cookie(response)
     return response
+
+
+@router.get("/change-password")
+async def dashboard_change_password_page(request: Request):
+    """Page where users with force_password_change must set a new password."""
+    return FileResponse(STATIC_DIR / "change-password.html")
+
+
+@router.get("/bootstrap")
+async def dashboard_bootstrap_page(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
+    """Page shown after master-seed login to create the first human admin."""
+    if ctx.user_id != "__master__" and not settings.enable_master_seed_login:
+        return RedirectResponse("/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
+    return FileResponse(STATIC_DIR / "bootstrap.html")
+
+
+@router.post("/api/bootstrap")
+async def dashboard_bootstrap_create_admin(
+    request: Request,
+    username: str = Form(...),
+    email: str = Form(""),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Create the first human admin while logged in via master seed."""
+    _verify_csrf(request)
+    if ctx.user_id != "__master__":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the master seed session can create the first admin.",
+        )
+    if has_admin_user() and not settings.enable_master_seed_login:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A human admin already exists.",
+        )
+    temp_password = secrets.token_urlsafe(16)
+    user = create_user(
+        username=username,
+        password=temp_password,
+        group_names=["admin"],
+        email=email or None,
+        created_by="master_seed",
+        force_password_change=True,
+    )
+    return {"status": "ok", "user_id": user["user_id"], "temporary_password": temp_password}
 
 
 @router.post("/logout")
 async def dashboard_logout(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Clear the dashboard session cookie."""
+    _verify_csrf(request)
     response = RedirectResponse(
         url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
     )
@@ -312,6 +401,7 @@ async def dashboard_create_user(
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Create a new human user. Requires users:manage permission."""
+    _verify_csrf(request)
     check_dashboard_permission(ctx, "users:manage")
     group_list = [g.strip() for g in groups.split(",") if g.strip()]
     created_by = ctx.username or ctx.node_id
@@ -333,9 +423,23 @@ async def dashboard_set_user_groups(
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Set groups for a user."""
+    _verify_csrf(request)
     check_dashboard_permission(ctx, "users:manage")
     group_list = [g.strip() for g in groups.split(",") if g.strip()]
     set_user_groups(user_id, group_list)
+    return {"status": "ok"}
+
+
+@router.post("/api/me/password")
+async def dashboard_change_own_password(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Change the current user's own password."""
+    _verify_csrf(request)
+    change_user_password(ctx.user_id, current_password, new_password)
     return {"status": "ok"}
 
 
@@ -347,6 +451,7 @@ async def dashboard_set_user_password(
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Reset a user's password."""
+    _verify_csrf(request)
     check_dashboard_permission(ctx, "users:manage")
     set_user_password(user_id, password)
     return {"status": "ok"}
@@ -360,6 +465,7 @@ async def dashboard_set_user_active(
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Activate or deactivate a user."""
+    _verify_csrf(request)
     check_dashboard_permission(ctx, "users:manage")
     set_user_active(user_id, active)
     return {"status": "ok"}
@@ -372,6 +478,7 @@ async def dashboard_delete_user(
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Delete a human user."""
+    _verify_csrf(request)
     check_dashboard_permission(ctx, "users:manage")
     delete_user(user_id)
     return {"status": "deleted", "user_id": user_id}
@@ -405,6 +512,7 @@ async def dashboard_set_group_permissions(
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
     """Set permissions for a group."""
+    _verify_csrf(request)
     check_dashboard_permission(ctx, "groups:manage")
     perm_list = [p.strip() for p in permissions.split(",") if p.strip()]
     set_group_permissions(group_id, perm_list)

@@ -27,6 +27,22 @@ def init_db() -> None:
         conn.close()
 
 
+def init_db_for_path(db_path: str) -> None:
+    """Initialize the database at an explicit path (used by CLI tools)."""
+    import pathlib
+
+    path = pathlib.Path(str(db_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        _schema(conn)
+    finally:
+        conn.close()
+
+
 def _schema(conn: sqlite3.Connection) -> None:
     """Create core tables only."""
 
@@ -69,6 +85,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             email TEXT,
             password_hash TEXT NOT NULL,
             is_active BOOLEAN DEFAULT 1,
+            force_password_change BOOLEAN DEFAULT 1,
             created_at TEXT NOT NULL,
             created_by TEXT
         )
@@ -129,10 +146,6 @@ def _schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
-    # Migration: add registration_secret_hash column if missing.
-    cols = {c["name"] for c in conn.execute("PRAGMA table_info(nodes)").fetchall()}
-    if "registration_secret_hash" not in cols:
-        conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
 
     # --- PRESENCE ---
     conn.execute("""
@@ -218,7 +231,22 @@ def _schema(conn: sqlite3.Connection) -> None:
     # --- RBAC DEFAULTS ---
     _seed_default_rbac(conn)
 
+    # --- MIGRATIONS ---
+    _run_migrations(conn)
+
     conn.commit()
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Run lightweight schema migrations that add columns when missing."""
+    # Ensure force_password_change column exists in users table.
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "force_password_change" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN force_password_change BOOLEAN DEFAULT 1")
+    # Ensure registration_secret_hash column exists in nodes table.
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()]
+    if "registration_secret_hash" not in cols:
+        conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
 
 
 def _seed_default_rbac(conn: sqlite3.Connection) -> None:

@@ -7,8 +7,11 @@ import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from relay_server import __version__
 from relay_server.api.v2 import router as v2_router
@@ -17,11 +20,31 @@ from relay_server.core.db import init_db
 from relay_server.core.events import event_bus
 from relay_server.core.zeroconf import RelayZeroconf
 
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "img-src 'self' data:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    ),
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("relay")
+
+# Shared IP-based rate limiter used by auth and dashboard routers.
+limiter = Limiter(key_func=get_remote_address)
 
 
 @asynccontextmanager
@@ -31,6 +54,13 @@ async def lifespan(app: FastAPI):
     init_db()
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
     logger.info("AI-Relay-Service v%s starting on %s:%s", __version__, settings.host, settings.port)
+
+    # Enforce a persistent session secret for cookie signing.
+    if not settings.session_secret or len(settings.session_secret) < 32:
+        raise RuntimeError(
+            "RELAY_SESSION_SECRET must be set to a secret of at least 32 characters. "
+            "Configure it via RELAY_SESSION_SECRET or session_secret in config.yaml."
+        )
 
     watchdog_task = asyncio.create_task(_heartbeat_watchdog())
     claim_watchdog_task = asyncio.create_task(_claim_ttl_watchdog())
@@ -81,11 +111,61 @@ async def _heartbeat_watchdog():
         await asyncio.sleep(settings.heartbeat_interval_seconds)
 
 
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """Convert slowapi's default error into JSON for API consumers."""
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": "Rate limit exceeded"},
+        headers={"Retry-After": exc.headers.get("Retry-After", "60")} if exc.headers else {},
+    )
+
+
 app = FastAPI(
     title="AI-Relay-Service",
     version=__version__,
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request, call_next):
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers[name] = value
+    return response
+
+
+@app.middleware("http")
+async def _force_password_change_middleware(request, call_next):
+    """Block normal dashboard use until a user with force_password_change changes their password."""
+    path = request.url.path
+    allowed_paths = {
+        "/relay/v2/dashboard/login",
+        "/relay/v2/dashboard/change-password",
+        "/relay/v2/dashboard/bootstrap",
+        "/relay/v2/dashboard/api/bootstrap",
+        "/relay/v2/dashboard/api/me/password",
+        "/relay/v2/dashboard/logout",
+    }
+    allowed_prefixes = ("/relay/v2/dashboard/static/",)
+    if path not in allowed_paths and not any(path.startswith(p) for p in allowed_prefixes):
+        relay_user = request.cookies.get("relay_user")
+        if relay_user:
+            from relay_server.api.v2.security import unsign_user_cookie, list_users
+
+            user_data = unsign_user_cookie(relay_user)
+            if user_data and user_data.get("user_id") and user_data.get("user_id") != "__master__":
+                for user in list_users():
+                    if user["user_id"] == user_data["user_id"] and user.get("force_password_change"):
+                        return JSONResponse(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            content={"detail": "Password change required"},
+                        )
+    response = await call_next(request)
+    return response
+
 
 app.include_router(v2_router, prefix="/relay/v2")
 
@@ -112,7 +192,7 @@ async def health():
     }
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="AI-Relay-Service v2")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -120,6 +200,11 @@ def main():
     server_parser = subparsers.add_parser("server", help="Run the relay server")
     server_parser.add_argument("--host", default=settings.host)
     server_parser.add_argument("--port", type=int, default=settings.port)
+    server_parser.add_argument(
+        "--enable-master-seed",
+        action="store_true",
+        help="Keep master-seed login enabled even if human admin users exist (recovery mode)",
+    )
     server_parser.add_argument(
         "--config", help="Path to config YAML (overrides default ~/.relay/config.yaml)"
     )
@@ -130,7 +215,7 @@ def main():
     init_master_parser = admin_sub.add_parser("init-master", help="Initialize master admin seed")
     init_master_parser.add_argument("--config", help="Path to config YAML")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "admin":
         _run_admin_command(args)
@@ -148,6 +233,7 @@ def main():
 def _run_admin_command(args):
     from relay_server.core.auth import init_master_seed
     from relay_server.core.db import init_db
+    from relay_server.core.users import has_admin_user
 
     init_db()
     if args.admin_command == "init-master":
@@ -156,12 +242,11 @@ def _run_admin_command(args):
             print("Master admin seed created.")
             print("WARNING: Store this secret securely. It will not be shown again.")
             print(f"SECRET: {secret}")
-        else:
-            print("Master admin seed already exists.")
-            sys.exit(1)
-    else:
-        print("Unknown admin command")
+            sys.exit(0)
+        print("Master admin seed already exists.", file=sys.stderr)
         sys.exit(1)
+    print("Unknown admin command", file=sys.stderr)
+    sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from fastapi import Cookie, Header, HTTPException, status
 
 from relay_server.core.auth import validate_token
 from relay_server.core.session import unsign_user_cookie
-from relay_server.core.users import get_user_permissions
+from relay_server.core.users import get_user_permissions, list_users
 from relay_server.models import AuthContext
 
 
@@ -20,10 +20,9 @@ def extract_bearer(authorization: Optional[str]) -> Optional[str]:
 
 async def get_auth_context(
     authorization: Optional[str] = Header(None),
-    relay_token: Optional[str] = Cookie(None),
 ) -> AuthContext:
     """Dependency: authenticate any valid token (pending or approved)."""
-    token = extract_bearer(authorization) or relay_token
+    token = extract_bearer(authorization)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -40,10 +39,9 @@ async def get_auth_context(
 
 async def get_approved_context(
     authorization: Optional[str] = Header(None),
-    relay_token: Optional[str] = Cookie(None),
 ) -> AuthContext:
     """Dependency: authenticate and require approved node status."""
-    token = extract_bearer(authorization) or relay_token
+    token = extract_bearer(authorization)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -71,10 +69,9 @@ async def get_approved_context(
 
 async def require_admin(
     authorization: Optional[str] = Header(None),
-    relay_token: Optional[str] = Cookie(None),
 ) -> AuthContext:
     """Dependency: require admin role and approved status (node admin)."""
-    ctx = await get_approved_context(authorization, relay_token)
+    ctx = await get_approved_context(authorization)
     if not ctx.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -85,61 +82,89 @@ async def require_admin(
 
 async def require_dashboard_user(
     authorization: Optional[str] = Header(None),
-    relay_token: Optional[str] = Cookie(None),
     relay_user: Optional[str] = Cookie(None),
 ) -> AuthContext:
-    """Dependency: authenticate dashboard user via human user cookie or node token.
+    """Dependency: authenticate a human dashboard user via signed cookie only.
 
-    Human session cookies take precedence over node runtime tokens so that a
-    stale admin node token cannot override a currently logged-in human user.
+    Node runtime tokens are intentionally NOT accepted for the dashboard; they
+    are used via the Authorization header for API calls. This keeps dashboard
+    sessions separate from node tokens and avoids storing a node token in a
+    browser cookie.
     """
-    from relay_server.core.users import list_users
+    if not relay_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid dashboard session",
+        )
 
-    # Human user path takes precedence over node tokens.
-    if relay_user:
-        user_data = unsign_user_cookie(relay_user)
-        if user_data is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired session cookie",
-            )
-        user_id = user_data.get("user_id")
-        username = user_data.get("username")
+    user_data = unsign_user_cookie(relay_user)
+    if user_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session cookie",
+        )
+    user_id = user_data.get("user_id")
+    username = user_data.get("username")
 
-        if user_id == "__master__" and username == "master":
+    if user_id == "__master__" and username == "master":
+        return AuthContext(
+            token_id=user_id,
+            node_id=user_id,
+            node_name=username,
+            endpoint=None,
+            capabilities=[],
+            status="approved",
+            role="admin",
+            token_type="user_session",
+            pending=False,
+            user_id=user_id,
+            username=username,
+        )
+
+    # Verify user still exists and is active.
+    for user in list_users():
+        if user["user_id"] == user_id and user["username"] == username and user["is_active"]:
             return AuthContext(
                 token_id=user_id,
                 node_id=user_id,
-                node_name=username,
+                node_name=username or user_id,
                 endpoint=None,
                 capabilities=[],
                 status="approved",
-                role="admin",
+                role="admin" if "admin" in user.get("groups", []) else "user",
                 token_type="user_session",
                 pending=False,
                 user_id=user_id,
                 username=username,
+                force_password_change=user.get("force_password_change", False),
             )
 
-        # Verify user still exists and is active.
-        for user in list_users():
-            if user["user_id"] == user_id and user["username"] == username and user["is_active"]:
-                return AuthContext(
-                    token_id=user_id,
-                    node_id=user_id,
-                    node_name=username or user_id,
-                    endpoint=None,
-                    capabilities=[],
-                    status="approved",
-                    role="admin" if "admin" in user.get("groups", []) else "user",
-                    token_type="user_session",
-                    pending=False,
-                    user_id=user_id,
-                    username=username,
-                )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired dashboard session",
+    )
 
-    # Node token fallback (including admin runtime tokens).
-    token = extract_bearer(authorization) or relay_token
+
+async def require_admin_or_dashboard_user(
+    authorization: Optional[str] = Header(None),
+    relay_user: Optional[str] = Cookie(None),
+) -> AuthContext:
+    """Dependency: authenticate an admin action via human cookie or node token.
+
+    Admin API endpoints may be called either by a logged-in human dashboard user
+    or by an approved admin node presenting a valid bearer token. Service nodes
+    without the admin role are rejected.
+    """
+    # Prefer human session cookie when present.
+    if relay_user:
+        try:
+            return await require_dashboard_user(authorization, relay_user)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_401_UNAUTHORIZED:
+                raise
+
+    # Fall back to node bearer token; must be an approved admin node.
+    token = extract_bearer(authorization)
     if token:
         info = validate_token(token, require_approved=False)
         if info:
@@ -151,7 +176,7 @@ async def require_dashboard_user(
             if info["role"] != "admin":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Dashboard requires admin node",
+                    detail="Admin role required",
                 )
             return AuthContext(**info)
 

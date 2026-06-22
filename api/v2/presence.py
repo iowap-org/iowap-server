@@ -6,25 +6,25 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from relay_server.api.v2.security import get_auth_context
 from relay_server.core.presence import get_presence, list_presence, update_presence
-from relay_server.models import AuthContext
+from relay_server.models import AuthContext, PresenceUpdateRequest
 
 router = APIRouter()
 
 
 @router.post("/update")
 async def presence_update(
-    body: Dict[str, Any],
+    body: PresenceUpdateRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Update presence status for the authenticated node."""
     ok = update_presence(
         node_id=ctx.node_id,
-        status=body.get("status"),
-        mood=body.get("mood"),
-        activity=body.get("activity"),
-        progress=body.get("progress"),
-        eta_seconds=body.get("eta_seconds"),
-        next_available=body.get("next_available"),
+        status=body.status,
+        mood=body.mood,
+        activity=body.activity.model_dump() if body.activity else None,
+        progress=body.progress,
+        eta_seconds=body.eta_seconds,
+        next_available=body.next_available,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")

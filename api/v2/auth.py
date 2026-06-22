@@ -3,10 +3,14 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from relay_server.core.auth import (
     _create_token as create_runtime_token,
+    generate_secret,
+    hash_secret,
 )
 from relay_server.core.auth import (
     refresh_token,
@@ -25,6 +29,7 @@ from relay_server.models import (
 )
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 def _format_time(dt: datetime) -> str:
@@ -55,7 +60,8 @@ def _token_response(
 
 
 @router.post("/register", response_model=NodeRegistrationResponse)
-async def auth_register(body: NodeRegistration):
+@limiter.limit("10/minute")
+async def auth_register(request: Request, body: NodeRegistration):
     """Register a new worker/service node.
 
     The cluster assigns a unique 8-character node_id. The node starts in
@@ -89,7 +95,8 @@ async def auth_register(body: NodeRegistration):
 
 
 @router.post("/register-admin", response_model=AdminNodeRegistrationResponse)
-async def auth_register_admin(body: AdminNodeRegistration):
+@limiter.limit("5/minute")
+async def auth_register_admin(request: Request, body: AdminNodeRegistration):
     """Register an admin node using the master bootstrap secret.
 
     The cluster assigns a unique 8-character node_id.
@@ -119,7 +126,8 @@ async def auth_register_admin(body: AdminNodeRegistration):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def auth_refresh(authorization: Optional[str] = Header(None)):
+@limiter.limit("12/minute")
+async def auth_refresh(request: Request, authorization: Optional[str] = Header(None)):
     token = _extract_bearer(authorization)
     if not token:
         raise HTTPException(
@@ -148,7 +156,8 @@ async def auth_refresh(authorization: Optional[str] = Header(None)):
 
 
 @router.post("/status", response_model=RegistrationStatusResponse)
-async def auth_status(body: RegistrationStatusRequest):
+@limiter.limit("30/minute")
+async def auth_status(request: Request, body: RegistrationStatusRequest):
     """Poll approval status using the long-lived registration secret.
 
     Returns the runtime token once the node has been approved by an admin.
@@ -188,7 +197,8 @@ async def auth_status(body: RegistrationStatusRequest):
                 message="Awaiting admin approval",
             )
 
-        # Approved or any other non-pending state: issue a fresh runtime token.
+        # Approved or any other non-pending state: issue a fresh runtime token and
+        # rotate the long-lived registration secret so it is single-use.
         token = create_runtime_token(
             node_id=row["node_id"],
             node_name=row["node_name"],
@@ -197,6 +207,12 @@ async def auth_status(body: RegistrationStatusRequest):
             pending=False,
             ttl_hours=settings.token_ttl_hours,
         )
+        new_registration_secret = generate_secret("rs_")
+        conn.execute(
+            "UPDATE nodes SET registration_secret_hash = ? WHERE node_id = ?",
+            (hash_secret(new_registration_secret), row["node_id"]),
+        )
+        conn.commit()
         info = validate_token(token, require_approved=False)
         return RegistrationStatusResponse(
             node_id=row["node_id"],
@@ -205,7 +221,8 @@ async def auth_status(body: RegistrationStatusRequest):
             token=token,
             token_type="runtime",
             expires_at=info.get("expires_at") if info else "",
-            message="Node approved — runtime token issued",
+            registration_secret=new_registration_secret,
+            message="Node approved — runtime token and registration secret rotated",
         )
     finally:
         conn.close()

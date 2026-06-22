@@ -6,24 +6,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from relay_server.api.v2.security import get_auth_context
 from relay_server.core.discovery import heartbeat, list_nodes, query_nodes_by_capability
-from relay_server.models import AuthContext
+from relay_server.models import AuthContext, HeartbeatRequest
 
 router = APIRouter()
 
 
 @router.post("/heartbeat")
 async def discovery_heartbeat(
-    body: dict,
+    body: HeartbeatRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Node heartbeat updating last_seen and optional metadata."""
     ok = heartbeat(
         node_id=ctx.node_id,
-        load=body.get("load"),
-        queue_depth=body.get("queue_depth"),
-        available=body.get("available"),
-        endpoint=body.get("endpoint"),
-        capabilities=body.get("capabilities"),
+        load=body.load,
+        queue_depth=body.queue_depth,
+        available=body.available,
+        endpoint=body.endpoint,
+        capabilities=[c.model_dump() for c in body.capabilities] if body.capabilities else None,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")

@@ -152,9 +152,8 @@
   </div>
 
 <script>
-const token = new URLSearchParams(location.search).get('token') || localStorage.getItem('relay_token') || '';
-if (token) localStorage.setItem('relay_token', token);
-
+// The dashboard relies on the signed HttpOnly relay_user cookie set by the
+// server at login. No tokens are stored in browser storage or URL parameters.
 let currentUser = null;
 let allPermissions = [];
 let groupsData = [];
@@ -166,8 +165,20 @@ function fmt(d) {
   return isNaN(dt) ? d : dt.toLocaleString();
 }
 
+function getCsrfToken() {
+  const m = document.cookie.match(/(?:^|;\s*)relay_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 async function fetchJson(path, opts={}) {
-  const res = await fetch(path, { headers: { ...opts.headers, 'Accept': 'application/json' }, ...opts });
+  const res = await fetch(path, {
+    headers: {
+      ...opts.headers,
+      'Accept': 'application/json',
+      'X-CSRF-Token': getCsrfToken(),
+    },
+    ...opts
+  });
   if (res.status === 401 || res.status === 403) {
     location.href = '/relay/v2/dashboard/login';
     return new Promise(() => {});
@@ -518,9 +529,7 @@ async function loadAll() {
 }
 
 loadMe().then(() => { loadAll(); loadAdmin(); });
-if (token) {
-  setInterval(() => { loadAll(); if (!document.getElementById('viewAdmin').classList.contains('hidden')) loadAdmin(); }, 10000);
-}
+setInterval(() => { loadAll(); if (!document.getElementById('viewAdmin').classList.contains('hidden')) loadAdmin(); }, 10000);
 </script>
 </body>
 </html>

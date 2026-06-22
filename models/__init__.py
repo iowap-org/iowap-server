@@ -61,6 +61,7 @@ class RegistrationStatusResponse(BaseModel):
     token: Optional[str] = None
     token_type: Optional[str] = None
     expires_at: Optional[str] = None
+    registration_secret: Optional[str] = None
     message: str
 
 
@@ -187,3 +188,33 @@ class StorageFileReference(BaseModel):
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
     created_by: Optional[str] = None
+
+
+class CapabilityStatus(BaseModel):
+    name: str
+    version: str = "1.0.0"
+    available: Optional[bool] = None
+
+
+class HeartbeatRequest(BaseModel):
+    load: Optional[float] = Field(None, ge=0.0, le=1.0)
+    queue_depth: Optional[int] = Field(None, ge=0)
+    available: Optional[bool] = None
+    endpoint: Optional[str] = Field(None, max_length=2048)
+    capabilities: Optional[List[CapabilityStatus]] = None
+
+
+class PresenceActivity(BaseModel):
+    name: Optional[str] = None
+    detail: Optional[str] = None
+    task_id: Optional[str] = None
+    stage_id: Optional[str] = None
+
+
+class PresenceUpdateRequest(BaseModel):
+    status: Optional[str] = Field(None, max_length=64)
+    mood: Optional[str] = Field(None, max_length=64)
+    activity: Optional[PresenceActivity] = None
+    progress: Optional[int] = Field(None, ge=0, le=100)
+    eta_seconds: Optional[int] = Field(None, ge=0)
+    next_available: Optional[str] = Field(None, max_length=64)

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from relay_server.api.v2.security import (
     check_dashboard_permission,
+    require_admin_or_dashboard_user,
     require_dashboard_user,
 )
 from relay_server.core.auth import approve_node
@@ -13,7 +14,7 @@ router = APIRouter()
 
 
 @router.get("/nodes")
-async def admin_list_nodes(ctx: AuthContext = Depends(require_dashboard_user)):
+async def admin_list_nodes(ctx: AuthContext = Depends(require_admin_or_dashboard_user)):
     check_dashboard_permission(ctx, "dashboard:view")
     from relay_server.core.db import get_conn
 
@@ -46,7 +47,7 @@ async def admin_list_nodes(ctx: AuthContext = Depends(require_dashboard_user)):
 async def admin_approve_node(
     node_id: str,
     body: NodeApproval,
-    ctx: AuthContext = Depends(require_dashboard_user),
+    ctx: AuthContext = Depends(require_admin_or_dashboard_user),
 ):
     check_dashboard_permission(ctx, "nodes:approve")
     caps = [c.model_dump() for c in body.capabilities] if body.capabilities else None
@@ -67,7 +68,7 @@ async def admin_approve_node(
 @router.post("/nodes/{node_id}/token", response_model=TokenResponse)
 async def admin_issue_node_token(
     node_id: str,
-    ctx: AuthContext = Depends(require_dashboard_user),
+    ctx: AuthContext = Depends(require_admin_or_dashboard_user),
 ):
     """Issue a new runtime token for an already approved node."""
     check_dashboard_permission(ctx, "nodes:token")
@@ -109,7 +110,7 @@ async def admin_issue_node_token(
 @router.delete("/nodes/{node_id}")
 async def admin_delete_node(
     node_id: str,
-    ctx: AuthContext = Depends(require_dashboard_user),
+    ctx: AuthContext = Depends(require_admin_or_dashboard_user),
 ):
     """Delete a node and all its associated tokens and presence data."""
     check_dashboard_permission(ctx, "nodes:delete")

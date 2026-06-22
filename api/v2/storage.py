@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import FileResponse, JSONResponse
 
 from relay_server.api.v2.security import get_approved_context
+from relay_server.config import settings
 from relay_server.core.artifacts import delete_artifact, get_artifact_metadata, list_artifacts, store_artifact
 from relay_server.models import ArtifactReference, ArtifactUploadResponse, AuthContext
 
@@ -24,7 +25,20 @@ async def storage_upload(
     Workers upload binary results here first, then reference the artifact_id
     in task payloads for storage nodes to archive onto long-term storage.
     """
+    content_length = file.size
+    if content_length is not None and content_length > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Upload exceeds maximum size of {settings.max_upload_bytes} bytes",
+        )
+
     content = await file.read()
+    if len(content) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Upload exceeds maximum size of {settings.max_upload_bytes} bytes",
+        )
+
     result = store_artifact(
         name=file.filename or "unnamed",
         content=content,

@@ -32,7 +32,11 @@ class Settings(BaseSettings):
 
     # Dashboard session cookie
     session_secret: Optional[str] = None
+    enable_master_seed_login: bool = False
     session_cookie_secure: bool = False
+
+    # Storage limits
+    max_upload_bytes: int = 100 * 1024 * 1024  # 100 MiB
 
     # Scheduler
     default_timeout_seconds: int = 300
