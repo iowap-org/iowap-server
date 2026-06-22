@@ -172,8 +172,20 @@ app.include_router(v2_router, prefix="/relay/v2")
 
 @app.get("/dashboard", include_in_schema=False)
 async def dashboard_root_redirect(request: Request):
-    """Redirect shorthand /dashboard to the canonical dashboard path."""
-    return RedirectResponse(url="/relay/v2/dashboard/", status_code=307)
+    """Redirect shorthand /dashboard to login, change-password or dashboard."""
+    relay_user = request.cookies.get("relay_user")
+    if relay_user:
+        try:
+            user_data = unsign_user_cookie(relay_user)
+            user_id = user_data.get("user_id")
+            for user in list_users():
+                if user["user_id"] == user_id and user["is_active"]:
+                    if user.get("force_password_change"):
+                        return RedirectResponse(url="/relay/v2/dashboard/change-password", status_code=303)
+                    return RedirectResponse(url="/relay/v2/dashboard/", status_code=303)
+        except Exception:
+            pass
+    return RedirectResponse(url="/relay/v2/dashboard/login", status_code=303)
 
 
 @app.get("/dashboard/login", include_in_schema=False)
