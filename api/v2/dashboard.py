@@ -107,8 +107,10 @@ async def dashboard_index(request: Request, ctx: AuthContext = Depends(require_d
 
 @router.get("/login")
 async def dashboard_login_page() -> FileResponse:
-    """Serve the login page."""
-    return FileResponse(STATIC_DIR / "login.html")
+    """Serve the login page and set a CSRF cookie for form submissions."""
+    response = FileResponse(STATIC_DIR / "login.html")
+    _set_csrf_cookie(response)
+    return response
 
 
 @router.get("/agent-readme", include_in_schema=False)
