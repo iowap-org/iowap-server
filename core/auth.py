@@ -2,12 +2,22 @@
 
 import hashlib
 import secrets
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from relay_server.config import settings
 from relay_server.core.db import get_conn
 from relay_server.core.node_registry import NodeRegistry
+
+class NodeExistsError(Exception):
+    """Raised when a node_id or node_name already exists during registration."""
+
+    def __init__(self, field: str, value: str):
+        self.field = field
+        self.value = value
+        super().__init__(f"Node with {field}={value} already exists")
+
 
 ADMIN_SEED_PREFIX = "adm_"
 BOOTSTRAP_SEED_PREFIX = "bs_"
@@ -292,6 +302,14 @@ def register_pending_node(
             ttl_hours=temporary_ttl,
         )
         return node_id, token, registration_secret
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        detail = str(exc)
+        if "node_id" in detail:
+            raise NodeExistsError("node_id", node_id)
+        if "node_name" in detail:
+            raise NodeExistsError("node_name", node_name)
+        raise NodeExistsError("node", node_id)
     finally:
         conn.close()
 

@@ -2,7 +2,8 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Any
 
 
 class Capability(BaseModel):
@@ -195,6 +196,13 @@ class CapabilityStatus(BaseModel):
     name: str
     version: str = "1.0.0"
     available: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_string(cls, value: Any):
+        if isinstance(value, str):
+            return {"name": value}
+        return value
 
 
 class HeartbeatRequest(BaseModel):

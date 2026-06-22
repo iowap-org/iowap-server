@@ -8,11 +8,10 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from relay_server.core.auth import (
+    NodeExistsError,
     _create_token as create_runtime_token,
     generate_secret,
     hash_secret,
-)
-from relay_server.core.auth import (
     refresh_token,
     register_admin_node,
     register_pending_node,
@@ -70,12 +69,18 @@ async def auth_register(request: Request, body: NodeRegistration):
     from relay_server.config import settings
 
     caps = [c.model_dump() for c in body.capabilities]
-    node_id, token, registration_secret = register_pending_node(
-        node_name=body.node_name,
-        endpoint=body.endpoint,
-        capabilities=caps,
-        role=body.role,
-    )
+    try:
+        node_id, token, registration_secret = register_pending_node(
+            node_name=body.node_name,
+            endpoint=body.endpoint,
+            capabilities=caps,
+            role=body.role,
+        )
+    except NodeExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{exc.field} already exists: {exc.value}",
+        )
     if not node_id or not token or not registration_secret:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -163,7 +168,7 @@ async def auth_status(request: Request, body: RegistrationStatusRequest):
     Returns the runtime token once the node has been approved by an admin.
     """
     from relay_server.config import settings
-    from relay_server.core.auth import verify_secret
+    from relay_server.core.auth import NodeExistsError, verify_secret
     from relay_server.core.db import get_conn
 
     conn = get_conn()
