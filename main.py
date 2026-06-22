@@ -18,6 +18,8 @@ from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
 from relay_server.core.db import init_db
 from relay_server.core.events import event_bus
+from relay_server.core.session import unsign_user_cookie
+from relay_server.core.users import list_users
 from relay_server.core.zeroconf import RelayZeroconf
 
 _SECURITY_HEADERS = {
