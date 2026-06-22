@@ -155,7 +155,6 @@ async def dashboard_login(
             )
         if user.get("force_password_change"):
             # Issue a short-lived signed token that only allows password change.
-            from relay_server.core.session import sign_user_cookie
             response = RedirectResponse(
                 url="/relay/v2/dashboard/change-password",
                 status_code=status.HTTP_303_SEE_OTHER,
@@ -178,7 +177,9 @@ async def dashboard_login(
 @router.get("/change-password")
 async def dashboard_change_password_page(request: Request):
     """Page where users with force_password_change must set a new password."""
-    return FileResponse(STATIC_DIR / "change-password.html")
+    response = FileResponse(STATIC_DIR / "change-password.html")
+    _set_csrf_cookie(response)
+    return response
 
 
 @router.get("/bootstrap")
