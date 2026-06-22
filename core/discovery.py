@@ -173,7 +173,7 @@ def query_nodes_by_capability(capability: str) -> List[Dict[str, Any]]:
 
 
 def mark_offline_nodes() -> List[str]:
-    """Mark approved nodes as offline if heartbeat timeout exceeded.
+    """Mark approved/online nodes as offline if heartbeat timeout exceeded.
 
     Admin nodes do not send heartbeats and are therefore excluded.
     """
@@ -183,7 +183,7 @@ def mark_offline_nodes() -> List[str]:
         rows = conn.execute(
             """
             SELECT node_id FROM nodes
-            WHERE status = 'approved' AND last_seen < ? AND role != 'admin'
+            WHERE status IN ('approved', 'online') AND last_seen < ? AND role != 'admin'
             """,
             (threshold,),
         ).fetchall()
