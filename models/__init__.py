@@ -78,6 +78,7 @@ class AuthContext(BaseModel):
     expires_at: Optional[str] = None
     user_id: Optional[str] = None
     username: Optional[str] = None
+    groups: List[str] = Field(default_factory=list)
 
     @property
     def is_admin(self) -> bool:

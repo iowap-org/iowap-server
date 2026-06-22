@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Query, Request, status
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -437,10 +437,15 @@ async def dashboard_change_own_password(
     new_password: str = Form(...),
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
-    """Change the current user's own password."""
+    """Change the current user's own password and refresh the session cookie."""
     _verify_csrf(request)
     change_user_password(ctx.user_id, current_password, new_password)
-    return {"status": "ok"}
+    # Refresh the user cookie so the middleware no longer sees force_password_change=True.
+    user = {"user_id": ctx.user_id, "username": ctx.username, "groups": ctx.groups}
+    response = JSONResponse({"status": "ok", "redirect_url": "/relay/v2/dashboard/"})
+    _set_user_cookie(response, user)
+    _set_csrf_cookie(response)
+    return response
 
 
 @router.post("/api/users/{user_id}/password")

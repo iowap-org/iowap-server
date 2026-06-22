@@ -136,6 +136,7 @@ async def require_dashboard_user(
                 pending=False,
                 user_id=user_id,
                 username=username,
+                groups=user.get("groups", []),
                 force_password_change=user.get("force_password_change", False),
             )
 
