@@ -269,25 +269,29 @@ def register_pending_node(
     node_id = _mint_node_id()
     conn = get_conn()
     try:
-        now = _format_time(_now())
+        now = _now()
+        now_str = _format_time(now)
         caps_json = _serialize_capabilities(capabilities)
         registration_secret = generate_secret("rs_")
+        rs_expires = now + timedelta(hours=settings.registration_secret_ttl_hours)
         conn.execute(
             """
             INSERT INTO nodes
-            (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role, registration_secret_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role,
+             registration_secret_hash, registration_secret_expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 node_id,
                 node_name,
                 endpoint,
                 caps_json,
-                now,
-                now,
+                now_str,
+                now_str,
                 "pending",
                 role,
                 hash_secret(registration_secret),
+                _format_time(rs_expires),
             ),
         )
         conn.commit()
@@ -425,24 +429,71 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
 
 
 def refresh_token(token: str) -> Optional[str]:
-    """Refresh a runtime token. Returns new token or None."""
+    """Refresh a runtime token. Returns new token or None.
+
+    Invalidates all existing runtime tokens for the node so that only one
+    runtime token is valid at any time.
+    """
     info = validate_token(token, require_approved=True)
     if not info:
         return None
 
+    return _replace_runtime_token(info["node_id"], info["node_name"], info["role"])
+
+
+def _replace_runtime_token(node_id: str, node_name: str, role: str) -> str:
+    """Delete all runtime tokens for a node and create a single new one."""
     conn = get_conn()
     try:
-        # Delete the old token by its primary key; bcrypt hashes are not deterministic.
-        conn.execute("DELETE FROM node_tokens WHERE token_id = ?", (info["token_id"],))
+        conn.execute(
+            "DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?",
+            (node_id, "runtime"),
+        )
         conn.commit()
         return _create_token(
-            info["node_id"],
-            info["node_name"],
-            role=info["role"],
+            node_id,
+            node_name,
+            role=role,
             token_type="runtime",
             pending=False,
             ttl_hours=settings.token_ttl_hours,
         )
+    finally:
+        conn.close()
+
+
+def rotate_registration_secret(node_id: str) -> Optional[str]:
+    """Generate a new registration secret for an approved node. Returns the plain secret."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT status FROM nodes WHERE node_id = ?", (node_id,)
+        ).fetchone()
+        if not row or row["status"] != "approved":
+            return None
+
+        new_secret = generate_secret("rs_")
+        expires = _now() + timedelta(hours=settings.registration_secret_ttl_hours)
+        conn.execute(
+            "UPDATE nodes SET registration_secret_hash = ?, registration_secret_expires_at = ? WHERE node_id = ?",
+            (hash_secret(new_secret), _format_time(expires), node_id),
+        )
+        conn.commit()
+        return new_secret
+    finally:
+        conn.close()
+
+
+def get_registration_secret_expiry(node_id: str) -> Optional[datetime]:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT registration_secret_expires_at FROM nodes WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+        if not row or not row["registration_secret_expires_at"]:
+            return None
+        return _parse_time(row["registration_secret_expires_at"])
     finally:
         conn.close()
 

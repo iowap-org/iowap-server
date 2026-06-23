@@ -51,18 +51,30 @@ class NodeApproval(BaseModel):
 
 
 class RegistrationStatusRequest(BaseModel):
-    node_id: str = Field(..., min_length=1, max_length=128)
-    registration_secret: str = Field(..., min_length=1)
+    node_id: Optional[str] = Field(None, min_length=1, max_length=128)
 
 
 class RegistrationStatusResponse(BaseModel):
     node_id: str
     node_name: str
     status: str
-    token: Optional[str] = None
-    token_type: Optional[str] = None
+    rt_valid_until: Optional[str] = None
+    rs_valid_until: Optional[str] = None
+    message: str
+
+
+class RefreshRequest(BaseModel):
+    node_id: Optional[str] = Field(None, min_length=1, max_length=128)
+    requested_credential: str = Field(..., pattern="^(runtime_token|registration_secret)$")
+    registration_secret: Optional[str] = Field(None, min_length=1)
+
+
+class RefreshResponse(BaseModel):
+    node_id: str
+    node_name: str
+    token_type: str
+    token: str
     expires_at: Optional[str] = None
-    registration_secret: Optional[str] = None
     message: str
 
 

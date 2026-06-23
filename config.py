@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Auth
     token_ttl_hours: int = 168
+    registration_secret_ttl_hours: int = 12
     claim_ttl_seconds: int = 60
     heartbeat_interval_seconds: int = 10
     heartbeat_timeout_multiplier: int = 5

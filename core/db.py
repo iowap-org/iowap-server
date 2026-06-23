@@ -142,7 +142,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             status TEXT DEFAULT 'pending',
             role TEXT DEFAULT 'worker',
             first_heartbeat_seen BOOLEAN DEFAULT 0,
-            registration_secret_hash TEXT
+            registration_secret_hash TEXT,
+            registration_secret_expires_at TEXT
         )
     """)
 
@@ -247,6 +248,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     cols = [r[1] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()]
     if "registration_secret_hash" not in cols:
         conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
+    if "registration_secret_expires_at" not in cols:
+        conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_expires_at TEXT")
 
 
 def _seed_default_rbac(conn: sqlite3.Connection) -> None:
