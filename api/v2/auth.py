@@ -282,11 +282,64 @@ async def auth_status(
 ):
     """Poll credential lifetimes for a node.
 
-    Must be called with a valid runtime token in the Authorization header.
-    The endpoint is read-only: it never rotates or invalidates credentials.
-    Workers should call this every ~2 hours to decide when to refresh the
-    runtime token or the registration secret before they expire.
+    The endpoint is read-only and supports two caller modes:
+
+    1. Pending node polling (no runtime token yet):
+       Authorization omitted; body contains node_id and registration_secret.
+       This lets a worker check whether an admin has approved it yet.
+
+    2. Authenticated node polling:
+       Authorization: Bearer rt_...; the body node_id must match the token.
+
+    The endpoint never rotates or invalidates credentials. Workers should
+    call this every ~2 hours to decide when to refresh the runtime token or
+    the registration secret before they expire.
     """
+    from relay_server.core.auth import verify_secret
+    from relay_server.core.db import get_conn
+
+    # Mode 1: pending node polling via registration secret.
+    if body.registration_secret:
+        if not body.node_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="node_id required when authenticating with registration_secret",
+            )
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT node_id, node_name, status, registration_secret_hash, registration_secret_expires_at "
+                "FROM nodes WHERE node_id = ?",
+                (body.node_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Node not found",
+            )
+        if not row["registration_secret_hash"]:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Registration secret not available",
+            )
+        if not verify_secret(body.registration_secret, row["registration_secret_hash"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid registration secret",
+            )
+        rs_expires = _parse_optional_time(row["registration_secret_expires_at"])
+        return RegistrationStatusResponse(
+            node_id=row["node_id"],
+            node_name=row["node_name"],
+            status=row["status"],
+            rt_valid_until=None,
+            rs_valid_until=_format_time(rs_expires) if rs_expires else None,
+            message="Credential status",
+        )
+
+    # Mode 2: authenticated runtime-token polling.
     bearer = _extract_bearer(authorization)
     if not bearer:
         raise HTTPException(
@@ -303,12 +356,9 @@ async def auth_status(
 
     node_id = info["node_id"]
     node_name = info["node_name"]
-
-    # Find the currently valid runtime token expiry for this node.
     rt_expires = info.get("expires_at")
     rs_expires_str = None
 
-    from relay_server.core.db import get_conn
     conn = get_conn()
     try:
         row = conn.execute(
@@ -328,6 +378,15 @@ async def auth_status(
         rs_valid_until=rs_expires_str,
         message="Credential status",
     )
+
+
+def _parse_optional_time(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
 
 
 def _extract_bearer(header: Optional[str]) -> Optional[str]:

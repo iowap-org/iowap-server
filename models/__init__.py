@@ -52,6 +52,7 @@ class NodeApproval(BaseModel):
 
 class RegistrationStatusRequest(BaseModel):
     node_id: Optional[str] = Field(None, min_length=1, max_length=128)
+    registration_secret: Optional[str] = Field(None, min_length=1)
 
 
 class RegistrationStatusResponse(BaseModel):

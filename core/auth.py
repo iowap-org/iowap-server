@@ -420,7 +420,7 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
         }
 
         if require_approved:
-            if result["pending"] or result["status"] != "approved":
+            if result["pending"] or result["status"] not in ("approved", "online"):
                 return None
 
         return result
