@@ -63,7 +63,6 @@ ALLOWED_DOCS = {
     "nodes-design": DOCS_DIR / "nodes-design.md",
     "adr-001-node-id-schema": DOCS_DIR / "adr" / "adr-001-node-id-schema.md",
     "adr-002-bootstrap-and-recovery": DOCS_DIR / "adr" / "adr-002-bootstrap-and-recovery.md",
-    "storage-node-readme": PROJECT_ROOT / "nodes" / "storage-node" / "README.md",
 }
 
 
