@@ -24,6 +24,7 @@ ALLOWED_DOCS = {
     "dashboard": DOCS_DIR / "dashboard.md",
     "setup": DOCS_DIR / "setup.md",
     "nodes-design": DOCS_DIR / "nodes-design.md",
+    "design-board": DOCS_DIR / "design-board.md",
     "adr-001-node-id-schema": DOCS_DIR / "adr" / "adr-001-node-id-schema.md",
     "adr-002-bootstrap-and-recovery": DOCS_DIR / "adr" / "adr-002-bootstrap-and-recovery.md",
 }
