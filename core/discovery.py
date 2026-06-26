@@ -48,12 +48,18 @@ def heartbeat(
     available: Optional[bool] = None,
     endpoint: Optional[str] = None,
     capabilities: Optional[List[Dict[str, Any]]] = None,
+    replace_capabilities: bool = False,
 ) -> bool:
-    """Process a node heartbeat. Returns True if node was updated."""
+    """Process a node heartbeat. Returns True if node was updated.
+
+    If ``replace_capabilities`` is True, the full capabilities list is
+    replaced instead of merged (used by worker nodes sending their
+    complete capability set on chaque heartbeat).
+    """
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id, status, available, first_heartbeat_seen FROM nodes WHERE node_id = ?",
+            "SELECT node_id, status, available, capabilities, first_heartbeat_seen FROM nodes WHERE node_id = ?",
             (node_id,),
         ).fetchone()
         if not row:
@@ -76,8 +82,20 @@ def heartbeat(
             updates.append("endpoint = ?")
             params.append(endpoint)
         if capabilities is not None:
-            updates.append("capabilities = ?")
-            params.append(_serialize_capabilities(capabilities))
+            if replace_capabilities:
+                # Full replace – worker sends complete capability set
+                updates.append("capabilities = ?")
+                params.append(_serialize_capabilities(capabilities))
+            else:
+                # Merge – update existing capabilities list
+                existing = _parse_capabilities(row["capabilities"])
+                cap_map = {c.get("name"): c for c in existing if isinstance(c, dict)}
+                for cap in capabilities:
+                    if isinstance(cap, dict) and cap.get("name"):
+                        cap_map[cap["name"]] = cap
+                merged = list(cap_map.values())
+                updates.append("capabilities = ?")
+                params.append(_serialize_capabilities(merged))
 
         # If the node was marked offline, bring it back online.
         was_offline = row["status"] == "offline"

@@ -297,6 +297,15 @@ class HeartbeatRequest(BaseModel):
     capabilities: Optional[List[CapabilityStatus]] = None
 
 
+class NodeHeartbeatRequest(BaseModel):
+    """Erweitertes Heartbeat-Modell für Worker-Nodes mit vollständigen Capability-Daten."""
+    load: Optional[float] = Field(None, ge=0.0, le=1.0)
+    queue_depth: Optional[int] = Field(None, ge=0)
+    available: Optional[bool] = None
+    endpoint: Optional[str] = Field(None, max_length=2048)
+    capabilities: Optional[List[dict[str, Any]]] = None
+
+
 # ── Presence ────────────────────────────────────────────────────
 
 class PresenceActivity(BaseModel):

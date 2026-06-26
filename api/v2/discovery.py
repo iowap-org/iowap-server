@@ -10,7 +10,8 @@ from relay_server.core.discovery import (
     heartbeat, list_nodes, query_nodes_by_capability,
 )
 from relay_server.models import (
-    AuthContext, DiscoveryDetailResponse, DiscoveryResponse, HeartbeatRequest,
+    AuthContext, DiscoveryDetailResponse, DiscoveryResponse,
+    HeartbeatRequest, NodeHeartbeatRequest,
 )
 
 router = APIRouter()
@@ -29,6 +30,26 @@ async def discovery_heartbeat(
         available=body.available,
         endpoint=body.endpoint,
         capabilities=[c.model_dump() for c in body.capabilities] if body.capabilities else None,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Node not registered")
+    return {"status": "ok", "node_id": ctx.node_id}
+
+
+@router.post("/worker-heartbeat")
+async def discovery_worker_heartbeat(
+    body: NodeHeartbeatRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Worker heartbeat mit vollständigen Capability-Daten (Replace-Mode)."""
+    ok = heartbeat(
+        node_id=ctx.node_id,
+        load=body.load,
+        queue_depth=body.queue_depth,
+        available=body.available,
+        endpoint=body.endpoint,
+        capabilities=body.capabilities,
+        replace_capabilities=True,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")
