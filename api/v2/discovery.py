@@ -1,12 +1,17 @@
-"""Discovery router with heartbeat, node list, and capability query."""
+"""Discovery router with heartbeat, node list, capability query, and capability list/detail."""
 
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from relay_server.api.v2.security import get_auth_context
-from relay_server.core.discovery import heartbeat, list_nodes, query_nodes_by_capability
-from relay_server.models import AuthContext, HeartbeatRequest
+from relay_server.core.discovery import (
+    get_capabilities, get_capability_by_name,
+    heartbeat, list_nodes, query_nodes_by_capability,
+)
+from relay_server.models import (
+    AuthContext, DiscoveryDetailResponse, DiscoveryResponse, HeartbeatRequest,
+)
 
 router = APIRouter()
 
@@ -48,3 +53,39 @@ async def discovery_query(
         "nodes": query_nodes_by_capability(capability),
         "viewer": ctx.node_id,
     }
+
+
+# ── Neue Endpoints: Capabilities ────────────────────────────────
+
+@router.get("/capabilities", response_model=DiscoveryResponse)
+async def list_capabilities(
+    node_id: Optional[str] = Query(None, description="Filter by node"),
+    type_filter: Optional[str] = Query(None, description="Filter by type (ai, tool, script, …)"),
+    available: bool = Query(True, description="Only available nodes"),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """
+    Liste aller Capabilities aller Nodes.
+
+    Gruppiert nach Capability-Name, jeder Eintrag enthält die
+    Nodes die diese Capability anbieten (mit load, queue_depth, config).
+    """
+    caps = get_capabilities(
+        capability_name=node_id,
+        type_filter=type_filter,
+        available_only=available,
+    )
+    return {"capabilities": caps}
+
+
+@router.get("/capabilities/{name}", response_model=DiscoveryDetailResponse)
+async def get_capability_detail(
+    name: str,
+    node_id: Optional[str] = Query(None, description="Filter by specific node"),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Detail einer einzelnen Capability inkl. Input-Schema und anbietenden Nodes."""
+    cap = get_capability_by_name(name)
+    if not cap:
+        raise HTTPException(status_code=404, detail=f"Capability '{name}' nicht gefunden")
+    return cap

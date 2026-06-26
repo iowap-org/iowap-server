@@ -14,6 +14,8 @@ from relay_server.models import (
     ClaimRequest,
     ClaimResponse,
     CompleteRequest,
+    SimpleTaskRequest,
+    SimpleTaskResponse,
     StageSummary,
     TaskRequest,
     TaskSummary,
@@ -104,7 +106,6 @@ async def scheduler_upload_artifact(
     ctx: AuthContext = Depends(get_approved_context),
 ):
     """Upload an artifact attached to a task (and optionally a stage)."""
-    # Verify task exists.
     conn = get_conn()
     try:
         row = conn.execute("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
@@ -149,4 +150,65 @@ def _task_to_view(task: Dict[str, Any]) -> TaskView:
         task=TaskSummary(**task),
         stages=[StageSummary(**s) for s in task["stages"]],
         artifacts=task["artifacts"],
+    )
+
+
+# ── Simple Task (Ein-Stage) ────────────────────────────────────
+
+@router.post("/task-simple", response_model=SimpleTaskResponse)
+async def scheduler_create_simple_task(
+    body: SimpleTaskRequest,
+    ctx: AuthContext = Depends(get_approved_context),
+):
+    """
+    Einstufigen Task einreichen.
+
+    Erstellt einen Task mit einer einzigen Stage, die sofort
+    an einen Node mit passender Capability geroutet wird.
+    """
+    from relay_server.core.discovery import get_capability_by_name
+
+    cap = get_capability_by_name(body.capability)
+    if not cap:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Capability '{body.capability}' nicht gefunden",
+        )
+    if not cap.get("available", False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Capability '{body.capability}' ist nicht verfügbar",
+        )
+
+    task_name = body.name or f"simple-{body.capability}"
+    stages = [
+        {
+            "stage_name": "main",
+            "capability": body.capability,
+            "depends_on": None,
+            "timeout_seconds": body.timeout_seconds,
+            "payload": body.payload,
+        }
+    ]
+
+    result = Scheduler.create_task(
+        task_name=task_name,
+        stages=stages,
+        priority=body.priority,
+        owner_node_id=body.owner_node_id or ctx.node_id,
+        timeout_seconds=body.timeout_seconds,
+    )
+
+    task_detail = Scheduler.get_task(result["task_id"])
+    if not task_detail or not task_detail["stages"]:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Task wurde erstellt, aber Stage nicht gefunden",
+        )
+
+    return SimpleTaskResponse(
+        task_id=result["task_id"],
+        stage_id=task_detail["stages"][0]["stage_id"],
+        status="pending",
+        capability=body.capability,
     )

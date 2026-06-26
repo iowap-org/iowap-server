@@ -1,17 +1,30 @@
 """Pydantic models for the AI-Relay-Service v2 API."""
 
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
-from typing import Any
 
+
+# ── Capability (Server-seitig, für API-Requests/Responses) ──────
 
 class Capability(BaseModel):
-    name: str
-    version: str = "1.0.0"
-    consumes: Optional[List[str]] = None
-    produces: Optional[List[str]] = None
+    """Repräsentiert eine Capability eines Nodes in API-Antworten."""
 
+    name: str
+    type: Optional[str] = None  # ai | tool | script | workflow | resource
+    description: str = ""
+    version: str = "1.0.0"
+    available: bool | None = None
+    input_schema: Optional[dict[str, Any]] = Field(
+        None,
+        description="Input-Schema für Task-Validierung (aus capabilities.yaml)",
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Node Registration ───────────────────────────────────────────
 
 class NodeRegistration(BaseModel):
     node_name: str = Field(..., min_length=1, max_length=256)
@@ -26,6 +39,8 @@ class AdminNodeRegistration(BaseModel):
     capabilities: List[Capability] = Field(default_factory=list)
     bootstrap_secret: str = Field(..., min_length=1)
 
+
+# ── Auth & Tokens ───────────────────────────────────────────────
 
 class TokenResponse(BaseModel):
     node_id: str
@@ -107,8 +122,7 @@ class AuthContext(BaseModel):
         return self.status in ("approved", "online") and not self.pending
 
 
-# --- Scheduler models ---
-
+# ── Scheduler models ────────────────────────────────────────────
 
 class StageInput(BaseModel):
     stage_name: str
@@ -187,23 +201,80 @@ class ArtifactUploadResponse(BaseModel):
     created_by: str
 
 
-class StorageStatusResponse(BaseModel):
+# ── Discovery models ────────────────────────────────────────────
+
+class DiscoveryNode(BaseModel):
+    """Ein Node, der eine bestimmte Capability anbietet."""
+
     node_id: str
     node_name: str
-    storage_path: str
-    total_bytes: int
-    used_bytes: int
-    free_bytes: int
-    file_count: int
+    available: bool = True
+    load: float = 0.0
+    queue_depth: int = 0
+    last_seen: str  # ISO-Format
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
-class StorageFileReference(BaseModel):
-    artifact_id: str
+class DiscoveryCapability(BaseModel):
+    """Eine Capability mit allen Nodes, die sie anbieten."""
+
     name: str
-    mime_type: Optional[str] = None
-    size_bytes: Optional[int] = None
-    created_by: Optional[str] = None
+    type: str  # ai, tool, script, workflow, resource
+    description: str = ""
+    version: str = "1.0.0"
+    available: bool = True
+    input_schema: Optional[dict[str, Any]] = None
+    nodes: list[DiscoveryNode] = Field(default_factory=list)
 
+
+class DiscoveryResponse(BaseModel):
+    """Antwort auf GET /discovery/capabilities."""
+
+    capabilities: list[DiscoveryCapability]
+
+
+class DiscoveryDetailResponse(BaseModel):
+    """Antwort auf GET /discovery/capabilities/{name}."""
+
+    name: str
+    type: str
+    description: str
+    version: str
+    available: bool
+    input_schema: Optional[dict[str, Any]] = None
+    nodes: list[DiscoveryNode]
+
+
+# ── Simple Task ─────────────────────────────────────────────────
+
+from .capability import CapabilityInputField, CapabilityInputSchema  # noqa: E402
+
+
+class SimpleTaskRequest(BaseModel):
+    """Ein einstufiger Task – Capability + Payload direkt."""
+
+    capability: str = Field(..., min_length=1)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    name: str = ""
+    priority: int = Field(default=0, ge=0, le=10)
+    timeout_seconds: Optional[int] = None
+    owner_node_id: Optional[str] = Field(None, min_length=1)
+    idempotency_key: Optional[str] = Field(
+        None,
+        description="Eindeutiger Schlüssel – verhindert Duplikate bei Retries",
+    )
+
+
+class SimpleTaskResponse(BaseModel):
+    """Antwort auf task-simple."""
+
+    task_id: str
+    stage_id: str
+    status: str  # pending
+    capability: str
+
+
+# ── Heartbeat / Status ──────────────────────────────────────────
 
 class CapabilityStatus(BaseModel):
     name: str
@@ -226,6 +297,8 @@ class HeartbeatRequest(BaseModel):
     capabilities: Optional[List[CapabilityStatus]] = None
 
 
+# ── Presence ────────────────────────────────────────────────────
+
 class PresenceActivity(BaseModel):
     name: Optional[str] = None
     detail: Optional[str] = None
@@ -240,3 +313,23 @@ class PresenceUpdateRequest(BaseModel):
     progress: Optional[int] = Field(None, ge=0, le=100)
     eta_seconds: Optional[int] = Field(None, ge=0)
     next_available: Optional[str] = Field(None, max_length=64)
+
+
+# ── Storage ─────────────────────────────────────────────────────
+
+class StorageStatusResponse(BaseModel):
+    node_id: str
+    node_name: str
+    storage_path: str
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    file_count: int
+
+
+class StorageFileReference(BaseModel):
+    artifact_id: str
+    name: str
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    created_by: Optional[str] = None

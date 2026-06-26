@@ -172,6 +172,100 @@ def query_nodes_by_capability(capability: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def get_capabilities(
+    capability_name: Optional[str] = None,
+    type_filter: Optional[str] = None,
+    available_only: bool = True,
+) -> list[dict]:
+    """
+    Gibt alle Capabilities aller aktiven Nodes zurück,
+    gruppiert nach Capability-Name.
+
+    Jede Capability enthält die Nodes, die sie anbieten.
+    """
+    threshold = _format_time(_node_timeout_threshold())
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT node_id, node_name, endpoint, capabilities, load,
+                   queue_depth, available, last_seen, status, role
+            FROM nodes
+            WHERE status IN ('approved', 'online')
+              AND (last_seen > ? OR available = 0)
+            ORDER BY load ASC
+            """,
+            (threshold,),
+        ).fetchall()
+
+        # Capabilities sammeln: name -> {type, description, version, nodes}
+        cap_map: dict[str, dict] = {}
+
+        for row in rows:
+            caps = _parse_capabilities(row["capabilities"])
+            node_available = bool(row["available"])
+
+            for cap in caps:
+                name: str = cap.get("name", "")
+                if not name:
+                    continue
+
+                # Filter: nur bestimmte Capability?
+                if capability_name and name != capability_name:
+                    continue
+
+                # Filter: nur bestimmter Typ?
+                cap_type = cap.get("type", "")
+                if type_filter and cap_type != type_filter:
+                    continue
+
+                # Filter: nur verfuegbare?
+                if available_only and not node_available:
+                    continue
+
+                if name not in cap_map:
+                    cap_map[name] = {
+                        "name": name,
+                        "type": cap_type,
+                        "description": cap.get("description", ""),
+                        "version": cap.get("version", "1.0.0"),
+                        "available": node_available,
+                        "input_schema": cap.get("input"),
+                        "nodes": [],
+                    }
+
+                cap_map[name]["nodes"].append({
+                    "node_id": row["node_id"],
+                    "node_name": row["node_name"],
+                    "available": node_available,
+                    "load": row["load"] or 0.0,
+                    "queue_depth": row["queue_depth"] or 0,
+                    "last_seen": row["last_seen"],
+                    "config": cap.get("config", {}),
+                })
+
+            # Wenn diese Node nicht verfuegbar ist,
+            # verfuegbarkeit der Caps ueberschreiben
+            if not node_available:
+                for c in caps:
+                    cname = c.get("name", "")
+                    if cname in cap_map:
+                        cap_map[cname]["available"] = False
+
+        return list(cap_map.values())
+
+    finally:
+        conn.close()
+
+
+def get_capability_by_name(name: str) -> Optional[dict]:
+    """Gibt eine einzelne Capability mit allen Nodes zurueck."""
+    all_caps = get_capabilities(capability_name=name, available_only=False)
+    if not all_caps:
+        return None
+    return all_caps[0]
+
+
 def mark_offline_nodes() -> List[str]:
     """Mark approved/online nodes as offline if heartbeat timeout exceeded.
 
