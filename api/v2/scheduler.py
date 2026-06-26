@@ -73,7 +73,7 @@ async def scheduler_claim(
     ctx: AuthContext = Depends(get_approved_context),
 ):
     """Claim the next available stage matching the node's capabilities."""
-    stage = Scheduler.claim_stage(ctx.node_id, capability=body.capability)
+    stage = Scheduler.claim_stage(ctx.node_id, capability=body.capability, capability_type=body.capability_type)
     if stage:
         return ClaimResponse(claimed=True, stage=StageSummary(**stage))
     return ClaimResponse(claimed=False, stage=None)

@@ -194,12 +194,17 @@ def get_capabilities(
     capability_name: Optional[str] = None,
     type_filter: Optional[str] = None,
     available_only: bool = True,
+    config_filter: Optional[Dict[str, Any]] = None,
 ) -> list[dict]:
     """
-    Gibt alle Capabilities aller aktiven Nodes zurück,
+    Gibt alle Capabilities aller aktiven Nodes zurueck,
     gruppiert nach Capability-Name.
 
-    Jede Capability enthält die Nodes, die sie anbieten.
+    Jede Capability enthaelt die Nodes, die sie anbieten.
+
+    ``config_filter`` erlaubt Filterung nach Config-Werten, z.B.
+    ``{"region": "eu-west"}`` – es werden nur Nodes zurueckgegeben,
+    deren Capability-Config alle angegebenen Schluessel-Wert-Paere enthaelt.
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
@@ -240,6 +245,15 @@ def get_capabilities(
                 # Filter: nur verfuegbare?
                 if available_only and not node_available:
                     continue
+
+                # Filter: config-basiert?
+                if config_filter:
+                    cap_config = cap.get("config", {})
+                    if not all(
+                        cap_config.get(k) == v
+                        for k, v in config_filter.items()
+                    ):
+                        continue
 
                 if name not in cap_map:
                     cap_map[name] = {

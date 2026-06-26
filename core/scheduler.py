@@ -164,8 +164,16 @@ class Scheduler:
             conn.close()
 
     @staticmethod
-    def claim_stage(node_id: str, capability: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Claim the next runnable stage for a node."""
+    def claim_stage(
+        node_id: str,
+        capability: Optional[str] = None,
+        capability_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Claim the next runnable stage for a node.
+
+        If ``capability_type`` is given, only stages whose capability
+        matches a capability of that type on this node are considered.
+        """
         conn = get_conn()
         try:
             # Determine capabilities of the node if not provided.
@@ -177,7 +185,16 @@ class Scheduler:
                 if not node_row:
                     return None
                 caps = _parse(node_row["capabilities"]) or []
-                cap_names = [c["name"] for c in caps if isinstance(c, dict)]
+
+                # If capability_type is set, filter to that type only.
+                if capability_type:
+                    caps = [
+                        c for c in caps
+                        if isinstance(c, dict)
+                        and str(c.get("type", "")).lower() == capability_type.lower()
+                    ]
+
+                cap_names = [c["name"] for c in caps if isinstance(c, dict) and c.get("name")]
                 if not cap_names:
                     return None
             else:
@@ -185,11 +202,9 @@ class Scheduler:
 
             # Find pending stages whose capability matches and dependencies are completed.
             rows = conn.execute(
-                """
-                SELECT * FROM task_stages
-                WHERE status = 'pending' AND capability IN ({})
-                ORDER BY sequence ASC
-                """.format(",".join("?" for _ in cap_names)),
+                "SELECT * FROM task_stages WHERE status = 'pending' AND capability IN ({}) ORDER BY sequence ASC".format(
+                    ",".join("?" for _ in cap_names)
+                ),
                 cap_names,
             ).fetchall()
 

@@ -180,6 +180,7 @@ class TaskView(BaseModel):
 
 class ClaimRequest(BaseModel):
     capability: Optional[str] = None
+    capability_type: Optional[str] = None  # Filter: nur capabilities dieses Typs
 
 
 class ClaimResponse(BaseModel):

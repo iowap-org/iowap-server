@@ -83,18 +83,35 @@ async def list_capabilities(
     node_id: Optional[str] = Query(None, description="Filter by node"),
     type_filter: Optional[str] = Query(None, description="Filter by type (ai, tool, script, …)"),
     available: bool = Query(True, description="Only available nodes"),
+    config_filter: Optional[str] = Query(
+        None,
+        description='Config filter as JSON, e.g. \'{"region": "eu-west"}\'',
+    ),
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """
     Liste aller Capabilities aller Nodes.
 
-    Gruppiert nach Capability-Name, jeder Eintrag enthält die
+    Gruppiert nach Capability-Name, jeder Eintrag enthaelt die
     Nodes die diese Capability anbieten (mit load, queue_depth, config).
     """
+    import json
+
+    config_dict = None
+    if config_filter:
+        try:
+            config_dict = json.loads(config_filter)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid config_filter JSON: {config_filter}",
+            )
+
     caps = get_capabilities(
         capability_name=node_id,
         type_filter=type_filter,
         available_only=available,
+        config_filter=config_dict,
     )
     return {"capabilities": caps}
 
