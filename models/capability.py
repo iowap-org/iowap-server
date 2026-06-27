@@ -51,6 +51,13 @@ class CapabilityInputSchema:
 
     fields: dict[str, CapabilityInputField] = field(default_factory=dict)
 
+    @staticmethod
+    def _iter_raw_fields(raw_fields):
+        if isinstance(raw_fields, dict):
+            yield from raw_fields.items()
+        else:
+            yield from ((f"field_{i}", r) for i, r in enumerate(raw_fields))
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CapabilityInputSchema:
         """Erzeugt ein Schema aus einem Dictionary (z. B. aus capabilities.yaml)."""
@@ -58,9 +65,10 @@ class CapabilityInputSchema:
             return cls()
         raw_fields = data.get("fields", data) if isinstance(data, dict) else {}
         fields: dict[str, CapabilityInputField] = {}
-        for raw in raw_fields.values() if isinstance(raw_fields, dict) else raw_fields:
+        for key, raw in cls._iter_raw_fields(raw_fields):
+            name = raw.get("name") or key
             fld = CapabilityInputField(
-                name=raw["name"],
+                name=name,
                 type=raw.get("type", "string"),
                 required=raw.get("required", False),
                 default=raw.get("default"),
