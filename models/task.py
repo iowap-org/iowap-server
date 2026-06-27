@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from relay_server.models.capability import CapabilityInputSchema
-
 
 # ── Simple Task ────────────────────────────────────────────────
 
@@ -126,5 +125,6 @@ def validate_simple_task(task: SimpleTaskRequest, schema: dict) -> list[str]:
     Validiert ein SimpleTaskRequest gegen ein CapabilityInputSchema.
     Gibt eine Liste von Fehlermeldungen zurück (leer = OK).
     """
-    input_schema = CapabilityInputSchema(fields=schema.get("fields", {}))
-    return input_schema.validate_payload(task.payload)
+    input_schema = CapabilityInputSchema.from_dict(schema)
+    _, errors = input_schema.validate_payload(task.payload)
+    return errors

@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-
 # ── Capability (Server-seitig, für API-Requests/Responses) ──────
 
 class Capability(BaseModel):
@@ -248,7 +247,10 @@ class DiscoveryDetailResponse(BaseModel):
 
 # ── Simple Task ─────────────────────────────────────────────────
 
-from .capability import CapabilityInputField, CapabilityInputSchema  # noqa: E402
+from .capability import (  # noqa: E402, I001
+    CapabilityInputField as CapabilityInputField,
+    CapabilityInputSchema as CapabilityInputSchema,
+)
 
 
 class SimpleTaskRequest(BaseModel):
