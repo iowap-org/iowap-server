@@ -1,135 +1,106 @@
-"""
-Capability-Input-Schemas – definieren, wie ein Task-Aufruf
-für eine bestimmte Capability aussehen muss.
-
-Ein Agent/Client liest das Input-Schema via Discovery-API,
-validiert sein Payload lokal und schickt dann den Task ab.
-"""
-
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
-from pydantic import BaseModel, Field
 
+@dataclass
+class CapabilityInputField:
+    """Ein einzelnes Eingabefeld eines Capability-Schemas."""
 
-class CapabilityInputField(BaseModel):
-    """Ein einzelnes Feld im Input-Schema einer Capability."""
-
-    type: Literal["string", "integer", "float", "boolean", "enum", "file", "list"]
+    name: str
+    type: str = "string"
     required: bool = False
-    default: Optional[Any] = None
+    default: Any = None
+    enum: list[Any] | None = None
+    ge: float | None = None
+    le: float | None = None
     description: str = ""
 
-    # ── Constraints (je nach Typ befüllt) ──────────────────────
-    min_length: Optional[int] = None
-    max_length: Optional[int] = None
-    pattern: Optional[str] = None          # Regex (für string)
-    ge: Optional[float] = None             # ≥ (integer/float)
-    le: Optional[float] = None             # ≤ (integer/float)
-    enum_values: Optional[list[Any]] = None  # erlaubte Werte (enum)
-    items: Optional[CapabilityInputField] = None  # Element-Typ (für list)
-
-
-class CapabilityInputSchema(BaseModel):
-    """
-    Gesamtes Input-Schema einer Capability.
-
-    Beispiel:
-        CapabilityInputSchema(fields={
-            "prompt":   CapabilityInputField(type="string", required=True),
-            "steps":    CapabilityInputField(type="integer", default=20, ge=1, le=50),
-            "format":   CapabilityInputField(type="enum", enum_values=["png","jpg","webp"])
-        })
-    """
-
-    fields: dict[str, CapabilityInputField] = Field(default_factory=dict)
-
-    def validate_payload(self, payload: dict[str, Any]) -> list[str]:
-        """Prüft ein Payload-Dict gegen dieses Schema. Gibt Fehlerliste zurück."""
+    def validate(self, value: Any) -> list[str]:
+        """Prüft einen Wert gegen dieses Feld. Liefert eine Liste von Fehlern."""
         errors: list[str] = []
+        if value is None:
+            if self.required and self.default is None:
+                errors.append(f"Field '{self.name}' is required.")
+            return errors
+        if self.enum is not None and value not in self.enum:
+            errors.append(
+                f"Field '{self.name}': value {value!r} not in {self.enum!r}."
+            )
+        if self.ge is not None or self.le is not None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                errors.append(
+                    f"Field '{self.name}': value {value!r} must be numeric."
+                )
+            else:
+                if self.ge is not None and value < self.ge:
+                    errors.append(
+                        f"Field '{self.name}': value {value!r} must >= {self.ge}."
+                    )
+                if self.le is not None and value > self.le:
+                    errors.append(
+                        f"Field '{self.name}': value {value!r} must <= {self.le}."
+                    )
+        return errors
 
-        for field_name, field_def in self.fields.items():
-            value: Any = payload.get(field_name)
 
-            # Pflichtfeld fehlt?
-            if field_def.required and value is None:
-                errors.append(f"'{field_name}' ist erforderlich")
-                continue
+@dataclass
+class CapabilityInputSchema:
+    """Schema über alle Eingabefelder einer Capability mit Payload-Validierung."""
 
-            # Optionales Feld nicht angegeben → ok
+    fields: dict[str, CapabilityInputField] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CapabilityInputSchema:
+        """Erzeugt ein Schema aus einem Dictionary (z. B. aus capabilities.yaml)."""
+        if not data:
+            return cls()
+        raw_fields = data.get("fields", data) if isinstance(data, dict) else {}
+        fields: dict[str, CapabilityInputField] = {}
+        for raw in raw_fields.values() if isinstance(raw_fields, dict) else raw_fields:
+            fld = CapabilityInputField(
+                name=raw["name"],
+                type=raw.get("type", "string"),
+                required=raw.get("required", False),
+                default=raw.get("default"),
+                enum=raw.get("enum"),
+                ge=raw.get("ge"),
+                le=raw.get("le"),
+                description=raw.get("description", ""),
+            )
+            fields[fld.name] = fld
+        return cls(fields=fields)
+
+    def validate_payload(self, payload: dict[str, Any]) -> tuple[bool, list[str]]:
+        """
+        Validiert eine Payload gegen dieses Schema.
+
+        Prüft:
+        - Alle als `required` markierten Felder sind vorhanden.
+        - Felder ohne Wert erhalten ihren `default`.
+        - Enum-Constraints werden erzwungen.
+        - Numerische Grenzen (ge/le) werden geprüft.
+        - Unbekannte Felder werden als Fehler gemeldet.
+
+        Returns:
+            Tupel (is_valid, error_messages).
+        """
+        errors: list[str] = []
+        if not isinstance(payload, dict):
+            return False, ["Payload must be a dictionary."]
+        for key in payload:
+            if key not in self.fields:
+                errors.append(f"Unexpected field '{key}' in payload.")
+        for name, fld in self.fields.items():
+            if name not in payload or payload[name] is None:
+                if fld.required and fld.default is None:
+                    errors.append(f"Field '{name}' is required.")
+                    continue
+                value = fld.default
+            else:
+                value = payload[name]
             if value is None:
                 continue
-
-            # Typprüfung + Constraints
-            errs = self._validate_field(field_def, value, field_name)
-            errors.extend(errs)
-
-        return errors
-
-    @staticmethod
-    def _validate_field(field: CapabilityInputField, value: Any, path: str) -> list[str]:
-        """Prüft einen einzelnen Wert gegen sein Feld-Definition."""
-        errors: list[str] = []
-        t = field.type
-
-        # ── Typprüfung ──
-        if t in ("string", "enum", "file"):
-            if not isinstance(value, str):
-                errors.append(f"'{path}' muss ein String sein, ist {type(value).__name__}")
-                return errors
-        elif t in ("integer",):
-            if not isinstance(value, int) or isinstance(value, bool):
-                errors.append(f"'{path}' muss ein Integer sein, ist {type(value).__name__}")
-                return errors
-        elif t == "float":
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                errors.append(f"'{path}' muss eine Zahl sein, ist {type(value).__name__}")
-                return errors
-        elif t == "boolean":
-            if not isinstance(value, bool):
-                errors.append(f"'{path}' muss ein Boolean sein, ist {type(value).__name__}")
-                return errors
-        elif t == "file":
-            if not isinstance(value, str):
-                errors.append(f"'{path}' muss ein String (Dateipfad/URL) sein")
-                return errors
-        elif t == "list":
-            if not isinstance(value, (list, tuple)):
-                errors.append(f"'{path}' muss eine Liste sein, ist {type(value).__name__}")
-                return errors
-            # Elemente validieren, falls items definiert
-            if field.items and isinstance(value, Sequence):
-                for i, item in enumerate(value):
-                    sub = CapabilityInputSchema._validate_field(
-                        field.items, item, f"{path}[{i}]"
-                    )
-                    errors.extend(sub)
-            return errors
-
-        # ── Range-Constraints (nur für Zahlen) ──
-        if t in ("integer", "float") and isinstance(value, (int, float)):
-            if field.ge is not None and value < field.ge:
-                errors.append(f"'{path}' muss ≥ {field.ge} sein, ist {value}")
-            if field.le is not None and value > field.le:
-                errors.append(f"'{path}' muss ≤ {field.le} sein, ist {value}")
-
-        # ── String-Constraints ──
-        if t in ("string", "enum") and isinstance(value, str):
-            if field.min_length is not None and len(value) < field.min_length:
-                errors.append(f"'{path}' muss mindestens {field.min_length} Zeichen haben")
-            if field.max_length is not None and len(value) > field.max_length:
-                errors.append(f"'{path}' darf höchstens {field.max_length} Zeichen haben")
-            if field.pattern is not None:
-                import re
-                if not re.match(field.pattern, value):
-                    errors.append(f"'{path}' passt nicht zum Muster: {field.pattern}")
-
-        # ── Enum-Constraint ──
-        if t == "enum" and isinstance(value, str) and field.enum_values is not None:
-            if value not in field.enum_values:
-                errors.append(
-                    f"'{path}' muss eins von {field.enum_values} sein, ist '{value}'"
-                )
-
-        return errors
+            errors.extend(fld.validate(value))
+        return (len(errors) == 0), errors
