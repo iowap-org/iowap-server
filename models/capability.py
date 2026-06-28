@@ -1,3 +1,20 @@
+"""
+Server-side capability data model.
+
+The relay server does NOT define which capabilities exist. Nodes define their
+own capabilities in their YAML config / registration payload. The server only
+validates the structure of incoming capability definitions and stores them
+alongside the node's heartbeat data.
+
+This model is used for:
+  - Validating capability fields in registration and heartbeat payloads
+  - Schema validation for capability input fields
+  - SerDe when reading/writing capability data from/to the database
+
+Nodes use their own copy in nodes/common/capability.py which may have
+additional node-specific fields. The two are intentionally separate: nodes
+own the capability definition, the server only mediates and routes.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

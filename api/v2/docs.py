@@ -25,6 +25,10 @@ ALLOWED_DOCS = {
     "setup": DOCS_DIR / "setup.md",
     "nodes-design": DOCS_DIR / "nodes-design.md",
     "design-board": DOCS_DIR / "design-board.md",
+    "token-lifecycle": DOCS_DIR / "node-operator" / "token-lifecycle.md",
+    "capabilities": DOCS_DIR / "node-operator" / "capabilities.md",
+    "proxmox-worker-setup": DOCS_DIR / "node-operator" / "proxmox-worker-setup.md",
+    "admin-setup": DOCS_DIR / "admin" / "setup.md",
     "adr-001-node-id-schema": DOCS_DIR / "adr" / "adr-001-node-id-schema.md",
     "adr-002-bootstrap-and-recovery": DOCS_DIR / "adr" / "adr-002-bootstrap-and-recovery.md",
 }
