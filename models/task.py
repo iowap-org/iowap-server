@@ -1,8 +1,8 @@
 """
-Task- & Artifact-Modelle – erweiterte Versionen für Worker-Node-Workflows.
+Task & artifact models – extended versions for worker-node workflows.
 
-task-simple:  Ein-Stage-Task (capability + payload)
-task-complex: Multi-Stage-Task (TaskRequest existiert bereits)
+task-simple:  single-stage task (capability + payload)
+task-complex: multi-stage task (TaskRequest already exists)
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from relay_server.models.capability import CapabilityInputSchema
 # ── Simple Task ────────────────────────────────────────────────
 
 class SimpleTaskRequest(BaseModel):
-    """Ein einstufiger Task – Capability + Payload direkt."""
+    """A single-stage task – capability + payload directly."""
 
     capability: str = Field(..., min_length=1)
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -26,12 +26,12 @@ class SimpleTaskRequest(BaseModel):
     owner_node_id: Optional[str] = Field(None, min_length=1)
     idempotency_key: Optional[str] = Field(
         None,
-        description="Eindeutiger Schlüssel – verhindert Duplikate bei Retries",
+        description="Unique key – prevents duplicates on retries",
     )
 
 
 class SimpleTaskResponse(BaseModel):
-    """Antwort auf task-simple."""
+    """Response for task-simple."""
 
     task_id: str
     stage_id: str
@@ -39,7 +39,7 @@ class SimpleTaskResponse(BaseModel):
     capability: str
 
 
-# ── Complex Task (bestehend, erweitert) ────────────────────────
+# ── Complex Task (existing, extended) ────────────────────────
 
 class StageInput(BaseModel):
     stage_name: str
@@ -122,8 +122,8 @@ class ArtifactUploadResponse(BaseModel):
 
 def validate_simple_task(task: SimpleTaskRequest, schema: dict) -> list[str]:
     """
-    Validiert ein SimpleTaskRequest gegen ein CapabilityInputSchema.
-    Gibt eine Liste von Fehlermeldungen zurück (leer = OK).
+    Validate a SimpleTaskRequest against a CapabilityInputSchema.
+    Returns a list of error messages (empty = OK).
     """
     input_schema = CapabilityInputSchema.from_dict(schema)
     _, errors = input_schema.validate_payload(task.payload)

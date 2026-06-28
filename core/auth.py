@@ -92,8 +92,8 @@ def hash_secret(secret: str) -> str:
     return bcrypt.hashpw(secret.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
-# Server-seitiger Pepper fuer deterministischen Token-Lookup.
-# Wird aus settings.session_secret geladen (oder ein Default, falls nicht gesetzt).
+# Server-side pepper for deterministic token lookup.
+# Loaded from settings.session_secret (or a default if not set).
 _TOKEN_PEPPER: str | None = None
 
 
@@ -403,8 +403,8 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
     """Validate a bearer token. Returns node info or None."""
     conn = get_conn()
     try:
-        # Deterministic lookup: ein einzelnes indexed Query, danach ein bcrypt-Check.
-        # Ersetzt den fruheren O(N) Scan ueber alle nicht-abgelaufenen Tokens.
+        # Deterministic lookup: a single indexed query, then one bcrypt check.
+        # Replaces the former O(N) scan over all non-expired tokens.
         token_lookup_hash = compute_token_lookup(token)
         now = _format_time(_now())
         token_row = conn.execute(

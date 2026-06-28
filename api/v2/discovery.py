@@ -41,7 +41,7 @@ async def discovery_worker_heartbeat(
     body: NodeHeartbeatRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Worker heartbeat mit vollständigen Capability-Daten (Replace-Mode)."""
+    """Worker heartbeat with full capability data (replace mode)."""
     ok = heartbeat(
         node_id=ctx.node_id,
         load=body.load,
@@ -122,8 +122,8 @@ async def get_capability_detail(
     node_id: Optional[str] = Query(None, description="Filter by specific node"),
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Detail einer einzelnen Capability inkl. Input-Schema und anbietenden Nodes."""
+    """Detail of a single capability including input schema and offering nodes."""
     cap = get_capability_by_name(name)
     if not cap:
-        raise HTTPException(status_code=404, detail=f"Capability '{name}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Capability '{name}' not found")
     return cap

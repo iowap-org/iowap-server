@@ -23,7 +23,7 @@ from typing import Any
 
 @dataclass
 class CapabilityInputField:
-    """Ein einzelnes Eingabefeld eines Capability-Schemas."""
+    """A single input field of a capability schema."""
 
     name: str
     type: str = "string"
@@ -35,7 +35,7 @@ class CapabilityInputField:
     description: str = ""
 
     def validate(self, value: Any) -> list[str]:
-        """Prüft einen Wert gegen dieses Feld. Liefert eine Liste von Fehlern."""
+        """Validate a value against this field. Returns a list of errors."""
         errors: list[str] = []
         if value is None:
             if self.required and self.default is None:
@@ -64,7 +64,7 @@ class CapabilityInputField:
 
 @dataclass
 class CapabilityInputSchema:
-    """Schema über alle Eingabefelder einer Capability mit Payload-Validierung."""
+    """Schema over all input fields of a capability with payload validation."""
 
     fields: dict[str, CapabilityInputField] = field(default_factory=dict)
 
@@ -77,7 +77,7 @@ class CapabilityInputSchema:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CapabilityInputSchema:
-        """Erzeugt ein Schema aus einem Dictionary (z. B. aus capabilities.yaml)."""
+        """Build a schema from a dictionary (e.g. from capabilities.yaml)."""
         if not data:
             return cls()
         raw_fields = data.get("fields", data) if isinstance(data, dict) else {}
@@ -99,17 +99,17 @@ class CapabilityInputSchema:
 
     def validate_payload(self, payload: dict[str, Any]) -> tuple[bool, list[str]]:
         """
-        Validiert eine Payload gegen dieses Schema.
+        Validate a payload against this schema.
 
-        Prüft:
-        - Alle als `required` markierten Felder sind vorhanden.
-        - Felder ohne Wert erhalten ihren `default`.
-        - Enum-Constraints werden erzwungen.
-        - Numerische Grenzen (ge/le) werden geprüft.
-        - Unbekannte Felder werden als Fehler gemeldet.
+        Checks:
+        - All fields marked `required` are present.
+        - Fields without a value receive their `default`.
+        - Enum constraints are enforced.
+        - Numeric bounds (ge/le) are checked.
+        - Unknown fields are reported as errors.
 
         Returns:
-            Tupel (is_valid, error_messages).
+            Tuple (is_valid, error_messages).
         """
         errors: list[str] = []
         if not isinstance(payload, dict):

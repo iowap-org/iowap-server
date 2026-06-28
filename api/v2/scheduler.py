@@ -172,12 +172,12 @@ async def scheduler_create_simple_task(
     if not cap:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Capability '{body.capability}' nicht gefunden",
+            detail=f"Capability '{body.capability}' not found",
         )
     if not cap.get("available", False):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Capability '{body.capability}' ist nicht verfügbar",
+            detail=f"Capability '{body.capability}' is not available",
         )
 
     task_name = body.name or f"simple-{body.capability}"
@@ -203,7 +203,7 @@ async def scheduler_create_simple_task(
     if not task_detail or not task_detail["stages"]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Task wurde erstellt, aber Stage nicht gefunden",
+            detail="Task was created, but stage was not found",
         )
 
     return SimpleTaskResponse(

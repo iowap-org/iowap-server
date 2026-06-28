@@ -187,7 +187,7 @@ async def require_admin_or_dashboard_user(
     )
 
 
-# Erlaubte Permissions fuer Admin-Node-Tokens (ohne menschlichen User)
+# Allowed permissions for admin node tokens (without a human user)
 ADMIN_NODE_PERMISSIONS: set[str] = {
     "nodes:approve",
     "nodes:token",
@@ -203,7 +203,7 @@ def check_dashboard_permission(ctx: AuthContext, permission: str) -> None:
         permissions = get_user_permissions(ctx.user_id)
         if permission in permissions:
             return
-    # Eingeschraenkter Fallback: admin node token darf nur Node-Management.
+    # Restricted fallback: admin node token may only perform node management.
     if ctx.role == "admin" and ctx.status in ("approved", "online"):
         if permission in ADMIN_NODE_PERMISSIONS:
             return

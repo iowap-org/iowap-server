@@ -6,10 +6,10 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-# ── Capability (Server-seitig, für API-Requests/Responses) ──────
+# ── Capability (server-side, for API requests/responses) ──────
 
 class Capability(BaseModel):
-    """Repräsentiert eine Capability eines Nodes in API-Antworten."""
+    """Represents a capability of a node in API responses."""
 
     name: str
     type: Optional[str] = None  # ai | tool | script | workflow | resource
@@ -18,7 +18,7 @@ class Capability(BaseModel):
     available: bool | None = None
     input_schema: Optional[dict[str, Any]] = Field(
         None,
-        description="Input-Schema für Task-Validierung (aus capabilities.yaml)",
+        description="Input schema for task validation (from capabilities.yaml)",
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -179,7 +179,7 @@ class TaskView(BaseModel):
 
 class ClaimRequest(BaseModel):
     capability: Optional[str] = None
-    capability_type: Optional[str] = None  # Filter: nur capabilities dieses Typs
+    capability_type: Optional[str] = None  # Filter: only capabilities of this type
 
 
 class ClaimResponse(BaseModel):
@@ -204,19 +204,19 @@ class ArtifactUploadResponse(BaseModel):
 # ── Discovery models ────────────────────────────────────────────
 
 class DiscoveryNode(BaseModel):
-    """Ein Node, der eine bestimmte Capability anbietet."""
+    """A node that offers a specific capability."""
 
     node_id: str
     node_name: str
     available: bool = True
     load: float = 0.0
     queue_depth: int = 0
-    last_seen: str  # ISO-Format
+    last_seen: str  # ISO format
     config: dict[str, Any] = Field(default_factory=dict)
 
 
 class DiscoveryCapability(BaseModel):
-    """Eine Capability mit allen Nodes, die sie anbieten."""
+    """A capability with all nodes that offer it."""
 
     name: str
     type: str  # ai, tool, script, workflow, resource
@@ -228,13 +228,13 @@ class DiscoveryCapability(BaseModel):
 
 
 class DiscoveryResponse(BaseModel):
-    """Antwort auf GET /discovery/capabilities."""
+    """Response for GET /discovery/capabilities."""
 
     capabilities: list[DiscoveryCapability]
 
 
 class DiscoveryDetailResponse(BaseModel):
-    """Antwort auf GET /discovery/capabilities/{name}."""
+    """Response for GET /discovery/capabilities/{name}."""
 
     name: str
     type: str
@@ -254,7 +254,7 @@ from .capability import (  # noqa: E402, I001
 
 
 class SimpleTaskRequest(BaseModel):
-    """Ein einstufiger Task – Capability + Payload direkt."""
+    """A single-stage task – capability + payload directly."""
 
     capability: str = Field(..., min_length=1)
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -264,12 +264,12 @@ class SimpleTaskRequest(BaseModel):
     owner_node_id: Optional[str] = Field(None, min_length=1)
     idempotency_key: Optional[str] = Field(
         None,
-        description="Eindeutiger Schlüssel – verhindert Duplikate bei Retries",
+        description="Unique key – prevents duplicates on retries",
     )
 
 
 class SimpleTaskResponse(BaseModel):
-    """Antwort auf task-simple."""
+    """Response for task-simple."""
 
     task_id: str
     stage_id: str
@@ -301,7 +301,7 @@ class HeartbeatRequest(BaseModel):
 
 
 class NodeHeartbeatRequest(BaseModel):
-    """Erweitertes Heartbeat-Modell für Worker-Nodes mit vollständigen Capability-Daten."""
+    """Extended heartbeat model for worker nodes with full capability data."""
     load: Optional[float] = Field(None, ge=0.0, le=1.0)
     queue_depth: Optional[int] = Field(None, ge=0)
     available: Optional[bool] = None

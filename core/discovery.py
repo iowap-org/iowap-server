@@ -197,14 +197,14 @@ def get_capabilities(
     config_filter: Optional[Dict[str, Any]] = None,
 ) -> list[dict]:
     """
-    Gibt alle Capabilities aller aktiven Nodes zurueck,
-    gruppiert nach Capability-Name.
+    Returns all capabilities of all active nodes,
+    grouped by capability name.
 
-    Jede Capability enthaelt die Nodes, die sie anbieten.
+    Each capability contains the nodes that offer it.
 
-    ``config_filter`` erlaubt Filterung nach Config-Werten, z.B.
-    ``{"region": "eu-west"}`` – es werden nur Nodes zurueckgegeben,
-    deren Capability-Config alle angegebenen Schluessel-Wert-Paere enthaelt.
+    ``config_filter`` allows filtering by config values, e.g.
+    ``{"region": "eu-west"}`` – only nodes are returned
+    whose capability config contains all the specified key-value pairs.
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
@@ -233,16 +233,16 @@ def get_capabilities(
                 if not name:
                     continue
 
-                # Filter: nur bestimmte Capability?
+                # Filter: only a specific capability?
                 if capability_name and name != capability_name:
                     continue
 
-                # Filter: nur bestimmter Typ?
+                # Filter: only a specific type?
                 cap_type = cap.get("type", "")
                 if type_filter and cap_type != type_filter:
                     continue
 
-                # Filter: nur verfuegbare?
+                # Filter: only available ones?
                 if available_only and not node_available:
                     continue
 
@@ -276,8 +276,8 @@ def get_capabilities(
                     "config": cap.get("config", {}),
                 })
 
-            # Wenn diese Node nicht verfuegbar ist,
-            # verfuegbarkeit der Caps ueberschreiben
+            # If this node is not available,
+            # override the availability of its caps
             if not node_available:
                 for c in caps:
                     cname = c.get("name", "")
@@ -291,7 +291,7 @@ def get_capabilities(
 
 
 def get_capability_by_name(name: str) -> Optional[dict]:
-    """Gibt eine einzelne Capability mit allen Nodes zurueck."""
+    """Return a single capability with all of its nodes."""
     all_caps = get_capabilities(capability_name=name, available_only=False)
     if not all_caps:
         return None
