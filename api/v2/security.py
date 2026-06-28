@@ -187,6 +187,14 @@ async def require_admin_or_dashboard_user(
     )
 
 
+# Erlaubte Permissions fuer Admin-Node-Tokens (ohne menschlichen User)
+ADMIN_NODE_PERMISSIONS: set[str] = {
+    "nodes:approve",
+    "nodes:token",
+    "nodes:delete",
+    "dashboard:view",
+}
+
 def check_dashboard_permission(ctx: AuthContext, permission: str) -> None:
     """Check a dashboard permission; raises 403 if missing."""
     if ctx.user_id == "__master__":
@@ -195,9 +203,10 @@ def check_dashboard_permission(ctx: AuthContext, permission: str) -> None:
         permissions = get_user_permissions(ctx.user_id)
         if permission in permissions:
             return
-    # Fallback: admin node token.
+    # Eingeschraenkter Fallback: admin node token darf nur Node-Management.
     if ctx.role == "admin" and ctx.status in ("approved", "online"):
-        return
+        if permission in ADMIN_NODE_PERMISSIONS:
+            return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=f"Missing permission: {permission}",

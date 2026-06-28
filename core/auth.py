@@ -1,6 +1,7 @@
 """Authentication and authorization core logic."""
 
 import hashlib
+import hmac
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -91,6 +92,33 @@ def hash_secret(secret: str) -> str:
     return bcrypt.hashpw(secret.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
+# Server-seitiger Pepper fuer deterministischen Token-Lookup.
+# Wird aus settings.session_secret geladen (oder ein Default, falls nicht gesetzt).
+_TOKEN_PEPPER: str | None = None
+
+
+def _get_token_pepper() -> str:
+    """Return the server-side pepper used for deterministic token lookup."""
+    global _TOKEN_PEPPER
+    if _TOKEN_PEPPER is None:
+        _TOKEN_PEPPER = settings.session_secret or "relay-default-pepper-change-me"
+    return _TOKEN_PEPPER
+
+
+def compute_token_lookup(token: str) -> str:
+    """Deterministic HMAC-SHA256 lookup hash for fast token lookup.
+
+    Unlike bcrypt (which uses random salts), this hash is stable for a given
+    token+pepper and can be indexed in the database. The actual token validity
+    is still confirmed via ``verify_secret`` (bcrypt) on the matched row.
+    """
+    return hmac.new(
+        _get_token_pepper().encode("utf-8"),
+        token.encode("utf-8"),
+        "sha256",
+    ).hexdigest()
+
+
 def _hash_with_salt(secret: str) -> str:
     """Deprecated transitional helper.
 
@@ -178,20 +206,22 @@ def _create_token(
         prefix = TEMPORARY_TOKEN_PREFIX if token_type == "temporary" else RUNTIME_TOKEN_PREFIX
         token = f"{prefix}{secrets.token_urlsafe(32)}"
         token_hash = hash_secret(token)
+        token_lookup_hash = compute_token_lookup(token)
         now = _now()
         expires = now + timedelta(hours=ttl_hours)
 
         conn.execute(
             """
             INSERT INTO node_tokens
-            (token_id, node_id, node_name, token_hash, token_type, pending, role, expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (token_id, node_id, node_name, token_hash, token_lookup_hash, token_type, pending, role, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 token_id,
                 node_id,
                 node_name,
                 token_hash,
+                token_lookup_hash,
                 token_type,
                 1 if pending else 0,
                 role,
@@ -373,24 +403,24 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
     """Validate a bearer token. Returns node info or None."""
     conn = get_conn()
     try:
-        # Query candidate tokens and compare bcrypt hashes in constant time.
-        # Deterministic hash lookups do not exist for bcrypt because of random salts.
-        token_rows = conn.execute(
+        # Deterministic lookup: ein einzelnes indexed Query, danach ein bcrypt-Check.
+        # Ersetzt den fruheren O(N) Scan ueber alle nicht-abgelaufenen Tokens.
+        token_lookup_hash = compute_token_lookup(token)
+        now = _format_time(_now())
+        token_row = conn.execute(
             """
             SELECT token_id, node_id, node_name, token_type, pending, role, expires_at, token_hash
             FROM node_tokens
-            WHERE expires_at > ? OR expires_at IS NULL
+            WHERE token_lookup_hash = ?
+              AND (expires_at > ? OR expires_at IS NULL)
+            LIMIT 1
             """,
-            (_format_time(_now() - timedelta(seconds=1)),),
-        ).fetchall()
-
-        token_row = None
-        for row in token_rows:
-            if verify_secret(token, row["token_hash"]):
-                token_row = row
-                break
+            (token_lookup_hash, now),
+        ).fetchone()
 
         if not token_row:
+            return None
+        if not verify_secret(token, token_row["token_hash"]):
             return None
 
         expires = _parse_time(token_row["expires_at"])
@@ -556,13 +586,10 @@ def login_with_master_seed(seed: str) -> Optional[str]:
         else:
             node_name = node_row["node_name"]
 
-        return _create_token(
+        return _replace_runtime_token(
             dashboard_node_id,
             node_name,
             role="admin",
-            token_type="runtime",
-            pending=False,
-            ttl_hours=settings.token_ttl_hours,
         )
     finally:
         conn.close()

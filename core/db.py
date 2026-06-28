@@ -251,6 +251,15 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     if "registration_secret_expires_at" not in cols:
         conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_expires_at TEXT")
 
+    # Ensure token_lookup_hash column exists in node_tokens table (C-1 fix:
+    # deterministic HMAC-SHA256 lookup replaces the O(N) bcrypt scan).
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(node_tokens)").fetchall()]
+    if "token_lookup_hash" not in cols:
+        conn.execute("ALTER TABLE node_tokens ADD COLUMN token_lookup_hash TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_node_tokens_lookup ON node_tokens(token_lookup_hash)"
+    )
+
 
 def _seed_default_rbac(conn: sqlite3.Connection) -> None:
     """Seed default groups and permissions if none exist."""
