@@ -345,3 +345,21 @@ class StorageFileReference(BaseModel):
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
     created_by: Optional[str] = None
+
+
+# ── Chunked Upload ──────────────────────────────────────────────
+
+class ChunkedInitRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=512)
+    mime_type: Optional[str] = Field(None, max_length=256)
+    total_chunks: int = Field(..., gt=0, le=10000)
+
+
+class ChunkedChunkRequest(BaseModel):
+    chunk_index: int = Field(..., ge=0)
+    # base64-encoded chunk bytes (raw binary would break JSON transport)
+    data_b64: str = Field(..., min_length=0)
+
+
+class ChunkedCompleteRequest(BaseModel):
+    checksum: Optional[str] = Field(None, description="Optional SHA256 hex digest of the assembled file")

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     db_path: Path = Path.home() / ".relay" / "server.db"
     config_path: Optional[Path] = Path.home() / ".relay" / "config.yaml"
     artifacts_dir: Path = Path.home() / ".relay" / "artifacts"
+    chunked_uploads_dir: Path = Path.home() / ".relay" / "chunked_uploads"
     static_dir: Optional[Path] = None
 
     # Auth
@@ -83,6 +84,7 @@ def _apply_yaml_overrides(base: Settings, path: Optional[Path]) -> Settings:
         "db_path",
         "config_path",
         "artifacts_dir",
+        "chunked_uploads_dir",
         "static_dir",
         "capabilities_config_path",
     ]:

@@ -92,6 +92,74 @@ def store_artifact(
         conn.close()
 
 
+def store_artifact_from_file(
+    name: str,
+    file_path: Path,
+    mime_type: Optional[str] = None,
+    task_id: Optional[str] = None,
+    stage_id: Optional[str] = None,
+    created_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Store an artifact by streaming a (temporary) file into the artifacts dir.
+
+    Unlike ``store_artifact`` which takes ``bytes``, this takes a file path and
+    moves the data chunkwise — no full RAM load. SHA256 is computed in the same
+    pass to avoid a second read of the file.
+    """
+    file_path = Path(file_path)
+    artifact_id = _generate_id("artifact")
+    now = _format_time(_now())
+    target_path = _artifact_path(artifact_id)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    h = hashlib.sha256()
+    size = 0
+    with file_path.open("rb") as src, target_path.open("wb") as dst:
+        for chunk in iter(lambda: src.read(8192), b""):
+            h.update(chunk)
+            size += len(chunk)
+            dst.write(chunk)
+
+    checksum = h.hexdigest()
+
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO artifacts
+            (artifact_id, task_id, stage_id, name, mime_type, size_bytes, checksum, storage_path, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact_id,
+                task_id,
+                stage_id,
+                name,
+                mime_type,
+                size,
+                checksum,
+                str(target_path),
+                created_by,
+                now,
+            ),
+        )
+        conn.commit()
+        event_bus.publish_sync(
+            "artifact_created",
+            {"artifact_id": artifact_id, "task_id": task_id, "created_by": created_by},
+        )
+        return {
+            "artifact_id": artifact_id,
+            "name": name,
+            "path": str(target_path),
+            "size_bytes": size,
+            "mime_type": mime_type,
+            "created_by": created_by,
+        }
+    finally:
+        conn.close()
+
+
 def get_artifact_metadata(artifact_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
