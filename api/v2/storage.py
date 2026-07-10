@@ -1,5 +1,6 @@
 """Generic storage router for worker uploads/downloads and storage-node handoff."""
 
+import logging
 import pathlib
 import tempfile
 from typing import Any, Dict, Optional
@@ -25,6 +26,7 @@ from relay_server.models import (
     ChunkedInitRequest,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -90,6 +92,10 @@ async def storage_upload(
                     break
                 out.write(buf)
         real_path = pathlib.Path(out.name)
+        logger.info("Materialised spooled upload to %s (no usable path from SpooledTemporaryFile)", real_path)
+
+    # Close the spool immediately — we have the real_path now.
+    spool.close()
 
     try:
         result = store_artifact_from_file(
@@ -102,7 +108,6 @@ async def storage_upload(
         )
     finally:
         real_path.unlink(missing_ok=True)
-        spool.close()
 
     return ArtifactUploadResponse(**result)
 
