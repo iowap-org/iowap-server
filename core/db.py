@@ -1,7 +1,9 @@
 """Database layer — SQLite connection pool and core schema management."""
 
+import secrets
 import sqlite3
 from datetime import datetime, timezone
+from typing import Optional
 
 from relay_server.config import settings
 
@@ -218,6 +220,26 @@ def _schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    # --- AUDIT LOGGING ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            log_id TEXT PRIMARY KEY,
+            actor_id TEXT NOT NULL,
+            actor_name TEXT,
+            action TEXT NOT NULL,
+            resource_type TEXT,
+            resource_id TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
+    )
+
     # --- INDEXES ---
     conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_capabilities ON nodes(capabilities)")
@@ -259,6 +281,32 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_node_tokens_lookup ON node_tokens(token_lookup_hash)"
     )
+
+    # Ensure audit_logs table exists (migration for existing databases).
+    table_names = [
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    ]
+    if "audit_logs" not in table_names:
+        conn.execute("""
+            CREATE TABLE audit_logs (
+                log_id TEXT PRIMARY KEY,
+                actor_id TEXT NOT NULL,
+                actor_name TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id TEXT,
+                details TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
+        )
 
 
 def _seed_default_rbac(conn: sqlite3.Connection) -> None:
@@ -342,3 +390,30 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
             """,
             (viewer_group_id, perm_id, now),
         )
+
+
+def log_audit_event(
+    actor_id: str,
+    action: str,
+    resource_type: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    details: Optional[str] = None,
+    actor_name: Optional[str] = None,
+) -> None:
+    """Write an audit log entry for an admin action."""
+    conn = get_conn()
+    try:
+        log_id = f"aud_{secrets.token_urlsafe(12)}"
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO audit_logs (log_id, actor_id, actor_name, action,
+                                    resource_type, resource_id, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (log_id, actor_id, actor_name, action,
+             resource_type, resource_id, details, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()

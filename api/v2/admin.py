@@ -8,6 +8,7 @@ from relay_server.api.v2.security import (
     require_dashboard_user,
 )
 from relay_server.core.auth import approve_node
+from relay_server.core.db import log_audit_event
 from relay_server.models import AuthContext, NodeApproval, TokenResponse
 
 router = APIRouter()
@@ -62,6 +63,14 @@ async def admin_approve_node(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pending node not found or already approved",
         )
+    log_audit_event(
+        actor_id=ctx.node_id,
+        actor_name=ctx.node_name,
+        action="node.approve",
+        resource_type="node",
+        resource_id=node_id,
+        details=f"role={body.role}",
+    )
     return _build_token_response(token)
 
 
@@ -104,6 +113,13 @@ async def admin_issue_node_token(
     finally:
         conn.close()
 
+    log_audit_event(
+        actor_id=ctx.node_id,
+        actor_name=ctx.node_name,
+        action="node.issue_token",
+        resource_type="node",
+        resource_id=node_id,
+    )
     return _build_token_response(token)
 
 
@@ -150,6 +166,13 @@ async def admin_delete_node(
     finally:
         conn.close()
 
+    log_audit_event(
+        actor_id=ctx.node_id,
+        actor_name=ctx.node_name,
+        action="node.delete",
+        resource_type="node",
+        resource_id=node_id,
+    )
     return {"deleted": True, "node_id": node_id}
 
 
