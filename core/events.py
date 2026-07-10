@@ -16,6 +16,7 @@ class _Subscriber:
     loop: asyncio.AbstractEventLoop
     event_types: Optional[Set[str]] = None
     dropped: int = field(default=0, init=False)
+    _event_bus: Optional["EventBus"] = field(default=None, init=False)
 
     def put_nowait(self, event: dict) -> None:
         """Enqueue an event, dropping it and counting drops if the queue is full."""
@@ -23,6 +24,16 @@ class _Subscriber:
             self.queue.put_nowait(event)
         except asyncio.QueueFull:
             self.dropped += 1
+            # Warn when drops exceed threshold (fires once at exactly 100).
+            if self.dropped == 100 and self._event_bus is not None:
+                self._event_bus._publish_internal(
+                    "subscriber_lagging",
+                    {
+                        "subscriber_id": self.subscriber_id,
+                        "node_id": self.node_id,
+                        "dropped": self.dropped,
+                    },
+                )
 
 
 class EventBus:
@@ -73,11 +84,15 @@ class EventBus:
         types_set: Optional[Set[str]] = set(event_types) if event_types else None
         queue: asyncio.Queue = asyncio.Queue(maxsize=self._queue_size)
         loop = asyncio.get_running_loop()
-        self._subscribers[sid] = _Subscriber(sid, node_id, queue, loop, types_set)
+        sub = _Subscriber(sid, node_id, queue, loop, types_set)
+        sub._event_bus = self
+        self._subscribers[sid] = sub
         try:
             while True:
                 event = await queue.get()
-                yield _format_sse(event)
+                current = self._subscribers.get(sid)
+                dropped = current.dropped if current else 0
+                yield _format_sse(event, dropped=dropped)
         except asyncio.CancelledError:
             pass
         finally:
@@ -117,6 +132,17 @@ class EventBus:
                 # Subscriber's event loop is closed; count the drop.
                 sub.dropped += 1
 
+    def _publish_internal(self, event_type: str, payload: dict) -> None:
+        """Publish an internal event without writing to history (avoids recursion)."""
+        event = _make_event(event_type, payload)
+        for sub in list(self._subscribers.values()):
+            if sub.event_types is not None and event_type not in sub.event_types:
+                continue
+            try:
+                sub.loop.call_soon_threadsafe(sub.put_nowait, event)
+            except RuntimeError:
+                pass
+
 
 def _make_event(event_type: str, payload: dict) -> dict:
     return {
@@ -126,8 +152,12 @@ def _make_event(event_type: str, payload: dict) -> dict:
     }
 
 
-def _format_sse(event: dict) -> str:
-    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+def _format_sse(event: dict, dropped: int = 0) -> str:
+    """Format an event as SSE with optional dropped count."""
+    lines = [f"event: {event['type']}", f"data: {json.dumps(event)}"]
+    if dropped > 0:
+        lines.insert(1, f"X-Dropped: {dropped}")
+    return "\n".join(lines) + "\n\n"
 
 
 event_bus = EventBus()
