@@ -302,6 +302,8 @@ def mark_offline_nodes() -> List[str]:
     """Mark approved/online nodes as offline if heartbeat timeout exceeded.
 
     Admin nodes do not send heartbeats and are therefore excluded.
+    Uses a re-check in the UPDATE WHERE clause to avoid TOCTOU races:
+    a node that heartbeats between SELECT and UPDATE will not be marked offline.
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
@@ -313,15 +315,32 @@ def mark_offline_nodes() -> List[str]:
             """,
             (threshold,),
         ).fetchall()
-        offline_ids = [r["node_id"] for r in rows]
-        if offline_ids:
-            conn.executemany(
-                "UPDATE nodes SET status = 'offline', available = 0 WHERE node_id = ?",
-                [(nid,) for nid in offline_ids],
-            )
-            conn.commit()
-            for nid in offline_ids:
-                event_bus.publish_sync("node_offline", {"node_id": nid})
+        candidate_ids = [r["node_id"] for r in rows]
+        if not candidate_ids:
+            return []
+
+        # Re-check last_seen in the UPDATE to avoid TOCTOU:
+        # only mark offline if last_seen is STILL below threshold.
+        conn.executemany(
+            """
+            UPDATE nodes SET status = 'offline', available = 0
+            WHERE node_id = ? AND last_seen < ?
+            """,
+            [(nid, threshold) for nid in candidate_ids],
+        )
+        conn.commit()
+
+        # Determine which nodes were actually updated (the UPDATE may have
+        # matched 0 rows if a heartbeat came in between SELECT and UPDATE).
+        offline_ids = [
+            nid for nid in candidate_ids
+            if conn.execute(
+                "SELECT status FROM nodes WHERE node_id = ?", (nid,)
+            ).fetchone()["status"] == "offline"
+        ]
+
+        for nid in offline_ids:
+            event_bus.publish_sync("node_offline", {"node_id": nid})
         return offline_ids
     finally:
         conn.close()
