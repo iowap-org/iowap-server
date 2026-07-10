@@ -7,10 +7,12 @@ task-complex: multi-stage task (TaskRequest already exists)
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from relay_server.config import settings
 from relay_server.models.capability import CapabilityInputSchema
 
 # ── Simple Task ────────────────────────────────────────────────
@@ -28,6 +30,15 @@ class SimpleTaskRequest(BaseModel):
         None,
         description="Unique key – prevents duplicates on retries",
     )
+
+    @model_validator(mode='after')
+    def validate_payload_size(self):
+        payload_str = json.dumps(self.payload)
+        if len(payload_str) > settings.max_payload_bytes:
+            raise ValueError(
+                f"Payload exceeds maximum size of {settings.max_payload_bytes} bytes"
+            )
+        return self
 
 
 class SimpleTaskResponse(BaseModel):
@@ -47,6 +58,16 @@ class StageInput(BaseModel):
     depends_on: Optional[List[str]] = None
     timeout_seconds: Optional[int] = None
     payload: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode='after')
+    def validate_payload_size(self):
+        if self.payload is not None:
+            payload_str = json.dumps(self.payload)
+            if len(payload_str) > settings.max_payload_bytes:
+                raise ValueError(
+                    f"Payload exceeds maximum size of {settings.max_payload_bytes} bytes"
+                )
+        return self
 
 
 class TaskRequest(BaseModel):
