@@ -93,7 +93,7 @@ def hash_secret(secret: str) -> str:
 
 
 # Server-side pepper for deterministic token lookup.
-# Loaded from settings.session_secret (or a default if not set).
+# Loaded from settings.session_secret — fails fast if not set (>= 32 chars).
 _TOKEN_PEPPER: str | None = None
 
 
@@ -101,7 +101,13 @@ def _get_token_pepper() -> str:
     """Return the server-side pepper used for deterministic token lookup."""
     global _TOKEN_PEPPER
     if _TOKEN_PEPPER is None:
-        _TOKEN_PEPPER = settings.session_secret or "relay-default-pepper-change-me"
+        secret = settings.session_secret
+        if not secret or len(secret) < 32:
+            raise RuntimeError(
+                "RELAY_SESSION_SECRET must be set to at least 32 characters "
+                "before token operations can use the pepper."
+            )
+        _TOKEN_PEPPER = secret
     return _TOKEN_PEPPER
 
 
