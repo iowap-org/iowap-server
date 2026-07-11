@@ -94,6 +94,7 @@ class ChunkedUploadManager:
             "session_dir": session_dir,
             "created_at": _now_ts(),
             "created_by": created_by,
+            "total_bytes": 0,
         }
         return {"upload_id": upload_id, "status": "init"}
 
@@ -115,9 +116,26 @@ class ChunkedUploadManager:
             )
 
         payload = self._decode_chunk(data)
+
+        # Enforce per-chunk size limit.
+        if len(payload) > settings.max_chunk_size:
+            raise ChunkedUploadError(
+                f"chunk {chunk_index} size {len(payload)} exceeds "
+                f"max_chunk_size of {settings.max_chunk_size} bytes"
+            )
+
+        # Enforce total upload size limit.
+        new_total = session["total_bytes"] + len(payload)
+        if new_total > settings.max_upload_bytes:
+            raise ChunkedUploadError(
+                f"Upload would exceed max_upload_bytes of "
+                f"{settings.max_upload_bytes} bytes"
+            )
+
         chunk_path = session["session_dir"] / f"chunk_{chunk_index:04d}"
         chunk_path.write_bytes(payload)
         session["received"].add(chunk_index)
+        session["total_bytes"] = new_total
         return {
             "upload_id": upload_id,
             "chunk_index": chunk_index,
@@ -155,9 +173,9 @@ class ChunkedUploadManager:
         with output_path.open("wb") as dst:
             for i in range(total):
                 chunk_path = session["session_dir"] / f"chunk_{i:04d}"
-                dst.write(chunk_path.read_bytes())
-                # Update hash chunkwise without re-reading the assembled file.
-                h.update(_file_hash_chunk(chunk_path))
+                data = chunk_path.read_bytes()
+                dst.write(data)
+                h.update(data)
         if checksum is not None:
             actual = h.hexdigest()
             if actual.lower() != checksum.lower():
@@ -188,11 +206,6 @@ class ChunkedUploadManager:
         for uid in stale:
             self.discard_session(uid)
         return len(stale)
-
-
-def _file_hash_chunk(path: Path) -> bytes:
-    """Return the chunk bytes for incremental hashing (small chunks only)."""
-    return path.read_bytes()
 
 
 # Module-level singleton used by the storage router.
