@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # Storage limits
     max_upload_bytes: int = 100 * 1024 * 1024  # 100 MiB
     max_payload_bytes: int = 10 * 1024 * 1024   # 10 MiB — task payload limit
+    max_chunk_size: int = 10 * 1024 * 1024  # 10 MiB per chunk
 
     # Scheduler
     default_timeout_seconds: int = 300
