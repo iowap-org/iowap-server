@@ -25,7 +25,7 @@ from relay_server.core.zeroconf import RelayZeroconf
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "connect-src 'self'; "
         "img-src 'self' data:; "
