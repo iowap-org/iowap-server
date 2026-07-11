@@ -29,8 +29,8 @@
     <p class="sub">Login to manage cluster nodes, tasks and users.</p>
 
     <div class="tabs">
-      <button id="tabUser" class="tab active" onclick="showTab('user')">User Login</button>
-      <button id="tabSeed" class="tab" onclick="showTab('seed')">Master Seed</button>
+      <button id="tabUser" class="tab active" data-tab="user">User Login</button>
+      <button id="tabSeed" class="tab" data-tab="seed">Master Seed</button>
     </div>
 
     <form id="formUser" method="POST" action="/relay/v2/dashboard/login">
@@ -59,17 +59,6 @@
     </div>
   </div>
 
-  <script>
-    function showTab(mode) {
-      document.getElementById('formUser').classList.toggle('hidden', mode !== 'user');
-      document.getElementById('formSeed').classList.toggle('hidden', mode !== 'seed');
-      document.getElementById('tabUser').classList.toggle('active', mode === 'user');
-      document.getElementById('tabSeed').classList.toggle('active', mode === 'seed');
-    }
-    const params = new URLSearchParams(location.search);
-    if (params.get('error')) {
-      document.getElementById('error').textContent = decodeURIComponent(params.get('error'));
-    }
-  </script>
+  <script src="/relay/v2/dashboard/static/login.js"></script>
 </body>
 </html>
