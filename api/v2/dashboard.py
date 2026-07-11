@@ -119,6 +119,17 @@ async def dashboard_agent_readme():
     return RedirectResponse("/relay/v2/docs/node-readme", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.get("/static/{filename}", include_in_schema=False)
+async def dashboard_static_file(filename: str):
+    """Serve static assets (JS) for the dashboard HTML pages."""
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    path = STATIC_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(path)
+
+
 @router.post("/login")
 @limiter.limit("5/minute")
 async def dashboard_login(
