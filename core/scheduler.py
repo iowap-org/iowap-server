@@ -38,7 +38,7 @@ def _retry_db_write(func):
                 if attempt < _LOCKED_RETRIES - 1:
                     time.sleep(delay)
                     delay *= 2
-        raise last_error
+        raise last_error  # type: ignore[misc]
 
     return wrapper
 
