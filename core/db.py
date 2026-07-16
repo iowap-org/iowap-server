@@ -1,6 +1,7 @@
 """Database layer — SQLite connection pool and core schema management."""
 
 import functools
+import re
 import secrets
 import sqlite3
 import time
@@ -8,6 +9,48 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from relay_server.config import settings
+
+
+# ---------------------------------------------------------------------------
+# Secret redaction for audit logs (T-024)
+# ---------------------------------------------------------------------------
+#
+# Audit log ``details`` are free-form strings written by admin endpoints.
+# In principle no endpoint should ever put a raw secret there, but as
+# defense-in-depth we scan the string for known secret patterns and
+# replace them with ``[REDACTED]`` before persisting it. This prevents
+# tokens, registration secrets or master seeds from leaking into the
+# audit table if a future caller is careless.
+
+_SECRET_PATTERNS = [
+    # Runtime / temporary / admin tokens issued by auth.py.
+    # Prefixes: rt_, tp_, adm_, bs_ followed by >= 16 urlsafe chars.
+    re.compile(r"\b(?:rt|tp|adm|bs)_[A-Za-z0-9_\-]{16,}\b"),
+    # Registration secrets: rs_<base64url(32)>.
+    re.compile(r"\brs_[A-Za-z0-9_\-]{16,}\b"),
+    # Generated secrets from generate_secret(): sec_<base64url(32)>.
+    re.compile(r"\bsec_[A-Za-z0-9_\-]{16,}\b"),
+    # Bearer Authorization header values.
+    re.compile(r"(?i)Bearer\s+[A-Za-z0-9_\-\.=]+"),
+    # password=... / secret=... / seed=... key=value pairs.
+    re.compile(r"(?i)(password|secret|seed|token)\s*[:=]\s*\S+"),
+]
+
+_REDACTED = "[REDACTED]"
+
+
+def _redact_secrets(value: Optional[str]) -> Optional[str]:
+    """Return a copy of ``value`` with known secret patterns redacted.
+
+    Used by :func:`log_audit_event` before the ``details`` field is
+    written to the database. Returns ``None`` unchanged.
+    """
+    if not value:
+        return value
+    redacted = value
+    for pattern in _SECRET_PATTERNS:
+        redacted = pattern.sub(_REDACTED, redacted)
+    return redacted
 
 
 # ---------------------------------------------------------------------------
@@ -439,11 +482,19 @@ def log_audit_event(
     details: Optional[str] = None,
     actor_name: Optional[str] = None,
 ) -> None:
-    """Write an audit log entry for an admin action."""
+    """Write an audit log entry for an admin action.
+
+    The ``details`` string is scanned for known secret patterns (tokens,
+    registration secrets, bearer headers, ``password=`` / ``secret=``
+    key-value pairs) and any matches are replaced with ``[REDACTED]``
+    before being persisted. This is defense-in-depth: callers should
+    never put raw secrets in ``details`` to begin with.
+    """
     conn = get_conn()
     try:
         log_id = f"aud_{secrets.token_urlsafe(12)}"
         now = datetime.now(timezone.utc).isoformat()
+        safe_details = _redact_secrets(details)
         conn.execute(
             """
             INSERT INTO audit_logs (log_id, actor_id, actor_name, action,
@@ -451,7 +502,7 @@ def log_audit_event(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (log_id, actor_id, actor_name, action,
-             resource_type, resource_id, details, now),
+             resource_type, resource_id, safe_details, now),
         )
         conn.commit()
     finally:
