@@ -19,6 +19,7 @@ from relay_server.config import settings
 from relay_server.core.db import get_conn
 from relay_server.core.session import (
     CSRF_MAX_AGE_SECONDS,
+    MASTER_SEED_SESSION_MAX_AGE_SECONDS,
     SESSION_MAX_AGE_SECONDS,
     generate_csrf_token,
     sign_user_cookie,
@@ -61,23 +62,31 @@ CSRF_COOKIE = "relay_csrf"
 CSRF_HEADER = "x-csrf-token"
 
 
-def _set_user_cookie(response, user: dict) -> None:
+def _set_user_cookie(response, user: dict, max_age: int = SESSION_MAX_AGE_SECONDS) -> None:
+    """Set the signed relay_user cookie.
+
+    ``max_age`` controls both the cookie's browser lifetime and the
+    signed-token TTL. Master-seed sessions pass
+    :data:`MASTER_SEED_SESSION_MAX_AGE_SECONDS` (1h) so that the
+    long-lived master seed is not exposed through the browser for the
+    full 7-day regular session (T-025).
+    """
     response.set_cookie(
         key=USER_COOKIE,
-        value=sign_user_cookie(user),
+        value=sign_user_cookie(user, max_age=max_age),
         httponly=True,
-        max_age=SESSION_MAX_AGE_SECONDS,
+        max_age=max_age,
         samesite="lax",
         secure=settings.session_cookie_secure,
     )
 
 
-def _set_csrf_cookie(response) -> None:
+def _set_csrf_cookie(response, max_age: int = CSRF_MAX_AGE_SECONDS) -> None:
     response.set_cookie(
         key=CSRF_COOKIE,
         value=generate_csrf_token(),
         httponly=False,
-        max_age=CSRF_MAX_AGE_SECONDS,
+        max_age=max_age,
         samesite="lax",
         secure=settings.session_cookie_secure,
     )
@@ -186,13 +195,21 @@ async def dashboard_login(
             return response
 
     if mode == "seed":
+        # Master-seed sessions get a short TTL (1h) to limit exposure of
+        # the long-lived master seed through the browser. The session is
+        # intended only for bootstrapping the first human admin or for
+        # recovery when no human admin can log in. (T-025)
+        session_ttl = MASTER_SEED_SESSION_MAX_AGE_SECONDS
+        csrf_ttl = MASTER_SEED_SESSION_MAX_AGE_SECONDS
         response = RedirectResponse(
             url="/relay/v2/dashboard/bootstrap", status_code=status.HTTP_303_SEE_OTHER
         )
     else:
+        session_ttl = SESSION_MAX_AGE_SECONDS
+        csrf_ttl = CSRF_MAX_AGE_SECONDS
         response = RedirectResponse(url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER)
-    _set_user_cookie(response, user)
-    _set_csrf_cookie(response)
+    _set_user_cookie(response, user, max_age=session_ttl)
+    _set_csrf_cookie(response, max_age=csrf_ttl)
     return response
 
 
