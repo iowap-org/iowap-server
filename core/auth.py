@@ -256,11 +256,22 @@ def register_admin_node(
     endpoint: Optional[str],
     capabilities: list,
 ) -> tuple[Optional[str], Optional[str]]:
-    """Register an admin node using the master seed. Returns (node_id, runtime token) or (None, None)."""
+    """Register an admin node using the master seed. Returns (node_id, runtime token) or (None, None).
+
+    Only works when no human admin exists or when recovery mode
+    (enable_master_seed_login) is explicitly enabled.
+    """
+    from relay_server.core.users import has_admin_user
+
     result: tuple[Optional[str], Optional[str]] = (None, None)
     node_id: Optional[str] = None
     conn = get_conn()
     try:
+        # Block admin-node registration when a human admin exists and
+        # recovery mode is not active — same guard as the dashboard.
+        if has_admin_user() and not settings.enable_master_seed_login:
+            return result
+
         row = conn.execute(
             "SELECT seed_hash FROM admin_seeds WHERE seed_id = ?", ("master",)
         ).fetchone()

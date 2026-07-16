@@ -193,7 +193,7 @@ def query_nodes_by_capability(capability: str) -> List[Dict[str, Any]]:
             SELECT node_id, node_name, endpoint, capabilities, load, queue_depth,
                    available, last_seen, registered_at, status, role
             FROM nodes
-            WHERE status = 'approved'
+            WHERE status IN ('approved', 'online')
               AND last_seen > ?
             ORDER BY load ASC, queue_depth ASC
             """,
