@@ -44,6 +44,17 @@ from relay_server.models import AuthContext
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
+# ---------------------------------------------------------------------------
+# CSRF Policy:
+# - GET endpoints are read-only and do not require CSRF.
+# - POST/PUT/DELETE endpoints modify state and require a valid
+#   X-CSRF-Token header matching the relay_csrf cookie (double-submit
+#   pattern).
+# - CSRF is enforced via _verify_csrf() on each mutating endpoint.
+# - The relay_csrf cookie is set on GET /login (and refreshed together
+#   with the session cookie after successful logins/password changes).
+# ---------------------------------------------------------------------------
+
 STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 USER_COOKIE = "relay_user"
 CSRF_COOKIE = "relay_csrf"
