@@ -145,6 +145,15 @@ async def scheduler_delete_artifact(
     return {"status": "deleted", "artifact_id": artifact_id}
 
 
+@router.post("/enforce-timeouts")
+async def enforce_timeouts(
+    ctx: AuthContext = Depends(get_approved_context),
+):
+    """Manually trigger timeout enforcement for overdue claimed stages."""
+    result = Scheduler.enforce_timeouts()
+    return result
+
+
 def _task_to_view(task: Dict[str, Any]) -> TaskView:
     return TaskView(
         task=TaskSummary(**task),

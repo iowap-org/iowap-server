@@ -367,6 +367,83 @@ class Scheduler:
         finally:
             conn.close()
 
+    @staticmethod
+    @_retry_db_write
+    def enforce_timeouts() -> Dict[str, List[str]]:
+        """Mark claimed stages and their tasks as timed_out when overdue.
+
+        A stage is overdue when ``claimed_at + timeout_seconds < now``.
+        When all stages of a task are done/timed_out, the task itself is
+        also marked timed_out.
+
+        Returns ``{"stages_timed_out": [...], "tasks_timed_out": [...]}``.
+        """
+        now = _format_time(_now())
+        conn = get_conn()
+        try:
+            # Find overdue claimed stages.
+            overdue = conn.execute(
+                """
+                SELECT stage_id, task_id FROM task_stages
+                WHERE status = 'claimed'
+                  AND datetime(claimed_at, '+' || timeout_seconds || ' seconds') < ?
+                """,
+                (now,),
+            ).fetchall()
+
+            timed_out_stages = [r["stage_id"] for r in overdue]
+            affected_tasks: set[str] = set()
+            tasks_timed_out: List[str] = []
+
+            if timed_out_stages:
+                # Mark stages as timed_out.
+                conn.execute(
+                    """
+                    UPDATE task_stages
+                    SET status = 'timed_out', updated_at = ?
+                    WHERE stage_id IN ({})
+                    """.format(",".join("?" for _ in timed_out_stages)),
+                    [now] + timed_out_stages,
+                )
+
+                # Collect affected task IDs.
+                for r in overdue:
+                    affected_tasks.add(r["task_id"])
+
+                # For each affected task, check if all stages are done/timed_out.
+                for task_id in affected_tasks:
+                    remaining = conn.execute(
+                        "SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status NOT IN ('completed', 'timed_out')",
+                        (task_id,),
+                    ).fetchone()[0]
+                    if remaining == 0:
+                        conn.execute(
+                            "UPDATE tasks SET status = 'timed_out', updated_at = ?, completed_at = ? WHERE task_id = ?",
+                            (now, now, task_id),
+                        )
+                        tasks_timed_out.append(task_id)
+
+                conn.commit()
+
+                # Publish events.
+                for stage_id in timed_out_stages:
+                    event_bus.publish_sync(
+                        "stage_timed_out",
+                        {"stage_id": stage_id},
+                    )
+                for task_id in tasks_timed_out:
+                    event_bus.publish_sync(
+                        "task_timed_out",
+                        {"task_id": task_id},
+                    )
+
+            return {
+                "stages_timed_out": timed_out_stages,
+                "tasks_timed_out": tasks_timed_out,
+            }
+        finally:
+            conn.close()
+
 
 def _task_row_to_dict(row: Any) -> Dict[str, Any]:
     return {
