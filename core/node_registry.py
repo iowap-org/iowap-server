@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, sync_node_capabilities
 
 NODE_ID_ALPHABET = "ABCDEFGHJKMNPQRTUVWXY346789"
 NODE_ID_LENGTH = 8
@@ -116,6 +116,7 @@ class NodeRegistry:
         """
         conn = get_conn()
         now = self._format_time(datetime.now(timezone.utc))
+        assigned_node_id: Optional[str] = None
 
         try:
             for attempt in range(NODE_ID_MAX_RETRIES):
@@ -137,6 +138,7 @@ class NodeRegistry:
                         (candidate, node_name, endpoint, caps_json, now, now, status, role),
                     )
                     conn.commit()
+                    assigned_node_id = candidate
                     return candidate
                 except sqlite3.IntegrityError as exc:
                     msg = str(exc).lower()
@@ -152,6 +154,13 @@ class NodeRegistry:
             )
         finally:
             conn.close()
+            # T-026: keep the normalized capability index in sync for the
+            # newly created node. Skipped if no candidate was assigned.
+            if assigned_node_id is not None:
+                try:
+                    sync_node_capabilities(assigned_node_id, capabilities or [])
+                except Exception:
+                    pass
 
     def lookup(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Return node metadata or None.  Lookup is case-insensitive."""

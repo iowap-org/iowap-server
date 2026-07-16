@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, get_node_capability_names
 from relay_server.core.events import event_bus
 
 
@@ -213,25 +213,43 @@ class Scheduler:
         try:
             # Determine capabilities of the node if not provided.
             if not capability:
+                # Verify the node exists and is approved/online (status
+                # gate). The capability names come from the normalized
+                # node_capabilities index (T-026) instead of json.loads
+                # on the nodes.capabilities TEXT column.
                 node_row = conn.execute(
                     "SELECT capabilities FROM nodes WHERE node_id = ? AND status IN ('approved', 'online')",
                     (node_id,),
                 ).fetchone()
                 if not node_row:
                     return None
-                caps = _parse(node_row["capabilities"]) or []
 
-                # If capability_type is set, filter to that type only.
-                if capability_type:
-                    caps = [
-                        c for c in caps
-                        if isinstance(c, dict)
-                        and str(c.get("type", "")).lower() == capability_type.lower()
-                    ]
-
-                cap_names = [c["name"] for c in caps if isinstance(c, dict) and c.get("name")]
+                # Use the normalized index for capability names. Fall back
+                # to the JSON column if the index is empty (e.g. legacy
+                # node that has not heartbeat-synced yet).
+                cap_names = get_node_capability_names(node_id)
                 if not cap_names:
-                    return None
+                    caps = _parse(node_row["capabilities"]) or []
+                    if capability_type:
+                        caps = [
+                            c for c in caps
+                            if isinstance(c, dict)
+                            and str(c.get("type", "")).lower() == capability_type.lower()
+                        ]
+                    cap_names = [c["name"] for c in caps if isinstance(c, dict) and c.get("name")]
+                    if not cap_names:
+                        return None
+                elif capability_type:
+                    # Filter the normalized index by type via a direct
+                    # query — avoids loading the full JSON payload.
+                    rows = conn.execute(
+                        "SELECT capability_name FROM node_capabilities "
+                        "WHERE node_id = ? AND LOWER(capability_type) = LOWER(?)",
+                        (node_id, capability_type),
+                    ).fetchall()
+                    cap_names = [r["capability_name"] for r in rows]
+                    if not cap_names:
+                        return None
             else:
                 cap_names = [capability]
 

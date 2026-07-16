@@ -230,6 +230,32 @@ def _schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    # Normalized capability index (T-026). The legacy ``nodes.capabilities``
+    # TEXT column keeps the full JSON payload (type, description, config,
+    # input_schema, …) for the discovery API. This table stores only the
+    # high-cardinality fields needed for efficient capability matching so
+    # the scheduler can claim stages without ``json.loads`` on every node.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS node_capabilities (
+            node_id TEXT NOT NULL,
+            capability_name TEXT NOT NULL,
+            capability_type TEXT,
+            capability_version TEXT DEFAULT '1.0.0',
+            available BOOLEAN DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (node_id, capability_name),
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_node_capabilities_name "
+        "ON node_capabilities(capability_name)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_node_capabilities_name_type "
+        "ON node_capabilities(capability_name, capability_type)"
+    )
+
 
     # --- PRESENCE ---
     conn.execute("""
@@ -389,6 +415,66 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
         )
 
+    # T-026: backfill node_capabilities from the legacy JSON column for
+    # existing databases. Runs once when the table is empty but nodes exist.
+    _migrate_node_capabilities(conn)
+
+
+def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
+    """Populate ``node_capabilities`` from ``nodes.capabilities`` JSON.
+
+    Idempotent: only inserts rows that do not already exist. Safe to run
+    on every startup.
+    """
+    import json
+
+    # Skip if the table doesn't exist yet (shouldn't happen because
+    # _schema() creates it, but guard anyway).
+    table_names = [
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    ]
+    if "node_capabilities" not in table_names:
+        return
+
+    rows = conn.execute("SELECT node_id, capabilities FROM nodes").fetchall()
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        node_id = row["node_id"]
+        try:
+            caps = json.loads(row["capabilities"]) if row["capabilities"] else []
+        except Exception:
+            caps = []
+        for cap in caps:
+            if not isinstance(cap, dict):
+                # Capability given as a plain string -> use it as the name.
+                name = str(cap)
+                cap_type = None
+                version = "1.0.0"
+                available = 1
+            else:
+                name = cap.get("name")
+                if not name:
+                    continue
+                cap_type = cap.get("type")
+                version = cap.get("version", "1.0.0")
+                available = 1 if cap.get("available", True) else 0
+            conn.execute(
+                """
+                INSERT INTO node_capabilities
+                (node_id, capability_name, capability_type, capability_version,
+                 available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(node_id, capability_name) DO UPDATE SET
+                    capability_type = excluded.capability_type,
+                    capability_version = excluded.capability_version,
+                    available = excluded.available,
+                    updated_at = excluded.updated_at
+                """,
+                (node_id, name, cap_type, version, available, now),
+            )
+
 
 def _seed_default_rbac(conn: sqlite3.Connection) -> None:
     """Seed default groups and permissions if none exist."""
@@ -505,5 +591,103 @@ def log_audit_event(
              resource_type, resource_id, safe_details, now),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Normalized capability index helpers (T-026)
+# ---------------------------------------------------------------------------
+
+
+@retry_on_locked
+def sync_node_capabilities(node_id: str, capabilities: list) -> None:
+    """Replace the ``node_capabilities`` rows for ``node_id``.
+
+    Called whenever a node's capabilities change (registration,
+    heartbeat with ``replace_capabilities``, approval, admin update).
+    The full JSON payload continues to live in ``nodes.capabilities``;
+    this helper keeps the normalized index in sync so the scheduler can
+    match stages without ``json.loads`` on every node.
+    """
+    conn = get_conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "DELETE FROM node_capabilities WHERE node_id = ?", (node_id,)
+        )
+        for cap in capabilities:
+            if isinstance(cap, dict):
+                name = cap.get("name")
+                if not name:
+                    continue
+                cap_type = cap.get("type")
+                version = cap.get("version", "1.0.0")
+                available = 1 if cap.get("available", True) else 0
+            else:
+                name = str(cap)
+                cap_type = None
+                version = "1.0.0"
+                available = 1
+            conn.execute(
+                """
+                INSERT INTO node_capabilities
+                (node_id, capability_name, capability_type, capability_version,
+                 available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (node_id, name, cap_type, version, available, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_node_capability_names(node_id: str) -> list[str]:
+    """Return the capability names advertised by ``node_id``.
+
+    Uses the normalized ``node_capabilities`` index instead of
+    ``json.loads(nodes.capabilities)``. Returns an empty list if the
+    node is unknown or has no capabilities.
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT capability_name FROM node_capabilities WHERE node_id = ?",
+            (node_id,),
+        ).fetchall()
+        return [r["capability_name"] for r in rows]
+    finally:
+        conn.close()
+
+
+def nodes_with_capability(
+    capability_name: str,
+    capability_type: Optional[str] = None,
+    statuses: tuple[str, ...] = ("approved", "online"),
+) -> list[str]:
+    """Return node_ids that advertise ``capability_name``.
+
+    Efficient indexed lookup over ``node_capabilities`` joined to
+    ``nodes``. ``statuses`` filters the node status (defaults to
+    approved/online). Used by the scheduler's ``claim_stage``.
+    """
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
+    params: list = [capability_name]
+    sql = (
+        "SELECT nc.node_id FROM node_capabilities nc "
+        "JOIN nodes n ON n.node_id = nc.node_id "
+        f"WHERE nc.capability_name = ? AND n.status IN ({placeholders})"
+    )
+    if capability_type is not None:
+        sql += " AND nc.capability_type = ?"
+        params.append(capability_type)
+    params.extend(statuses)
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return [r["node_id"] for r in rows]
     finally:
         conn.close()

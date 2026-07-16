@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, sync_node_capabilities
 from relay_server.core.node_registry import NodeRegistry
 
 class NodeExistsError(Exception):
@@ -257,15 +257,17 @@ def register_admin_node(
     capabilities: list,
 ) -> tuple[Optional[str], Optional[str]]:
     """Register an admin node using the master seed. Returns (node_id, runtime token) or (None, None)."""
+    result: tuple[Optional[str], Optional[str]] = (None, None)
+    node_id: Optional[str] = None
     conn = get_conn()
     try:
         row = conn.execute(
             "SELECT seed_hash FROM admin_seeds WHERE seed_id = ?", ("master",)
         ).fetchone()
         if not row:
-            return None, None
+            return result
         if not verify_secret(bootstrap_secret, row["seed_hash"]):
-            return None, None
+            return result
 
         node_id = _mint_node_id()
         now = _format_time(_now())
@@ -287,9 +289,17 @@ def register_admin_node(
             pending=False,
             ttl_hours=settings.token_ttl_hours,
         )
-        return node_id, token
+        result = (node_id, token)
+        return result
     finally:
         conn.close()
+        # T-026: keep the normalized capability index in sync. Done after
+        # conn.close() so sync_node_capabilities opens its own connection.
+        if node_id is not None:
+            try:
+                sync_node_capabilities(node_id, capabilities)
+            except Exception:
+                pass
 
 
 def register_pending_node(
@@ -303,6 +313,7 @@ def register_pending_node(
     Returns (node_id, temporary_token, registration_secret) or (None, None, None).
     """
     node_id = _mint_node_id()
+    created = False
     conn = get_conn()
     try:
         now = _now()
@@ -331,6 +342,7 @@ def register_pending_node(
             ),
         )
         conn.commit()
+        created = True
 
         temporary_ttl = getattr(settings, "temporary_token_ttl_hours", 24)
         token = _create_token(
@@ -352,6 +364,13 @@ def register_pending_node(
         raise NodeExistsError("node", node_id)
     finally:
         conn.close()
+        # T-026: keep the normalized capability index in sync for nodes
+        # that were actually created. Skipped on IntegrityError.
+        if created:
+            try:
+                sync_node_capabilities(node_id, capabilities)
+            except Exception:
+                pass
 
 
 def approve_node(
@@ -362,6 +381,8 @@ def approve_node(
 ) -> Optional[str]:
     """Approve a pending node and return a runtime token."""
     conn = get_conn()
+    approved = False
+    final_caps_list: list = []
     try:
         row = conn.execute(
             "SELECT node_name, role AS current_role, capabilities AS current_caps, endpoint AS current_endpoint, status "
@@ -374,7 +395,12 @@ def approve_node(
             return None
 
         final_role = role or row["current_role"]
-        final_caps = _serialize_capabilities(capabilities) if capabilities else row["current_caps"]
+        if capabilities:
+            final_caps_list = capabilities
+            final_caps = _serialize_capabilities(capabilities)
+        else:
+            final_caps_list = _parse_capabilities(row["current_caps"])
+            final_caps = row["current_caps"]
         final_endpoint = endpoint if endpoint is not None else row["current_endpoint"]
 
         now = _format_time(_now())
@@ -392,6 +418,7 @@ def approve_node(
             (node_id, "temporary"),
         )
         conn.commit()
+        approved = True
 
         return _create_token(
             node_id,
@@ -403,6 +430,13 @@ def approve_node(
         )
     finally:
         conn.close()
+        # T-026: refresh the normalized capability index so the scheduler
+        # sees the approved (possibly overridden) capabilities.
+        if approved:
+            try:
+                sync_node_capabilities(node_id, final_caps_list)
+            except Exception:
+                pass
 
 
 def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, sync_node_capabilities
 from relay_server.core.events import event_bus
 
 
@@ -57,6 +57,9 @@ def heartbeat(
     complete capability set on chaque heartbeat).
     """
     conn = get_conn()
+    merged = None
+    was_offline = False
+    first_heartbeat = False
     try:
         row = conn.execute(
             "SELECT node_id, status, available, capabilities, first_heartbeat_seen FROM nodes WHERE node_id = ?",
@@ -86,6 +89,7 @@ def heartbeat(
                 # Full replace – worker sends complete capability set
                 updates.append("capabilities = ?")
                 params.append(_serialize_capabilities(capabilities))
+                merged = capabilities
             else:
                 # Merge – update existing capabilities list
                 existing = _parse_capabilities(row["capabilities"])
@@ -96,6 +100,8 @@ def heartbeat(
                 merged = list(cap_map.values())
                 updates.append("capabilities = ?")
                 params.append(_serialize_capabilities(merged))
+        else:
+            merged = None
 
         # If the node was marked offline, bring it back online.
         was_offline = row["status"] == "offline"
@@ -114,15 +120,26 @@ def heartbeat(
         sql = f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?"
         conn.execute(sql, params)
         conn.commit()
-
-        # Publish event when node comes back from offline or on its first
-        # heartbeat after being approved.
-        if was_offline or first_heartbeat:
-            event_bus.publish_sync("node_online", {"node_id": node_id})
-
-        return True
     finally:
         conn.close()
+
+    # Keep the normalized node_capabilities index in sync (T-026).
+    # Done after conn.close() so sync_node_capabilities can open its own
+    # connection without contending for the same SQLite handle.
+    if merged is not None:
+        try:
+            sync_node_capabilities(node_id, merged)
+        except Exception:
+            # Best-effort: a stale index is self-healing on the next
+            # heartbeat; the authoritative source remains the JSON column.
+            pass
+
+    # Publish event when node comes back from offline or on its first
+    # heartbeat after being approved.
+    if was_offline or first_heartbeat:
+        event_bus.publish_sync("node_online", {"node_id": node_id})
+
+    return True
 
 
 def list_nodes(status: Optional[str] = None) -> List[Dict[str, Any]]:
