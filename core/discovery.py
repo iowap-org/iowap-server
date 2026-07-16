@@ -104,8 +104,11 @@ def heartbeat(
             merged = None
 
         # If the node was marked offline, bring it back online.
+        # Also transition from approved → online on any heartbeat so a
+        # freshly approved node doesn't stay approved forever.
         was_offline = row["status"] == "offline"
-        if was_offline:
+        is_approved = row["status"] == "approved"
+        if was_offline or is_approved:
             updates.append("status = ?")
             params.append("online")
 
