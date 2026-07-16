@@ -5,6 +5,7 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import uvicorn
 from fastapi import FastAPI, Request, status
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
 
     watchdog_task = asyncio.create_task(_heartbeat_watchdog())
     claim_watchdog_task = asyncio.create_task(_claim_ttl_watchdog())
+    token_cleanup_task = asyncio.create_task(_token_cleanup_watchdog())
     mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
     if settings.enable_mdns:
         # Start mDNS in the background so it cannot block server startup.
@@ -77,7 +79,8 @@ async def lifespan(app: FastAPI):
             mdns.stop()
         watchdog_task.cancel()
         claim_watchdog_task.cancel()
-        for task in (watchdog_task, claim_watchdog_task):
+        token_cleanup_task.cancel()
+        for task in (watchdog_task, claim_watchdog_task, token_cleanup_task):
             try:
                 await task
             except asyncio.CancelledError:
@@ -111,6 +114,29 @@ async def _heartbeat_watchdog():
         except Exception as e:
             logger.exception("Heartbeat watchdog error: %s", e)
         await asyncio.sleep(settings.heartbeat_interval_seconds)
+
+
+async def _token_cleanup_watchdog():
+    """Periodically purge expired tokens (T-027 — background cleaner)."""
+    from relay_server.core.db import get_conn
+
+    while True:
+        try:
+            conn = get_conn()
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                deleted = conn.execute(
+                    "DELETE FROM node_tokens WHERE expires_at < ?",
+                    (now,),
+                ).rowcount
+                conn.commit()
+                if deleted:
+                    logger.info("Purged %d expired token(s)", deleted)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.exception("Token cleanup watchdog error: %s", e)
+        await asyncio.sleep(3600)  # once per hour
 
 
 def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
