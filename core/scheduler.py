@@ -1,13 +1,46 @@
 """Scheduler core logic — DAG staging, capability matching, claim/complete."""
 
+import functools
 import json
 import secrets
+import sqlite3
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
 from relay_server.core.db import get_conn
 from relay_server.core.events import event_bus
+
+
+# ---------------------------------------------------------------------------
+# Retry helper for SQLite lock contention
+# ---------------------------------------------------------------------------
+
+_LOCKED_RETRIES = 5
+_LOCKED_BASE_DELAY = 0.05
+
+
+def _retry_db_write(func):
+    """Retry a DB write on ``database is locked`` with exponential backoff."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        last_error = None
+        delay = _LOCKED_BASE_DELAY
+        for attempt in range(_LOCKED_RETRIES):
+            try:
+                return func(*args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                if "database is locked" not in str(exc) and "locked" not in str(exc):
+                    raise
+                last_error = exc
+                if attempt < _LOCKED_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+        raise last_error
+
+    return wrapper
 
 
 def _now() -> datetime:
@@ -39,6 +72,7 @@ class Scheduler:
     """Task scheduler with DAG stages."""
 
     @staticmethod
+    @_retry_db_write
     def create_task(
         task_name: str,
         stages: List[Dict[str, Any]],
@@ -164,6 +198,7 @@ class Scheduler:
             conn.close()
 
     @staticmethod
+    @_retry_db_write
     def claim_stage(
         node_id: str,
         capability: Optional[str] = None,
@@ -260,6 +295,7 @@ class Scheduler:
             conn.close()
 
     @staticmethod
+    @_retry_db_write
     def complete_stage(
         stage_id: str, node_id: str, result: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
@@ -306,6 +342,7 @@ class Scheduler:
             conn.close()
 
     @staticmethod
+    @_retry_db_write
     def release_expired_claims() -> List[str]:
         """Release stages whose claim TTL expired."""
         now = _format_time(_now())

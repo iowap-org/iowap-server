@@ -1,11 +1,49 @@
 """Database layer — SQLite connection pool and core schema management."""
 
+import functools
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
 from relay_server.config import settings
+
+
+# ---------------------------------------------------------------------------
+# Retry helper for SQLite lock contention
+# ---------------------------------------------------------------------------
+
+LOCKED_RETRIES = 5
+LOCKED_BASE_DELAY = 0.05  # 50ms initial, ~1.5s total with backoff
+
+
+def retry_on_locked(func):
+    """Decorator: retry a DB write function on ``database is locked``.
+
+    Uses exponential backoff (50ms -> 100ms -> 200ms -> 400ms -> 800ms).
+    Raises the original ``sqlite3.OperationalError`` if all retries are
+    exhausted.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        last_error = None
+        delay = LOCKED_BASE_DELAY
+        for attempt in range(LOCKED_RETRIES):
+            try:
+                return func(*args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                msg = str(exc)
+                if "database is locked" not in msg and "locked" not in msg:
+                    raise
+                last_error = exc
+                if attempt < LOCKED_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+        raise last_error  # type: ignore[misc]
+
+    return wrapper
 
 
 def get_conn() -> sqlite3.Connection:
@@ -392,6 +430,7 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
         )
 
 
+@retry_on_locked
 def log_audit_event(
     actor_id: str,
     action: str,
