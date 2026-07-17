@@ -4,6 +4,7 @@ Serves selected Markdown documents from the repository as HTML under
 /relay/v2/docs/{name}. The whitelist prevents path traversal.
 """
 
+import re
 from pathlib import Path
 
 import markdown
@@ -39,6 +40,9 @@ ALLOWED_DOCS = {
     "reference-design-board": DOCS_DIR / "reference" / "design-board.md",
 }
 
+# Reverse map: absolute file path -> doc name (for link rewriting)
+_PATH_TO_DOC = {str(p.resolve()): n for n, p in ALLOWED_DOCS.items()}
+
 # Legacy short names that now resolve to the same files as their new primary
 # counterparts. They are kept so existing bookmarks, the dashboard redirect,
 # and the login-page link do not break.
@@ -66,9 +70,34 @@ def _resolve(name: str):
     return None
 
 
+def _rewrite_links(html: str, source_path: Path) -> str:
+    """Rewrite relative .md links in rendered HTML to /relay/v2/docs/{name} URLs.
+
+    Links that point to a known document in ALLOWED_DOCS are rewritten so
+    they work inside the browser. External links and links to unknown files are
+    left untouched.
+    """
+    source_dir = source_path.resolve().parent
+
+    def _replace(match: re.Match) -> str:
+        href = match.group(1)
+        # Only rewrite relative .md links
+        if not href.endswith(".md") or href.startswith(("http://", "https://", "/", "#")):
+            return match.group(0)
+        # Resolve relative to the source document's directory
+        target = (source_dir / href).resolve()
+        doc_name = _PATH_TO_DOC.get(str(target))
+        if doc_name is None:
+            return match.group(0)  # leave unknown links as-is
+        return f'href="/relay/v2/docs/{doc_name}"'
+
+    return re.sub(r'href="([^"]+)"', _replace, html)
+
+
 def _render_markdown(path: Path) -> str:
     md = path.read_text(encoding="utf-8")
     html = markdown.markdown(md, extensions=["fenced_code", "tables"])
+    html = _rewrite_links(html, path)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,8 +121,7 @@ def _render_markdown(path: Path) -> str:
 <body>
   {html}
 </body>
-</html>
-""".strip()
+</html>""".strip()
 
 
 @router.get("", include_in_schema=False)
