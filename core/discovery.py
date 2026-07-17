@@ -298,11 +298,20 @@ def get_capabilities(
 
             # If this node is not available,
             # override the availability of its caps
+            # BUT only if no OTHER node still has the cap available.
             if not node_available:
                 for c in caps:
                     cname = c.get("name", "")
                     if cname in cap_map:
-                        cap_map[cname]["available"] = False
+                        # Check if any other node in cap_map[cname]["nodes"]
+                        # still has available=True
+                        other_available = any(
+                            n["available"]
+                            for n in cap_map[cname]["nodes"]
+                            if n["node_id"] != row["node_id"]
+                        )
+                        if not other_available:
+                            cap_map[cname]["available"] = False
 
         return list(cap_map.values())
 
