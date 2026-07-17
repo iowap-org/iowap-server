@@ -24,6 +24,7 @@ ALLOWED_DOCS = {
     "agent-readme": PROJECT_ROOT / "AGENT_README.md",
     # concepts
     "concepts": DOCS_DIR / "concepts.md",
+    "getting-started": DOCS_DIR / "getting-started.md",
     # server
     "server-setup": DOCS_DIR / "server" / "setup.md",
     "server-admin": DOCS_DIR / "server" / "admin.md",
