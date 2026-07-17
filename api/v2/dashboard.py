@@ -135,8 +135,8 @@ async def dashboard_login_page() -> FileResponse:
 
 @router.get("/agent-readme", include_in_schema=False)
 async def dashboard_agent_readme():
-    """Redirect to the rendered node-readme document."""
-    return RedirectResponse("/relay/v2/docs/node-readme", status_code=status.HTTP_303_SEE_OTHER)
+    """Redirect to the rendered node setup document."""
+    return RedirectResponse("/relay/v2/docs/node-setup", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/static/{filename}", include_in_schema=False)

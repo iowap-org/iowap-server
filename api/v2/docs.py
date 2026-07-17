@@ -15,23 +15,54 @@ router = APIRouter()
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 DOCS_DIR = PROJECT_ROOT / "docs"
 
+# Primary public documents, keyed by their stable short name. The names mirror
+# the layout under docs/: <area>/<file>. Backward-compatibility aliases below
+# keep older bookmarks and links working.
 ALLOWED_DOCS = {
     "readme": PROJECT_ROOT / "README.md",
     "changelog": PROJECT_ROOT / "CHANGELOG.md",
     "agent-readme": PROJECT_ROOT / "AGENT_README.md",
-    "node-readme": DOCS_DIR / "node-readme.md",
-    "token-concept": DOCS_DIR / "token-concept.md",
-    "dashboard": DOCS_DIR / "dashboard.md",
-    "setup": DOCS_DIR / "setup.md",
-    "nodes-design": DOCS_DIR / "nodes-design.md",
-    "design-board": DOCS_DIR / "design-board.md",
-    "token-lifecycle": DOCS_DIR / "node-operator" / "token-lifecycle.md",
-    "capabilities": DOCS_DIR / "node-operator" / "capabilities.md",
-    "proxmox-worker-setup": DOCS_DIR / "node-operator" / "proxmox-worker-setup.md",
-    "admin-setup": DOCS_DIR / "admin" / "setup.md",
-    "adr-001-node-id-schema": DOCS_DIR / "adr" / "adr-001-node-id-schema.md",
-    "adr-002-bootstrap-and-recovery": DOCS_DIR / "adr" / "adr-002-bootstrap-and-recovery.md",
+    # concepts
+    "concepts": DOCS_DIR / "concepts.md",
+    # server
+    "server-setup": DOCS_DIR / "server" / "setup.md",
+    "server-admin": DOCS_DIR / "server" / "admin.md",
+    "server-dashboard": DOCS_DIR / "server" / "dashboard.md",
+    # node
+    "node-setup": DOCS_DIR / "node" / "setup.md",
+    "node-cli-reference": DOCS_DIR / "node" / "cli-reference.md",
+    "node-capabilities": DOCS_DIR / "node" / "capabilities.md",
+    "node-token-lifecycle": DOCS_DIR / "node" / "token-lifecycle.md",
+    # reference
+    "reference-api": DOCS_DIR / "reference" / "api.md",
+    "reference-design-board": DOCS_DIR / "reference" / "design-board.md",
 }
+
+# Legacy short names that now resolve to the same files as their new primary
+# counterparts. They are kept so existing bookmarks, the dashboard redirect,
+# and the login-page link do not break.
+_LEGACY_ALIASES = {
+    "setup": "server-setup",
+    "admin-setup": "server-admin",
+    "dashboard": "server-dashboard",
+    "node-readme": "node-setup",
+    "nodes-design": "concepts",
+    "token-concept": "concepts",
+    "token-lifecycle": "node-token-lifecycle",
+    "capabilities": "node-capabilities",
+    "design-board": "reference-design-board",
+    "proxmox-worker-setup": "node-setup",
+}
+
+
+def _resolve(name: str):
+    """Return the path for a doc name, resolving legacy aliases."""
+    if name in ALLOWED_DOCS:
+        return ALLOWED_DOCS[name]
+    alias = _LEGACY_ALIASES.get(name)
+    if alias is not None:
+        return ALLOWED_DOCS.get(alias)
+    return None
 
 
 def _render_markdown(path: Path) -> str:
@@ -83,9 +114,9 @@ async def docs_page(doc_name: str):
     """Render a public Markdown document as HTML.
 
     The whitelist maps short names to files inside the repository. Unknown
-    names return 404.
+    names return 404. Legacy names are resolved to their current files.
     """
-    path = ALLOWED_DOCS.get(doc_name)
+    path = _resolve(doc_name)
     if not path or not path.exists():
         raise HTTPException(status_code=404, detail="Document not found")
     content = _render_markdown(path)
