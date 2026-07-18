@@ -444,6 +444,33 @@ async def dashboard_capabilities(
     return {"capabilities": caps}
 
 
+@router.post("/api/task-submit")
+async def dashboard_task_submit(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Submit a task from a capability dashboard page (session-cookie auth).
+
+    Expects JSON body::
+
+        {"capability": "image.generate.mflux", "payload": {"prompt": "..."}}
+
+    Returns the same response as ``POST /relay/v2/scheduler/task-simple``.
+    """
+    check_dashboard_permission(ctx, "dashboard:view")
+    body = await request.json()
+    capability = body.get("capability")
+    payload = body.get("payload", {})
+    if not capability:
+        raise HTTPException(status_code=400, detail="capability is required")
+
+    from relay_server.api.v2.scheduler import scheduler_create_simple_task
+    from relay_server.models import SimpleTaskRequest
+
+    task_req = SimpleTaskRequest(capability=capability, payload=payload)
+    return await scheduler_create_simple_task(task_req, ctx)
+
+
 # --- RBAC MANAGEMENT ---
 
 
