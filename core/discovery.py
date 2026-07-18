@@ -379,7 +379,6 @@ def _node_row_to_dict(row: Any) -> Dict[str, Any]:
     return {
         "node_id": row["node_id"],
         "node_name": row["node_name"],
-        "endpoint": row["endpoint"],
         "capabilities": _parse_capabilities(row["capabilities"]),
         "load": row["load"],
         "queue_depth": row["queue_depth"],
