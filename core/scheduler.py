@@ -278,6 +278,15 @@ class Scheduler:
                     if completed != len(deps):
                         continue
 
+                # Wenn der Task einen owner_node_id hat, darf nur dieser
+                # Node die Stage claimen. Andere Nodes überspringen sie.
+                task_owner = conn.execute(
+                    "SELECT owner_node_id FROM tasks WHERE task_id = ?",
+                    (row["task_id"],),
+                ).fetchone()[0]
+                if task_owner and task_owner != node_id:
+                    continue
+
                 # Claim this stage atomically.
                 stage_id = row["stage_id"]
                 conn.execute(

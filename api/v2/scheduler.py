@@ -36,7 +36,7 @@ async def scheduler_create_task(
         task_name=body.task_name,
         stages=stages,
         priority=body.priority,
-        owner_node_id=body.owner_node_id or ctx.node_id,
+        owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
     )
     task = Scheduler.get_task(result["task_id"])
@@ -204,7 +204,7 @@ async def scheduler_create_simple_task(
         task_name=task_name,
         stages=stages,
         priority=body.priority,
-        owner_node_id=body.owner_node_id or ctx.node_id,
+        owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
     )
 
