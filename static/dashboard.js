@@ -64,8 +64,45 @@ function copyToken() {
 function showTab(mode) {
   document.getElementById('viewDashboard').classList.toggle('hidden', mode !== 'dashboard');
   document.getElementById('viewAdmin').classList.toggle('hidden', mode !== 'admin');
+  document.getElementById('viewCapabilities').classList.toggle('hidden', mode !== 'capabilities');
   document.getElementById('tabDashboard').classList.toggle('active', mode === 'dashboard');
   document.getElementById('tabAdmin').classList.toggle('active', mode === 'admin');
+  document.getElementById('tabCapabilities').classList.toggle('active', mode === 'capabilities');
+  if (mode === 'capabilities') loadCapabilities();
+}
+
+function showCapabilityPage(name) {
+  document.getElementById('viewCapabilities').classList.add('hidden');
+  document.getElementById('capabilityFrame').classList.remove('hidden');
+  document.getElementById('capabilityIframe').src =
+    `/relay/v2/capabilities/${encodeURIComponent(name)}/dashboard-page`;
+}
+
+function backToCapabilityCards() {
+  document.getElementById('capabilityFrame').classList.add('hidden');
+  document.getElementById('viewCapabilities').classList.remove('hidden');
+  document.getElementById('capabilityIframe').src = 'about:blank';
+}
+
+async function loadCapabilities() {
+  try {
+    const data = await fetchJson('/relay/v2/discovery/capabilities?available=true');
+    const caps = (data.capabilities || []).filter(c => c.dashboard_page);
+    const container = document.getElementById('capabilityCards');
+    if (!caps.length) {
+      container.innerHTML = '<p style="color:var(--muted);">No capabilities with dashboard pages.</p>';
+      return;
+    }
+    container.innerHTML = caps.map(c => `
+      <div class="card cap-card" style="cursor:pointer;" data-cap-name="${c.name}">
+        <h2 style="font-size:1.1rem; color:var(--text); text-transform:none; letter-spacing:0;">${c.name}</h2>
+        <p style="color:var(--muted); font-size:.85rem; margin:.25rem 0 .5rem;">${c.description || 'No description'}</p>
+        <span class="tag">${c.type || 'unknown'}</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('loadCapabilities failed:', err);
+  }
 }
 
 function can(perm) {
@@ -429,6 +466,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const editBtn = e.target.closest('.edit-perms-btn');
         if (editBtn) { editGroupPerms(editBtn.dataset.groupId, editBtn.dataset.groupName); return; }
     });
+
+    // Capability cards (Event Delegation)
+    document.addEventListener('click', (e) => {
+        const card = e.target.closest('.cap-card');
+        if (card && card.dataset.capName) { showCapabilityPage(card.dataset.capName); return; }
+    });
+
+    // Capability back button
+    document.getElementById('btnBackToCaps')?.addEventListener('click', backToCapabilityCards);
 
     // Initial load
     loadMe().then(() => { loadAll(); loadAdmin(); });

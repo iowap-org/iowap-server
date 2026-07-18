@@ -237,6 +237,7 @@ class DiscoveryCapability(BaseModel):
     version: str = "1.0.0"
     available: bool = True
     input_schema: Optional[dict[str, Any]] = None
+    dashboard_page: bool = False
     nodes: list[DiscoveryNode] = Field(default_factory=list)
 
 
@@ -255,6 +256,7 @@ class DiscoveryDetailResponse(BaseModel):
     version: str
     available: bool
     input_schema: Optional[dict[str, Any]] = None
+    dashboard_page: bool = False
     nodes: list[DiscoveryNode]
 
 
@@ -305,6 +307,7 @@ class CapabilityStatus(BaseModel):
     name: str
     version: str = "1.0.0"
     available: Optional[bool] = None
+    dashboard_page: bool = False
 
     @model_validator(mode="before")
     @classmethod

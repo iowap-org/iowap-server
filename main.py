@@ -40,6 +40,26 @@ _SECURITY_HEADERS = {
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
 
+# Relaxed headers for capability dashboard pages — these are meant to be
+# embedded in an <iframe> on the dashboard, so framing must be allowed
+# same-origin. The page content itself is operator-supplied HTML.
+_CAPABILITY_PAGE_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "img-src 'self' data:; "
+        "frame-ancestors 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    ),
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -160,7 +180,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 @app.middleware("http")
 async def _security_headers_middleware(request, call_next):
     response = await call_next(request)
-    for name, value in _SECURITY_HEADERS.items():
+    path = request.url.path
+    if path.startswith("/relay/v2/capabilities/") and path.endswith("/dashboard-page"):
+        headers = _CAPABILITY_PAGE_HEADERS
+    else:
+        headers = _SECURITY_HEADERS
+    for name, value in headers.items():
         response.headers[name] = value
     return response
 

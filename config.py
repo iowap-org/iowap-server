@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     # Capabilities
     capabilities_config_path: Path = Path.home() / ".relay" / "capabilities.yaml"
+    capability_pages_dir: Path = Path.home() / ".relay" / "capability-pages"
 
     class Config:
         env_prefix = "RELAY_"
@@ -89,6 +90,7 @@ def _apply_yaml_overrides(base: Settings, path: Optional[Path]) -> Settings:
         "chunked_uploads_dir",
         "static_dir",
         "capabilities_config_path",
+        "capability_pages_dir",
     ]:
         if key in yaml_data:
             yaml_data[key] = _coerce_path(yaml_data[key])

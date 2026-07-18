@@ -283,6 +283,7 @@ def get_capabilities(
                         "version": cap.get("version", "1.0.0"),
                         "available": node_available,
                         "input_schema": cap.get("input"),
+                        "dashboard_page": bool(cap.get("dashboard_page", False)),
                         "nodes": [],
                     }
 
