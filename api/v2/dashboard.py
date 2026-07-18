@@ -420,6 +420,19 @@ async def dashboard_recent_events(
     return {"events": event_bus.recent(limit=limit)}
 
 
+@router.get("/api/capabilities")
+async def dashboard_capabilities(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Return capabilities with dashboard pages (session-cookie auth)."""
+    check_dashboard_permission(ctx, "dashboard:view")
+    from relay_server.core.discovery import get_capabilities
+
+    caps = get_capabilities(available_only=True)
+    return {"capabilities": caps}
+
+
 # --- RBAC MANAGEMENT ---
 
 

@@ -86,7 +86,7 @@ function backToCapabilityCards() {
 
 async function loadCapabilities() {
   try {
-    const data = await fetchJson('/relay/v2/discovery/capabilities?available=true');
+    const data = await fetchJson('/relay/v2/dashboard/api/capabilities');
     const caps = (data.capabilities || []).filter(c => c.dashboard_page);
     const container = document.getElementById('capabilityCards');
     if (!caps.length) {
