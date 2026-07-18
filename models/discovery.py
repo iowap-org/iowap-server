@@ -32,7 +32,7 @@ class DiscoveryCapability(BaseModel):
     """A capability with all nodes that offer it."""
 
     name: str
-    type: str  # ai, tool, script, workflow, resource
+    type: Optional[str] = None
     description: str = ""
     version: str = "1.0.0"
     available: bool = True
