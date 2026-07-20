@@ -16,7 +16,7 @@ class Capability(BaseModel):
 
     name: str
     type: Optional[str] = None  # ai | tool | script | workflow | resource
-    description: str = ""
+    description: Optional[str] = None
     version: str = "1.0.0"
     available: bool | None = None
     input_schema: Optional[dict[str, Any]] = Field(
@@ -255,7 +255,7 @@ class DiscoveryCapability(BaseModel):
 
     name: str
     type: Optional[str] = None
-    description: str = ""
+    description: Optional[str] = None
     version: str = "1.0.0"
     available: bool = True
     input_schema: Optional[dict[str, Any]] = None
