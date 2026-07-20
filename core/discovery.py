@@ -225,6 +225,15 @@ def get_capabilities(
     ``config_filter`` allows filtering by config values, e.g.
     ``{"region": "eu-west"}`` – only nodes are returned
     whose capability config contains all the specified key-value pairs.
+
+    T-058: The authoritative source is the normalized ``node_capabilities``
+    index, which is rebuilt from scratch (DELETE + INSERT) on every
+    heartbeat with ``replace_capabilities=True``. Stale entries that exist
+    only in the legacy ``nodes.capabilities`` JSON column but were never
+    confirmed by a heartbeat are therefore no longer surfaced. The JSON
+    column is only consulted as a fallback to recover fields not stored
+    in the index (``config``, ``dashboard_page``) and to cover nodes that
+    have not yet been synced into ``node_capabilities``.
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
@@ -245,8 +254,53 @@ def get_capabilities(
         cap_map: dict[str, dict] = {}
 
         for row in rows:
-            caps = _parse_capabilities(row["capabilities"])
             node_available = bool(row["available"])
+
+            # T-058: read from the normalized node_capabilities index,
+            # which only contains capabilities confirmed by a heartbeat
+            # (sync_node_capabilities does DELETE+INSERT on every replace).
+            nc_rows = conn.execute(
+                "SELECT capability_name, capability_type, capability_version, "
+                "description, input_schema, available "
+                "FROM node_capabilities WHERE node_id = ?",
+                (row["node_id"],),
+            ).fetchall()
+
+            if nc_rows:
+                # Index is authoritative – build cap dicts from it, then
+                # enrich with config/dashboard_page from the legacy JSON
+                # column (these fields are not stored in node_capabilities).
+                legacy_by_name = {
+                    c.get("name"): c
+                    for c in _parse_capabilities(row["capabilities"])
+                    if isinstance(c, dict) and c.get("name")
+                }
+                caps = []
+                for nc in nc_rows:
+                    legacy = legacy_by_name.get(nc["capability_name"], {})
+                    schema = None
+                    schema_raw = nc["input_schema"]
+                    if schema_raw:
+                        try:
+                            schema = json.loads(schema_raw)
+                        except Exception:
+                            schema = None
+                    caps.append({
+                        "name": nc["capability_name"],
+                        "type": nc["capability_type"] or "",
+                        "version": nc["capability_version"] or "1.0.0",
+                        "description": nc["description"] or "",
+                        "available": bool(nc["available"]),
+                        "input_schema": schema,
+                        "config": legacy.get("config", {}),
+                        "dashboard_page": bool(legacy.get("dashboard_page", False)),
+                    })
+            else:
+                # Fallback: node has never been heartbeated into the index
+                # (e.g. freshly registered / migrated node). Use the JSON
+                # column so the capability is not invisible until the next
+                # heartbeat arrives.
+                caps = _parse_capabilities(row["capabilities"])
 
             for cap in caps:
                 name: str = cap.get("name", "")
