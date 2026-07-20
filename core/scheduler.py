@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn, get_node_capability_names
+from relay_server.core.db import get_conn, get_capability_details, get_node_capability_names
 from relay_server.core.events import event_bus
 
 
@@ -177,7 +177,19 @@ class Scheduler:
                 "SELECT * FROM task_stages WHERE task_id = ? ORDER BY sequence ASC",
                 (task_id,),
             ).fetchall()
-            task["stages"] = [_stage_row_to_dict(r) for r in stage_rows]
+            task["stages"] = []
+            for r in stage_rows:
+                stage = _stage_row_to_dict(r)
+                # T-053: resolve capability_details for this stage. We
+                # prefer the claiming node's row (if claimed) so the
+                # description/schema matches the node actually working
+                # on it; otherwise fall back to any node advertising
+                # the capability.
+                claimed_by = r["claimed_by"] if r["claimed_by"] else None
+                cap_details = get_capability_details(r["capability"], node_id=claimed_by)
+                if cap_details is not None:
+                    stage["capability_details"] = cap_details
+                task["stages"].append(stage)
 
             artifact_rows = conn.execute(
                 "SELECT artifact_id, name, mime_type, size_bytes, created_by FROM artifacts WHERE task_id = ?",
@@ -192,6 +204,22 @@ class Scheduler:
                     "created_by": r["created_by"],
                 }
                 for r in artifact_rows
+            ]
+
+            # T-052: load notes attached to the task (mini-chat).
+            note_rows = conn.execute(
+                "SELECT id, node_id, message, created_at FROM task_notes "
+                "WHERE task_id = ? ORDER BY created_at ASC",
+                (task_id,),
+            ).fetchall()
+            task["notes"] = [
+                {
+                    "id": r["id"],
+                    "node_id": r["node_id"],
+                    "message": r["message"],
+                    "created_at": r["created_at"],
+                }
+                for r in note_rows
             ]
             return task
         finally:
@@ -311,13 +339,54 @@ class Scheduler:
                     "stage_claimed",
                     {"task_id": row["task_id"], "stage_id": stage_id, "node_id": node_id},
                 )
-                return _stage_row_to_dict(
+                stage_dict = _stage_row_to_dict(
                     conn.execute(
                         "SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,)
                     ).fetchone()
                 )
+                # T-053: attach resolved capability_details so the
+                # claiming node sees the description / input_schema of
+                # the capability it just claimed, without a second
+                # round-trip to the discovery API.
+                cap_details = get_capability_details(row["capability"], node_id=node_id)
+                if cap_details is not None:
+                    stage_dict["capability_details"] = cap_details
+                return stage_dict
 
             return None
+        finally:
+            conn.close()
+
+    @staticmethod
+    @_retry_db_write
+    def add_note(task_id: str, node_id: str, message: str) -> Optional[Dict[str, Any]]:
+        """Append a task note (T-052 mini-chat between nodes).
+
+        Returns ``{"id", "task_id", "node_id", "message", "created_at"}``
+        on success, or ``None`` when the task does not exist.
+        """
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if not row:
+                return None
+            now = _format_time(_now())
+            cur = conn.execute(
+                "INSERT INTO task_notes (task_id, node_id, message, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (task_id, node_id, message, now),
+            )
+            conn.commit()
+            note_id = cur.lastrowid
+            return {
+                "id": note_id,
+                "task_id": task_id,
+                "node_id": node_id,
+                "message": message,
+                "created_at": now,
+            }
         finally:
             conn.close()
 

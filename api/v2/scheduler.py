@@ -14,6 +14,8 @@ from relay_server.models import (
     ClaimRequest,
     ClaimResponse,
     CompleteRequest,
+    NoteRequest,
+    NoteResponse,
     SimpleTaskRequest,
     SimpleTaskResponse,
     StageSummary,
@@ -65,6 +67,24 @@ async def scheduler_get_task(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return _task_to_view(task)
+
+
+@router.post("/tasks/{task_id}/notes")
+async def scheduler_add_note(
+    task_id: str,
+    body: NoteRequest,
+    ctx: AuthContext = Depends(get_approved_context),
+):
+    """Append a free-form note to a task (T-052 mini-chat between nodes).
+
+    Any approved node can add a note; the note is visible to every node
+    that subsequently queries the task via ``GET /tasks/{task_id}``.
+    Returns ``404`` when the task does not exist.
+    """
+    result = Scheduler.add_note(task_id=task_id, node_id=ctx.node_id, message=body.message)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return result
 
 
 @router.post("/claim", response_model=ClaimResponse)
@@ -159,6 +179,7 @@ def _task_to_view(task: Dict[str, Any]) -> TaskView:
         task=TaskSummary(**task),
         stages=[StageSummary(**s) for s in task["stages"]],
         artifacts=task["artifacts"],
+        notes=[NoteResponse(**n) for n in task.get("notes", [])],
     )
 
 

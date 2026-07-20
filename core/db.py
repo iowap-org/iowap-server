@@ -1,6 +1,7 @@
 """Database layer — SQLite connection pool and core schema management."""
 
 import functools
+import json
 import re
 import secrets
 import sqlite3
@@ -241,6 +242,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             capability_name TEXT NOT NULL,
             capability_type TEXT,
             capability_version TEXT DEFAULT '1.0.0',
+            description TEXT,
+            input_schema TEXT,
             available BOOLEAN DEFAULT 1,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (node_id, capability_name),
@@ -326,6 +329,24 @@ def _schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (created_by) REFERENCES nodes(node_id)
         )
     """)
+
+    # --- TASK NOTES (T-052) ---
+    # Nodes can leave free-form text notes on a task while it is being
+    # worked on (mini-chat between collaborating nodes). Notes are
+    # ordered by created_at; deleting a task cascades to its notes.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS task_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
+    )
 
     # --- AUDIT LOGGING ---
     conn.execute("""
@@ -415,6 +436,36 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
         )
 
+    # T-052: ensure task_notes table exists (migration for existing
+    # databases created before this table was added).
+    if "task_notes" not in table_names:
+        conn.execute("""
+            CREATE TABLE task_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
+        )
+
+    # T-053: ensure node_capabilities has the description and input_schema
+    # columns (migration for existing databases).
+    if "node_capabilities" in table_names:
+        nc_cols = [r[1] for r in conn.execute("PRAGMA table_info(node_capabilities)").fetchall()]
+        if "description" not in nc_cols:
+            conn.execute(
+                "ALTER TABLE node_capabilities ADD COLUMN description TEXT"
+            )
+        if "input_schema" not in nc_cols:
+            conn.execute(
+                "ALTER TABLE node_capabilities ADD COLUMN input_schema TEXT"
+            )
+
     # T-026: backfill node_capabilities from the legacy JSON column for
     # existing databases. Runs once when the table is empty but nodes exist.
     _migrate_node_capabilities(conn)
@@ -453,6 +504,8 @@ def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
                 cap_type = None
                 version = "1.0.0"
                 available = 1
+                description = None
+                input_schema = None
             else:
                 name = cap.get("name")
                 if not name:
@@ -460,19 +513,24 @@ def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
                 cap_type = cap.get("type")
                 version = cap.get("version", "1.0.0")
                 available = 1 if cap.get("available", True) else 0
+                description = cap.get("description")
+                schema = cap.get("input_schema")
+                input_schema = json.dumps(schema) if schema is not None else None
             conn.execute(
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                 description, input_schema, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(node_id, capability_name) DO UPDATE SET
                     capability_type = excluded.capability_type,
                     capability_version = excluded.capability_version,
+                    description = excluded.description,
+                    input_schema = excluded.input_schema,
                     available = excluded.available,
                     updated_at = excluded.updated_at
                 """,
-                (node_id, name, cap_type, version, available, now),
+                (node_id, name, cap_type, version, description, input_schema, available, now),
             )
 
 
@@ -624,19 +682,24 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 cap_type = cap.get("type")
                 version = cap.get("version", "1.0.0")
                 available = 1 if cap.get("available", True) else 0
+                description = cap.get("description")
+                schema = cap.get("input_schema")
+                input_schema = json.dumps(schema) if schema is not None else None
             else:
                 name = str(cap)
                 cap_type = None
                 version = "1.0.0"
                 available = 1
+                description = None
+                input_schema = None
             conn.execute(
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                 description, input_schema, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (node_id, name, cap_type, version, available, now),
+                (node_id, name, cap_type, version, description, input_schema, available, now),
             )
         conn.commit()
     finally:
@@ -689,5 +752,54 @@ def nodes_with_capability(
     try:
         rows = conn.execute(sql, params).fetchall()
         return [r["node_id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def get_capability_details(
+    capability_name: str,
+    node_id: Optional[str] = None,
+) -> Optional[dict]:
+    """Resolve the metadata for a single capability.
+
+    Looks up ``description``, ``type`` and ``input_schema`` for the given
+    capability name. When ``node_id`` is given the lookup is restricted
+    to that node's row, otherwise the first row advertising the
+    capability is used.
+
+    Returns ``None`` when the capability is unknown. ``input_schema`` is
+    parsed from JSON; if parsing fails it is returned as ``None``.
+    """
+    import json as _json
+
+    if node_id is not None:
+        sql = (
+            "SELECT capability_name, capability_type, description, input_schema "
+            "FROM node_capabilities WHERE node_id = ? AND capability_name = ?"
+        )
+        params: tuple = (node_id, capability_name)
+    else:
+        sql = (
+            "SELECT capability_name, capability_type, description, input_schema "
+            "FROM node_capabilities WHERE capability_name = ? "
+            "ORDER BY description DESC, input_schema DESC LIMIT 1"
+        )
+        params = (capability_name,)
+    conn = get_conn()
+    try:
+        row = conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        schema_raw = row["input_schema"]
+        try:
+            schema = _json.loads(schema_raw) if schema_raw else None
+        except Exception:
+            schema = None
+        return {
+            "name": row["capability_name"],
+            "type": row["capability_type"],
+            "description": row["description"] or "",
+            "input_schema": schema,
+        }
     finally:
         conn.close()

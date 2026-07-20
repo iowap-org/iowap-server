@@ -100,6 +100,12 @@ class StageSummary(BaseModel):
     completed_at: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
     result: Optional[Dict[str, Any]] = None
+    capability_details: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Resolved capability metadata (name, type, description, input_schema) "
+                    "advertised by the node that claimed (or can claim) this stage. "
+                    "Populated by the scheduler on claim and task-view responses.",
+    )
 
 
 class ArtifactReference(BaseModel):
@@ -110,14 +116,25 @@ class ArtifactReference(BaseModel):
     created_by: Optional[str] = None
 
 
+class NoteResponse(BaseModel):
+    """A single task note (T-052 mini-chat between collaborating nodes)."""
+
+    id: int
+    node_id: str
+    message: str
+    created_at: str
+
+
 class TaskView(BaseModel):
     task: TaskSummary
     stages: List[StageSummary]
     artifacts: List[ArtifactReference]
+    notes: List[NoteResponse] = Field(default_factory=list)
 
 
 class ClaimRequest(BaseModel):
     capability: Optional[str] = None
+    capability_type: Optional[str] = None  # Filter: only capabilities of this type
 
 
 class ClaimResponse(BaseModel):
@@ -128,6 +145,12 @@ class ClaimResponse(BaseModel):
 class CompleteRequest(BaseModel):
     result: Optional[Dict[str, Any]] = None
     artifacts: Optional[List[str]] = None
+
+
+class NoteRequest(BaseModel):
+    """Body for POST /relay/v2/scheduler/tasks/{task_id}/notes (T-052)."""
+
+    message: str = Field(..., min_length=1, max_length=2000)
 
 
 class ArtifactUploadResponse(BaseModel):
