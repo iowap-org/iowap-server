@@ -273,8 +273,8 @@ class DiscoveryDetailResponse(BaseModel):
     """Response for GET /discovery/capabilities/{name}."""
 
     name: str
-    type: str
-    description: str
+    type: Optional[str] = None
+    description: Optional[str] = None
     version: str
     available: bool
     input_schema: Optional[dict[str, Any]] = None
