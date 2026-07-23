@@ -174,6 +174,12 @@ class StageSummary(BaseModel):
     completed_at: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
     result: Optional[Dict[str, Any]] = None
+    retry_count: int = Field(
+        0,
+        description="How many times this stage has been released back to pending "
+                    "after a failed/expired claim (T-060). Once it exceeds "
+                    "max_retries the stage is failed permanently.",
+    )
     capability_details: Optional[Dict[str, Any]] = Field(
         None,
         description="Resolved capability metadata (name, type, description, input_schema) "

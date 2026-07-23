@@ -309,6 +309,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             completed_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            retry_count INTEGER DEFAULT 0,
             FOREIGN KEY (task_id) REFERENCES tasks(task_id),
             FOREIGN KEY (claimed_by) REFERENCES nodes(node_id)
         )
@@ -451,6 +452,16 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         """)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
+        )
+
+    # T-060: ensure task_stages has the retry_count column (migration for
+    # existing databases). The scheduler increments this counter each
+    # time a claim is released back to pending, and fails the stage once
+    # it exceeds settings.max_retries.
+    ts_cols = [r[1] for r in conn.execute("PRAGMA table_info(task_stages)").fetchall()]
+    if "retry_count" not in ts_cols:
+        conn.execute(
+            "ALTER TABLE task_stages ADD COLUMN retry_count INTEGER DEFAULT 0"
         )
 
     # T-053: ensure node_capabilities has the description and input_schema

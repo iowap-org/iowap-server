@@ -439,27 +439,80 @@ class Scheduler:
 
     @staticmethod
     @_retry_db_write
-    def release_expired_claims() -> List[str]:
-        """Release stages whose claim TTL expired."""
+    def release_or_fail_claims() -> Dict[str, Any]:
+        """Release or fail stages whose claim TTL expired (T-060).
+
+        For each expired claim the stage's ``retry_count`` is
+        incremented. When it exceeds ``settings.max_retries`` the stage
+        is marked ``failed`` (and the task is failed too if all of its
+        stages are failed) instead of being put back to ``pending``,
+        which prevents the daemon from reclaiming the same stage forever
+        and driving the server into RAM overflow.
+
+        Returns a dict with the stage ids that were released back to
+        ``pending`` (``released``), failed (``failed``) and the task ids
+        that were failed as a consequence (``tasks_failed``).
+        """
         now = _format_time(_now())
         conn = get_conn()
         try:
             rows = conn.execute(
-                "SELECT stage_id FROM task_stages WHERE status = 'claimed' AND claim_expires_at < ?",
+                "SELECT stage_id, task_id, retry_count FROM task_stages "
+                "WHERE status = 'claimed' AND claim_expires_at < ?",
                 (now,),
             ).fetchall()
-            released = [r["stage_id"] for r in rows]
-            if released:
-                conn.execute(
-                    """
-                    UPDATE task_stages
-                    SET status = 'pending', claimed_by = NULL, claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
-                    WHERE stage_id IN ({})
-                    """.format(",".join("?" for _ in released)),
-                    [now] + released,
-                )
-                conn.commit()
-            return released
+            if not rows:
+                return {"released": [], "failed": [], "tasks_failed": []}
+
+            released: List[str] = []
+            failed_stage_ids: List[str] = []
+            affected_tasks: set[str] = set()
+
+            for row in rows:
+                stage_id = row["stage_id"]
+                task_id = row["task_id"]
+                retry_count = int(row["retry_count"] or 0) + 1
+                if retry_count > settings.max_retries:
+                    # Retry budget exhausted → fail the stage permanently.
+                    conn.execute(
+                        """
+                        UPDATE task_stages
+                        SET status = 'failed', retry_count = ?, claimed_by = NULL,
+                            claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
+                        WHERE stage_id = ?
+                        """,
+                        (retry_count, now, stage_id),
+                    )
+                    failed_stage_ids.append(stage_id)
+                    affected_tasks.add(task_id)
+                else:
+                    # Still within the retry budget → put back to pending.
+                    conn.execute(
+                        """
+                        UPDATE task_stages
+                        SET status = 'pending', retry_count = ?, claimed_by = NULL,
+                            claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
+                        WHERE stage_id = ?
+                        """,
+                        (retry_count, now, stage_id),
+                    )
+                    released.append(stage_id)
+
+            tasks_failed = _fail_tasks_if_all_stages_done(
+                conn, affected_tasks, now, terminal_stage_status=("failed",)
+            )
+            conn.commit()
+
+            for stage_id in failed_stage_ids:
+                event_bus.publish_sync("stage_failed", {"stage_id": stage_id})
+            for task_id in tasks_failed:
+                event_bus.publish_sync("task_failed", {"task_id": task_id})
+
+            return {
+                "released": released,
+                "failed": failed_stage_ids,
+                "tasks_failed": tasks_failed,
+            }
         finally:
             conn.close()
 
@@ -541,6 +594,42 @@ class Scheduler:
             conn.close()
 
 
+def _fail_tasks_if_all_stages_done(
+    conn: sqlite3.Connection,
+    task_ids: "set[str]",
+    now: str,
+    terminal_stage_status: tuple[str, ...],
+) -> List[str]:
+    """Mark tasks as ``failed`` when every stage is in a terminal state.
+
+    Used by the retry / offline failure paths (T-060, T-061) to fail a
+    task as soon as all of its stages have reached a terminal status.
+    ``terminal_stage_status`` is the set of stage statuses that count
+    as "done" for the purpose of this check (e.g. ``("failed",)`` or
+    ``("completed", "failed", "timed_out")``).
+
+    Returns the list of task ids that were transitioned to ``failed``.
+    The caller is responsible for committing the transaction and
+    publishing the ``task_failed`` events.
+    """
+    tasks_failed: List[str] = []
+    for task_id in task_ids:
+        placeholders = ",".join("?" for _ in terminal_stage_status)
+        remaining = conn.execute(
+            f"SELECT COUNT(*) FROM task_stages "
+            f"WHERE task_id = ? AND status NOT IN ({placeholders})",
+            (task_id, *terminal_stage_status),
+        ).fetchone()[0]
+        if remaining == 0:
+            conn.execute(
+                "UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
+                "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')",
+                (now, now, task_id),
+            )
+            tasks_failed.append(task_id)
+    return tasks_failed
+
+
 def _task_row_to_dict(row: Any) -> Dict[str, Any]:
     return {
         "task_id": row["task_id"],
@@ -573,4 +662,5 @@ def _stage_row_to_dict(row: Any) -> Dict[str, Any]:
         "result": _parse(row["result"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "retry_count": int(row["retry_count"] or 0),
     }

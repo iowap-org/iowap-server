@@ -109,21 +109,29 @@ async def lifespan(app: FastAPI):
 
 
 async def _claim_ttl_watchdog():
-    """Periodically release expired stage claims."""
+    """Periodically release or fail expired stage claims (T-060)."""
     from relay_server.core.scheduler import Scheduler
 
     while True:
         try:
-            released = await asyncio.to_thread(Scheduler.release_expired_claims)
-            if released:
-                logger.info("Released expired stage claims: %s", released)
+            result = await asyncio.to_thread(Scheduler.release_or_fail_claims)
+            if result["released"] or result["failed"]:
+                logger.info(
+                    "Claim TTL watchdog: released=%s failed=%s tasks_failed=%s",
+                    result["released"], result["failed"], result["tasks_failed"],
+                )
         except Exception as e:
             logger.exception("Claim TTL watchdog error: %s", e)
         await asyncio.sleep(settings.claim_ttl_seconds)
 
 
 async def _heartbeat_watchdog():
-    """Periodically mark nodes offline when heartbeats time out."""
+    """Periodically mark nodes offline when heartbeats time out.
+
+    T-061: nodes marked offline also have their ``claimed`` stages
+    failed by ``mark_offline_nodes`` so stages are never stuck in
+    ``claimed`` forever when a node dies.
+    """
     from relay_server.core.discovery import mark_offline_nodes
 
     while True:

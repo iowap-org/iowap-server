@@ -388,6 +388,12 @@ def mark_offline_nodes() -> List[str]:
     Admin nodes do not send heartbeats and are therefore excluded.
     Uses a re-check in the UPDATE WHERE clause to avoid TOCTOU races:
     a node that heartbeats between SELECT and UPDATE will not be marked offline.
+
+    T-061: when a node is marked offline, all of its ``claimed`` stages
+    are transitioned to ``failed`` (and the owning task is failed too
+    if every stage has reached a terminal state). This prevents stages
+    from staying ``claimed`` forever when a node dies without releasing
+    its claims.
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
@@ -412,7 +418,6 @@ def mark_offline_nodes() -> List[str]:
             """,
             [(nid, threshold) for nid in candidate_ids],
         )
-        conn.commit()
 
         # Determine which nodes were actually updated (the UPDATE may have
         # matched 0 rows if a heartbeat came in between SELECT and UPDATE).
@@ -423,8 +428,58 @@ def mark_offline_nodes() -> List[str]:
             ).fetchone()["status"] == "offline"
         ]
 
+        # T-061: fail claimed stages owned by the now-offline nodes.
+        failed_stages: list[dict] = []
+        affected_tasks: set[str] = set()
+        if offline_ids:
+            placeholders = ",".join("?" for _ in offline_ids)
+            stage_rows = conn.execute(
+                f"SELECT stage_id, task_id FROM task_stages "
+                f"WHERE status = 'claimed' AND claimed_by IN ({placeholders})",
+                offline_ids,
+            ).fetchall()
+            now = _format_time(_now())
+            for r in stage_rows:
+                conn.execute(
+                    """
+                    UPDATE task_stages
+                    SET status = 'failed', claimed_by = NULL, claimed_at = NULL,
+                        claim_expires_at = NULL, updated_at = ?
+                    WHERE stage_id = ?
+                    """,
+                    (now, r["stage_id"]),
+                )
+                failed_stages.append({"stage_id": r["stage_id"], "task_id": r["task_id"]})
+                affected_tasks.add(r["task_id"])
+
+            # Fail tasks where every stage has reached a terminal state.
+            tasks_failed: list[str] = []
+            for task_id in affected_tasks:
+                remaining = conn.execute(
+                    "SELECT COUNT(*) FROM task_stages "
+                    "WHERE task_id = ? AND status NOT IN ('completed', 'failed', 'timed_out')",
+                    (task_id,),
+                ).fetchone()[0]
+                if remaining == 0:
+                    conn.execute(
+                        "UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
+                        "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')",
+                        (now, now, task_id),
+                    )
+                    tasks_failed.append(task_id)
+
+        conn.commit()
+
         for nid in offline_ids:
             event_bus.publish_sync("node_offline", {"node_id": nid})
+        for s in failed_stages:
+            event_bus.publish_sync(
+                "stage_failed",
+                {"stage_id": s["stage_id"], "task_id": s["task_id"]},
+            )
+        for task_id in tasks_failed:
+            event_bus.publish_sync("task_failed", {"task_id": task_id})
+
         return offline_ids
     finally:
         conn.close()
