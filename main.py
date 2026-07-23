@@ -5,7 +5,6 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 import uvicorn
 from fastapi import FastAPI, Request, status
@@ -19,6 +18,7 @@ from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
 from relay_server.core.db import init_db
 from relay_server.core.events import event_bus
+from relay_server.core.maintenance import MaintenanceScheduler
 from relay_server.core.session import unsign_user_cookie
 from relay_server.core.users import list_users
 from relay_server.core.zeroconf import RelayZeroconf
@@ -85,9 +85,11 @@ async def lifespan(app: FastAPI):
             "Configure it via RELAY_SESSION_SECRET or session_secret in config.yaml."
         )
 
-    watchdog_task = asyncio.create_task(_heartbeat_watchdog())
-    claim_watchdog_task = asyncio.create_task(_claim_ttl_watchdog())
-    token_cleanup_task = asyncio.create_task(_token_cleanup_watchdog())
+    # T-050: single MaintenanceScheduler bundles every periodic watchdog.
+    maintenance = MaintenanceScheduler()
+    maintenance.register_defaults()
+    maintenance_task = asyncio.create_task(_maintenance_loop(maintenance))
+
     mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
     if settings.enable_mdns:
         # Start mDNS in the background so it cannot block server startup.
@@ -97,74 +99,55 @@ async def lifespan(app: FastAPI):
     finally:
         if settings.enable_mdns:
             mdns.stop()
-        watchdog_task.cancel()
-        claim_watchdog_task.cancel()
-        token_cleanup_task.cancel()
-        for task in (watchdog_task, claim_watchdog_task, token_cleanup_task):
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
+        # One final sweep on graceful shutdown (best effort, never raises).
+        try:
+            final = await asyncio.to_thread(maintenance.run_all)
+            for name, result in final.items():
+                if result and not (len(result) == 1 and result.get("error")):
+                    logger.info("Maintenance [%s] shutdown run: %s", name, result)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Final maintenance sweep failed: %s", e)
         logger.info("Shutting down AI-Relay-Service")
 
 
-async def _claim_ttl_watchdog():
-    """Periodically release or fail expired stage claims (T-060)."""
-    from relay_server.core.scheduler import Scheduler
+async def _maintenance_loop(maintenance: MaintenanceScheduler):
+    """Single asyncio task driving all periodic maintenance work (T-050).
 
-    while True:
-        try:
-            result = await asyncio.to_thread(Scheduler.release_or_fail_claims)
-            if result["released"] or result["failed"]:
-                logger.info(
-                    "Claim TTL watchdog: released=%s failed=%s tasks_failed=%s",
-                    result["released"], result["failed"], result["tasks_failed"],
-                )
-        except Exception as e:
-            logger.exception("Claim TTL watchdog error: %s", e)
-        await asyncio.sleep(settings.claim_ttl_seconds)
-
-
-async def _heartbeat_watchdog():
-    """Periodically mark nodes offline when heartbeats time out.
-
-    T-061: nodes marked offline also have their ``claimed`` stages
-    failed by ``mark_offline_nodes`` so stages are never stuck in
-    ``claimed`` forever when a node dies.
+    Runs every ``settings.maintenance_interval_seconds``; the scheduler
+    itself decides per-task whether its individual interval is due.
     """
-    from relay_server.core.discovery import mark_offline_nodes
-
     while True:
         try:
-            offline = await asyncio.to_thread(mark_offline_nodes)
-            if offline:
-                logger.info("Marked nodes offline: %s", offline)
-        except Exception as e:
-            logger.exception("Heartbeat watchdog error: %s", e)
-        await asyncio.sleep(settings.heartbeat_interval_seconds)
+            results = await asyncio.to_thread(maintenance.run_due)
+            for name, result in results.items():
+                # Only log when the task actually did something. Empty
+                # dicts / all-zero counters are treated as no-ops.
+                if result and not _is_noop_result(result):
+                    logger.info("Maintenance [%s]: %s", name, result)
+        except Exception as e:  # noqa: BLE001 — loop must never die
+            logger.exception("Maintenance loop error: %s", e)
+        await asyncio.sleep(settings.maintenance_interval_seconds)
 
 
-async def _token_cleanup_watchdog():
-    """Periodically purge expired tokens (T-027 — background cleaner)."""
-    from relay_server.core.db import get_conn
-
-    while True:
-        try:
-            conn = get_conn()
-            try:
-                now = datetime.now(timezone.utc).isoformat()
-                deleted = conn.execute(
-                    "DELETE FROM node_tokens WHERE expires_at < ?",
-                    (now,),
-                ).rowcount
-                conn.commit()
-                if deleted:
-                    logger.info("Purged %d expired token(s)", deleted)
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.exception("Token cleanup watchdog error: %s", e)
-        await asyncio.sleep(3600)  # once per hour
+def _is_noop_result(result: dict) -> bool:
+    """True when a maintenance result indicates nothing was changed."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("error"):
+        return False
+    for v in result.values():
+        if isinstance(v, (list, tuple, dict)) and len(v) > 0:
+            return False
+        if isinstance(v, int) and v > 0:
+            return False
+        if isinstance(v, bool) and v:
+            return False
+    return True
 
 
 def _rate_limit_handler(request: Request, exc: RateLimitExceeded):

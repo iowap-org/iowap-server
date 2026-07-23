@@ -476,9 +476,10 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
 
         expires = _parse_time(token_row["expires_at"])
         if expires and _now() > expires:
-            # T-027: DELETE moved to background cleaner (_token_cleanup_watchdog).
-            # Returning None here means the token is treated as invalid; the
-            # background cleaner will purge the row asynchronously.
+            # T-027: DELETE moved to background cleaner (token_cleanup
+            # task in MaintenanceScheduler). Returning None here means
+            # the token is treated as invalid; the maintenance task will
+            # purge the row asynchronously.
             return None
 
         node_row = conn.execute(

@@ -1,6 +1,7 @@
 """Artifact storage core logic — keeps metadata in DB, files in artifacts_dir."""
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Any, Dict, List, Optional
 from relay_server.config import settings
 from relay_server.core.db import get_conn
 from relay_server.core.events import event_bus
+
+logger = logging.getLogger("relay.artifacts")
 
 
 def _now() -> datetime:
@@ -209,6 +212,64 @@ def delete_artifact(artifact_id: str) -> bool:
         conn.execute("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,))
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
+    """Delete artifacts whose ``task_id`` no longer refers to an existing task (T-049).
+
+    Only artifacts older than ``max_age_days`` are considered, so recently
+    created artifacts (e.g. during a running task) are never touched even
+    if the task row briefly disappears.
+
+    Returns ``{"deleted": n, "freed_bytes": m}``. File-system errors are
+    logged but do not abort the run — the DB row is removed regardless so
+    a dangling file can be cleaned up by a later ``db_vacuum``.
+    """
+    from datetime import timedelta
+
+    cutoff = _format_time(_now() - timedelta(days=max_age_days))
+    freed_bytes = 0
+    deleted = 0
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT artifact_id, storage_path, size_bytes
+            FROM artifacts
+            WHERE task_id IS NOT NULL
+              AND task_id NOT IN (SELECT task_id FROM tasks)
+              AND created_at < ?
+            """,
+            (cutoff,),
+        ).fetchall()
+        if not rows:
+            return {"deleted": 0, "freed_bytes": 0}
+
+        for row in rows:
+            artifact_id = row["artifact_id"]
+            path_str = row["storage_path"]
+            size = int(row["size_bytes"] or 0)
+            # Best-effort file deletion — the DB row is removed either way.
+            try:
+                p = Path(path_str)
+                if p.exists():
+                    p.unlink()
+            except OSError as exc:
+                logger.warning("Could not delete artifact file %s: %s", path_str, exc)
+            conn.execute(
+                "DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+            )
+            deleted += 1
+            freed_bytes += size
+            event_bus.publish_sync(
+                "artifact_deleted",
+                {"artifact_id": artifact_id, "reason": "orphaned"},
+            )
+        conn.commit()
+        return {"deleted": deleted, "freed_bytes": freed_bytes}
     finally:
         conn.close()
 

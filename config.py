@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     default_timeout_seconds: int = 300
     max_retries: int = 2
 
+    # Maintenance (T-050)
+    maintenance_interval_seconds: int = 5
+    artifact_cleanup_max_age_days: float = 7.0
+    orphaned_stage_interval_seconds: int = 300
+    db_vacuum_interval_seconds: int = 86400
+
     # Capabilities
     capabilities_config_path: Path = Path.home() / ".relay" / "capabilities.yaml"
     capability_pages_dir: Path = Path.home() / ".relay" / "capability-pages"

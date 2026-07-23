@@ -593,6 +593,89 @@ class Scheduler:
         finally:
             conn.close()
 
+    @staticmethod
+    @_retry_db_write
+    def fail_orphaned_stages() -> Dict[str, Any]:
+        """Fail ``pending`` stages whose capability no node heartbeats (T-063).
+
+        A stage is *orphaned* when its ``capability`` does not appear in
+        :table:`node_capabilities` with ``available = 1`` for any online /
+        approved node. Such a stage can never be claimed and would block
+        the task forever; this watchdog marks it ``failed`` instead and,
+        when all of the task's stages have reached a terminal state, fails
+        the owning task too.
+
+        Returns ``{"stages_failed": [...], "tasks_failed": [...]}``.
+        """
+        now = _format_time(_now())
+        conn = get_conn()
+        try:
+            # Pending stages whose capability is not advertised by any
+            # approved/online node. We intentionally do NOT filter on
+            # ``node_capabilities.available``: that flag is only flipped
+            # to 1 by an explicit worker-heartbeat, so a freshly approved
+            # node (still on its first heartbeat) would otherwise be
+            # treated as "not covering" the capability and its pending
+            # stages would be failed spuriously. The authoritative
+            # availability signal is the owning node's ``status``.
+            rows = conn.execute(
+                """
+                SELECT ts.stage_id, ts.task_id
+                FROM task_stages ts
+                WHERE ts.status = 'pending'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM node_capabilities nc
+                      JOIN nodes n ON n.node_id = nc.node_id
+                      WHERE nc.capability_name = ts.capability
+                        AND n.status IN ('approved', 'online')
+                  )
+                """,
+            ).fetchall()
+            if not rows:
+                return {"stages_failed": [], "tasks_failed": []}
+
+            failed_stage_ids: List[str] = []
+            affected_tasks: set[str] = set()
+            for row in rows:
+                stage_id = row["stage_id"]
+                task_id = row["task_id"]
+                conn.execute(
+                    """
+                    UPDATE task_stages
+                    SET status = 'failed', updated_at = ?
+                    WHERE stage_id = ? AND status = 'pending'
+                    """,
+                    (now, stage_id),
+                )
+                failed_stage_ids.append(stage_id)
+                affected_tasks.add(task_id)
+
+            tasks_failed = _fail_tasks_if_all_stages_done(
+                conn,
+                affected_tasks,
+                now,
+                terminal_stage_status=("failed",),
+            )
+            conn.commit()
+
+            for stage_id in failed_stage_ids:
+                event_bus.publish_sync(
+                    "stage_failed",
+                    {"stage_id": stage_id, "reason": "orphaned_capability"},
+                )
+            for task_id in tasks_failed:
+                event_bus.publish_sync(
+                    "task_failed",
+                    {"task_id": task_id, "reason": "orphaned_stages"},
+                )
+
+            return {
+                "stages_failed": failed_stage_ids,
+                "tasks_failed": tasks_failed,
+            }
+        finally:
+            conn.close()
+
 
 def _fail_tasks_if_all_stages_done(
     conn: sqlite3.Connection,
