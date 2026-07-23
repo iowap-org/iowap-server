@@ -471,6 +471,25 @@ async def dashboard_task_submit(
     return await scheduler_create_simple_task(task_req, ctx)
 
 
+@router.get("/api/tasks/{task_id}")
+async def dashboard_get_task(
+    task_id: str,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Get task status from a capability dashboard page (session-cookie auth).
+
+    Returns the same response as ``GET /relay/v2/scheduler/tasks/{task_id}``
+    but accepts a dashboard session cookie instead of a node token.
+    """
+    check_dashboard_permission(ctx, "dashboard:view")
+    from relay_server.core.scheduler import Scheduler
+
+    task = Scheduler.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
 # --- RBAC MANAGEMENT ---
 
 
