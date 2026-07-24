@@ -308,12 +308,28 @@ class Scheduler:
 
                 # Wenn der Task einen owner_node_id hat, darf nur dieser
                 # Node die Stage claimen. Andere Nodes überspringen sie.
+                # T-067: Wenn der adressierte Node nicht mehr existiert
+                # (gelöscht), wird die Stage als failed markiert statt
+                # ewig auf pending zu bleiben.
                 task_owner = conn.execute(
                     "SELECT owner_node_id FROM tasks WHERE task_id = ?",
                     (row["task_id"],),
                 ).fetchone()[0]
-                if task_owner and task_owner != node_id:
-                    continue
+                if task_owner:
+                    if task_owner != node_id:
+                        # Prüfen ob der adressierte Node überhaupt noch existiert.
+                        owner_exists = conn.execute(
+                            "SELECT 1 FROM nodes WHERE node_id = ?", (task_owner,)
+                        ).fetchone()
+                        if not owner_exists:
+                            # Owner gelöscht → Stage failen.
+                            conn.execute(
+                                "UPDATE task_stages SET status = 'failed', updated_at = ? "
+                                "WHERE stage_id = ? AND status = 'pending'",
+                                (now, row["stage_id"]),
+                            )
+                            conn.commit()
+                        continue
 
                 # Claim this stage atomically.
                 stage_id = row["stage_id"]

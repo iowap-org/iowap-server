@@ -692,7 +692,10 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                     continue
                 cap_type = cap.get("type")
                 version = cap.get("version", "1.0.0")
-                available = 1 if cap.get("available", True) else 0
+                # T-066: cap.get("available", True) returns True when the key is
+                # absent, but Pydantic may set available=None from the request body
+                # and bool(None) is False. Only treat explicit False as unavailable.
+                available = 1 if cap.get("available") is not False else 0
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
