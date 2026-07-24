@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     ssn_enabled: bool = False
     ssn_auto_approve: bool = True
     ssn_service_unit: str = "ai-relay-ssn.service"
+    # T-070: directory where the co-located SSN stores capability pages
+    # (~/.ssn/pages). The dashboard reads these directly to render the
+    # capability-page overview without a round-trip task to the SSN.
+    ssn_pages_dir: Path = Path.home() / ".ssn" / "pages"
 
     class Config:
         env_prefix = "RELAY_"
@@ -100,6 +104,7 @@ def _apply_yaml_overrides(base: Settings, path: Optional[Path]) -> Settings:
         "chunked_uploads_dir",
         "static_dir",
         "capabilities_config_path",
+        "ssn_pages_dir",
     ]:
         if key in yaml_data:
             yaml_data[key] = _coerce_path(yaml_data[key])

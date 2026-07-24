@@ -1,12 +1,14 @@
 import secrets
 """Dashboard router for the relay service — static UI + API endpoints."""
 
+import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -60,6 +62,22 @@ STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 USER_COOKIE = "relay_user"
 CSRF_COOKIE = "relay_csrf"
 CSRF_HEADER = "x-csrf-token"
+
+# T-070: capability advertised by the Server-Side Node that hosts HTML
+# dashboard pages for other capabilities. The dashboard asks it (via a
+# task with ``action: list``) which capability pages are available.
+SSN_PAGES_CAPABILITY = "ssn.capability-pages"
+
+# Short-lived cache for the SSN page list so the dashboard does not
+# submit a task to the SSN on every page view. The TTL is deliberately
+# short so newly added/removed pages show up quickly.
+_SSN_PAGES_CACHE_TTL_SECONDS = 30
+_ssn_pages_cache: dict[str, Any] = {"value": None, "expires_at": 0.0}
+
+# How long the relay waits for the SSN to complete a ``list`` task and how
+# often it polls the task status while waiting.
+_SSN_PAGE_TASK_TIMEOUT_SECONDS = 10
+_SSN_PAGE_TASK_POLL_INTERVAL_SECONDS = 0.2
 
 
 def _set_user_cookie(response, user: dict, max_age: int = SESSION_MAX_AGE_SECONDS) -> None:
@@ -485,6 +503,161 @@ async def dashboard_get_task(
     return task
 
 
+# --- SSN CAPABILITY PAGES (T-070) ---
+
+
+def _ssn_capability_online() -> bool:
+    """Return True when a node heartbeating ``ssn.capability-pages`` is online."""
+    from relay_server.core.discovery import get_capability_by_name
+
+    cap = get_capability_by_name(SSN_PAGES_CAPABILITY)
+    return bool(cap and cap.get("available", False) and cap.get("nodes"))
+
+
+async def _fetch_ssn_pages() -> list[str]:
+    """Submit a ``list`` task to ``ssn.capability-pages`` and collect the result.
+
+    Returns the list of capability names that have a dashboard page hosted by
+    the SSN. Errors (SSN offline, task failed, malformed result) map to an
+    empty list — the dashboard simply shows no 📄 badges when no pages are
+    available.
+    """
+    from relay_server.api.v2.scheduler import scheduler_create_simple_task
+    from relay_server.core.scheduler import Scheduler
+    from relay_server.models import SimpleTaskRequest
+
+    # Submit as the internal dashboard admin context so the task is owned by
+    # the relay itself, not by a human user (which would require a node token).
+    ctx = AuthContext(
+        token_id="__dashboard_admin__",
+        node_id="__dashboard_admin__",
+        node_name="Dashboard",
+        endpoint=None,
+        capabilities=[],
+        status="approved",
+        role="admin",
+        token_type="internal",
+        pending=False,
+    )
+    try:
+        resp = await scheduler_create_simple_task(
+            SimpleTaskRequest(
+                capability=SSN_PAGES_CAPABILITY,
+                payload={"action": "list"},
+                name="ssn-pages-list",
+            ),
+            ctx,
+        )
+    except HTTPException:
+        return []
+    task_id = resp.task_id
+    stage_id = resp.stage_id
+
+    # Wait for the SSN to claim & complete the stage (bounded polling).
+    deadline = time.monotonic() + _SSN_PAGE_TASK_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        task = Scheduler.get_task(task_id)
+        if not task:
+            return []
+        stage = next((s for s in task["stages"] if s["stage_id"] == stage_id), None)
+        if not stage:
+            return []
+        if stage["status"] == "completed":
+            result = stage.get("result") or {}
+            caps = result.get("capabilities")
+            if isinstance(caps, list):
+                return [str(c) for c in caps if isinstance(c, str)]
+            return []
+        if stage["status"] in ("failed", "timed_out"):
+            return []
+        await asyncio.sleep(_SSN_PAGE_TASK_POLL_INTERVAL_SECONDS)
+    return []
+
+
+async def _get_ssn_pages_cached() -> list[str]:
+    """Return the SSN-managed capability-page list, cached for a short TTL.
+
+    The cache avoids submitting a task to the SSN on every dashboard page
+    view. A fresh fetch is performed when the cache is empty, expired, or
+    when no SSN is currently online.
+    """
+    now = time.monotonic()
+    cached = _ssn_pages_cache
+    if cached["value"] is not None and now < cached["expires_at"]:
+        return cached["value"]  # type: ignore[no-any-return]
+
+    if not _ssn_capability_online():
+        # SSN not reachable — clear the cache so a returning SSN is picked up
+        # immediately instead of after the TTL.
+        cached["value"] = None
+        cached["expires_at"] = 0.0
+        return []
+
+    caps = await _fetch_ssn_pages()
+    cached["value"] = caps
+    cached["expires_at"] = now + _SSN_PAGES_CACHE_TTL_SECONDS
+    return caps
+
+
+@router.get("/api/ssn-pages")
+async def dashboard_ssn_pages(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Return the list of capabilities that have a dashboard page on the SSN.
+
+    Asks the ``ssn.capability-pages`` SSN (via a ``list`` task) which
+    capability pages it currently hosts and caches the result briefly so
+    the dashboard does not submit a task on every page view.
+    """
+    check_dashboard_permission(ctx, "dashboard:view")
+    caps = await _get_ssn_pages_cached()
+    return {"capabilities": caps, "online": _ssn_capability_online()}
+
+
+def _read_ssn_page_directly(capability: str) -> Optional[bytes]:
+    """Read ``<ssn_pages_dir>/<capability>.html`` directly from disk.
+
+    The relay and the SSN run on the same host, so the relay can serve the
+    HTML page without going through a task round-trip. This keeps the
+    proxy fast and works even when the SSN is momentarily busy. Returns
+    ``None`` when the page does not exist.
+    """
+    # Guard against path traversal: only allow capability names that do
+    # not contain path separators or dot segments.
+    if "/" in capability or "\\" in capability or capability in (".", ".."):
+        return None
+    if capability.startswith("."):
+        return None
+    path = settings.ssn_pages_dir / f"{capability}.html"
+    try:
+        if not path.is_file():
+            return None
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+@router.get("/api/ssn-page/{capability}")
+async def dashboard_ssn_page_proxy(
+    capability: str,
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """Serve the HTML dashboard page for a capability, hosted by the SSN.
+
+    The page is read directly from ``ssn_pages_dir`` (the co-located SSN
+    stores pages under ``~/.ssn/pages/<capability>.html``). This avoids a
+    task round-trip per page view and lets the dashboard embed the page in
+    an iframe.
+    """
+    check_dashboard_permission(ctx, "dashboard:view")
+    html = _read_ssn_page_directly(capability)
+    if html is None:
+        raise HTTPException(status_code=404, detail="Capability page not found")
+    return Response(content=html, media_type="text/html")
+
+
 # --- RBAC MANAGEMENT ---
 
 
@@ -808,5 +981,35 @@ _ENDPOINTS = [
         "path": "/relay/v2/dashboard/api/events/recent",
         "auth": "admin",
         "description": "Recent SSE events",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/api/capabilities",
+        "auth": "admin",
+        "description": "Capabilities advertised by online nodes",
+    },
+    {
+        "method": "POST",
+        "path": "/relay/v2/dashboard/api/task-submit",
+        "auth": "admin",
+        "description": "Submit a simple task from a capability page (T-069)",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/api/tasks/{task_id}",
+        "auth": "admin",
+        "description": "Task status for a capability page (T-069)",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/api/ssn-pages",
+        "auth": "admin",
+        "description": "Capabilities with a dashboard page hosted by the SSN (T-070)",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/api/ssn-page/{capability}",
+        "auth": "admin",
+        "description": "Proxy the SSN-hosted HTML dashboard page for a capability (T-070)",
     },
 ]

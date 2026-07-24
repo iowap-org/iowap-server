@@ -189,11 +189,33 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 
+# T-070: the SSN capability-page proxy is embedded in the dashboard's own
+# iframe, so it must be framable by the same origin. The default policy
+# (frame-ancestors 'none' / X-Frame-Options: DENY) is relaxed to 'self' /
+# SAMEORIGIN for that single path. The page content is operator-provided
+# HTML, so inline scripts/styles are permitted within the frame.
+_SSN_PAGE_PROXY_PREFIX = "/relay/v2/dashboard/api/ssn-page/"
+_SSN_PAGE_PROXY_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'self'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
 @app.middleware("http")
 async def _security_headers_middleware(request, call_next):
     response = await call_next(request)
-    for name, value in _SECURITY_HEADERS.items():
-        response.headers[name] = value
+    if request.url.path.startswith(_SSN_PAGE_PROXY_PREFIX):
+        response.headers["Content-Security-Policy"] = _SSN_PAGE_PROXY_CSP
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    else:
+        for name, value in _SECURITY_HEADERS.items():
+            response.headers[name] = value
     return response
 
 

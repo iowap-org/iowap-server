@@ -71,32 +71,82 @@ function showTab(mode) {
   if (mode === 'capabilities') loadCapabilities();
 }
 
-// T-069: the relay no longer serves capability dashboard pages itself.
+// T-069/T-070: the relay no longer serves capability dashboard pages itself.
 // HTML pages are hosted by the Server-Side Node (SSN) which advertises the
-// `ssn.capability-pages` capability. The Capabilities tab now just lists
-// the capabilities offered by online nodes — including the SSN — so the
-// operator can see what is available.
+// `ssn.capability-pages` capability. The Capabilities tab lists the
+// capabilities offered by online nodes and marks those that have a
+// dashboard page on the SSN with a 📄 badge; clicking such a card opens the
+// SSN-hosted HTML in an iframe modal.
+
+let ssnPageCapabilities = new Set();
+
+function escAttr(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function loadSsnPages() {
+  try {
+    const data = await fetchJson('/relay/v2/dashboard/api/ssn-pages');
+    ssnPageCapabilities = new Set(data.capabilities || []);
+  } catch (err) {
+    // SSN not configured/offline — no pages to show.
+    ssnPageCapabilities = new Set();
+    console.error('loadSsnPages failed:', err);
+  }
+}
 
 async function loadCapabilities() {
   try {
-    const data = await fetchJson('/relay/v2/dashboard/api/capabilities');
-    const caps = data.capabilities || [];
+    // Fetch the capability list and the SSN page list in parallel so the
+    // 📄 badge is rendered together with the cards.
+    const [capsReq] = await Promise.all([
+      fetchJson('/relay/v2/dashboard/api/capabilities'),
+      loadSsnPages(),
+    ]);
+    const caps = capsReq.capabilities || [];
     const container = document.getElementById('capabilityCards');
     if (!caps.length) {
       container.innerHTML = '<p style="color:var(--muted);">No capabilities advertised.</p>';
       return;
     }
-    container.innerHTML = caps.map(c => `
-      <div class="card cap-card">
-        <h2 style="font-size:1.1rem; color:var(--text); text-transform:none; letter-spacing:0;">${c.name}</h2>
-        <p style="color:var(--muted); font-size:.85rem; margin:.25rem 0 .5rem;">${c.description || 'No description'}</p>
-        <span class="tag">${c.type || 'unknown'}</span>
+    container.innerHTML = caps.map(c => {
+      const hasPage = ssnPageCapabilities.has(c.name);
+      const clickable = hasPage ? 'cap-card-clickable' : '';
+      const badge = hasPage
+        ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>'
+        : '';
+      const dataAttr = hasPage ? `data-capability="${escAttr(c.name)}"` : '';
+      return `
+      <div class="card cap-card ${clickable}" ${dataAttr}>
+        <h2 style="font-size:1.1rem; color:var(--text); text-transform:none; letter-spacing:0;">${escHtml(c.name)}${badge}</h2>
+        <p style="color:var(--muted); font-size:.85rem; margin:.25rem 0 .5rem;">${escHtml(c.description || 'No description')}</p>
+        <span class="tag">${escHtml(c.type || 'unknown')}</span>
         <span class="tag" style="margin-left:.25rem;">${(c.nodes || []).length} node(s)</span>
       </div>
-    `).join('');
+    `;
+    }).join('');
   } catch (err) {
     console.error('loadCapabilities failed:', err);
   }
+}
+
+function openSsnPageModal(capability) {
+  const frame = document.getElementById('ssnPageFrame');
+  frame.src = `/relay/v2/dashboard/api/ssn-page/${encodeURIComponent(capability)}`;
+  document.getElementById('ssnPageTitle').textContent = capability;
+  document.getElementById('ssnPageOverlay').classList.remove('hidden');
+  document.getElementById('ssnPageBox').classList.remove('hidden');
+}
+
+function hideSsnPageModal() {
+  const frame = document.getElementById('ssnPageFrame');
+  frame.src = 'about:blank';
+  document.getElementById('ssnPageOverlay').classList.add('hidden');
+  document.getElementById('ssnPageBox').classList.add('hidden');
 }
 
 function can(perm) {
@@ -460,6 +510,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const editBtn = e.target.closest('.edit-perms-btn');
         if (editBtn) { editGroupPerms(editBtn.dataset.groupId, editBtn.dataset.groupName); return; }
     });
+
+    // Capability cards with an SSN dashboard page (T-070)
+    document.addEventListener('click', (e) => {
+        const card = e.target.closest('.cap-card-clickable');
+        if (card && card.dataset.capability) {
+            openSsnPageModal(card.dataset.capability);
+            return;
+        }
+        // SSN page modal close handlers
+        const closeSsnBtn = e.target.closest('.close-ssn-page-btn');
+        if (closeSsnBtn) { hideSsnPageModal(); return; }
+    });
+
+    // SSN page modal overlay click closes it
+    document.getElementById('ssnPageOverlay')?.addEventListener('click', hideSsnPageModal);
 
     // Initial load
     loadMe().then(() => { loadAll(); loadAdmin(); });
