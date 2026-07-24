@@ -3,10 +3,10 @@
 import logging
 import pathlib
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from relay_server.api.v2.security import get_approved_context
 from relay_server.config import settings
@@ -35,22 +35,12 @@ async def storage_upload(
     file: UploadFile = File(...),
     task_id: Optional[str] = Query(None, description="Optional task to associate with"),
     stage_id: Optional[str] = Query(None, description="Optional stage to associate with"),
-    capability: Optional[str] = Query(
-        None,
-        description="If set, store the file as the dashboard page for this "
-        "capability (in ~/.relay/capability-pages/<name>/dashboard.html). "
-        "No artifact DB entry is created.",
-    ),
     ctx: AuthContext = Depends(get_approved_context),
 ):
     """Upload a standalone file and receive an artifact_id.
 
     Workers upload binary results here first, then reference the artifact_id
     in task payloads for storage nodes to archive onto long-term storage.
-
-    When ``capability`` is set, the file is stored as the dashboard page for
-    that capability instead of as a regular artifact. The response then
-    contains ``status`` and ``path`` instead of an ``artifact_id``.
     """
     content_length = file.size
     if content_length is not None and content_length > settings.max_upload_bytes:
@@ -108,30 +98,6 @@ async def storage_upload(
     spool.close()
 
     try:
-        if capability:
-            # Capability dashboard-page storage — separate from the artifact
-            # store. The path is deterministically derived from the capability
-            # name, so no DB entry is needed.
-            safe_name = _safe_capability_segment(capability)
-            page_dir = settings.capability_pages_dir / safe_name
-            page_dir.mkdir(parents=True, exist_ok=True)
-            page_path = page_dir / "dashboard.html"
-            with page_path.open("wb") as out:
-                with real_path.open("rb") as src:
-                    while True:
-                        buf = src.read(64 * 1024)
-                        if not buf:
-                            break
-                        out.write(buf)
-            rel_path = f"capability-pages/{safe_name}/dashboard.html"
-            logger.info(
-                "Stored dashboard page for capability %s from node %s (%s, %d bytes)",
-                safe_name, ctx.node_id, page_path, total,
-            )
-            return JSONResponse(
-                {"status": "ok", "path": rel_path, "capability": safe_name, "size_bytes": total}
-            )
-
         result = store_artifact_from_file(
             name=file.filename or "unnamed",
             file_path=real_path,
@@ -144,27 +110,6 @@ async def storage_upload(
         real_path.unlink(missing_ok=True)
 
     return ArtifactUploadResponse(**result)
-
-
-def _safe_capability_segment(name: str) -> str:
-    """Validate a capability name for use as a single path segment.
-
-    Rejects empty, path separators, and dot-segment traversal so the name
-    cannot escape ``capability_pages_dir``.
-    """
-    if not name or not isinstance(name, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="capability name is required")
-    if any(sep in name for sep in ("/", "\\")):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="capability name must not contain path separators",
-        )
-    if name in (".", "..") or name.startswith("."):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="capability name must not be a path-traversal segment",
-        )
-    return name
 
 
 @router.get("/files/{artifact_id}/meta")

@@ -71,33 +71,27 @@ function showTab(mode) {
   if (mode === 'capabilities') loadCapabilities();
 }
 
-function showCapabilityPage(name) {
-  document.getElementById('viewCapabilities').classList.add('hidden');
-  document.getElementById('capabilityFrame').classList.remove('hidden');
-  document.getElementById('capabilityIframe').src =
-    `/relay/v2/capabilities/${encodeURIComponent(name)}/dashboard-page`;
-}
-
-function backToCapabilityCards() {
-  document.getElementById('capabilityFrame').classList.add('hidden');
-  document.getElementById('viewCapabilities').classList.remove('hidden');
-  document.getElementById('capabilityIframe').src = 'about:blank';
-}
+// T-069: the relay no longer serves capability dashboard pages itself.
+// HTML pages are hosted by the Server-Side Node (SSN) which advertises the
+// `ssn.capability-pages` capability. The Capabilities tab now just lists
+// the capabilities offered by online nodes — including the SSN — so the
+// operator can see what is available.
 
 async function loadCapabilities() {
   try {
     const data = await fetchJson('/relay/v2/dashboard/api/capabilities');
-    const caps = (data.capabilities || []).filter(c => c.dashboard_page);
+    const caps = data.capabilities || [];
     const container = document.getElementById('capabilityCards');
     if (!caps.length) {
-      container.innerHTML = '<p style="color:var(--muted);">No capabilities with dashboard pages.</p>';
+      container.innerHTML = '<p style="color:var(--muted);">No capabilities advertised.</p>';
       return;
     }
     container.innerHTML = caps.map(c => `
-      <div class="card cap-card" style="cursor:pointer;" data-cap-name="${c.name}">
+      <div class="card cap-card">
         <h2 style="font-size:1.1rem; color:var(--text); text-transform:none; letter-spacing:0;">${c.name}</h2>
         <p style="color:var(--muted); font-size:.85rem; margin:.25rem 0 .5rem;">${c.description || 'No description'}</p>
         <span class="tag">${c.type || 'unknown'}</span>
+        <span class="tag" style="margin-left:.25rem;">${(c.nodes || []).length} node(s)</span>
       </div>
     `).join('');
   } catch (err) {
@@ -466,15 +460,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const editBtn = e.target.closest('.edit-perms-btn');
         if (editBtn) { editGroupPerms(editBtn.dataset.groupId, editBtn.dataset.groupName); return; }
     });
-
-    // Capability cards (Event Delegation)
-    document.addEventListener('click', (e) => {
-        const card = e.target.closest('.cap-card');
-        if (card && card.dataset.capName) { showCapabilityPage(card.dataset.capName); return; }
-    });
-
-    // Capability back button
-    document.getElementById('btnBackToCaps')?.addEventListener('click', backToCapabilityCards);
 
     // Initial load
     loadMe().then(() => { loadAll(); loadAdmin(); });

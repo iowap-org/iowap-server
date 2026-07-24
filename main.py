@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 
@@ -35,26 +36,6 @@ _SECURITY_HEADERS = {
         "form-action 'self'"
     ),
     "X-Frame-Options": "DENY",
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-}
-
-# Relaxed headers for capability dashboard pages — these are meant to be
-# embedded in an <iframe> on the dashboard, so framing must be allowed
-# same-origin. The page content itself is operator-supplied HTML.
-_CAPABILITY_PAGE_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "connect-src 'self'; "
-        "img-src 'self' data:; "
-        "frame-ancestors 'self'; "
-        "base-uri 'self'; "
-        "form-action 'self'"
-    ),
-    "X-Frame-Options": "SAMEORIGIN",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
@@ -94,9 +75,19 @@ async def lifespan(app: FastAPI):
     if settings.enable_mdns:
         # Start mDNS in the background so it cannot block server startup.
         asyncio.get_running_loop().run_in_executor(None, mdns.start)
+
+    # T-069: start the Server-Side Node (SSN) if enabled. The SSN is a
+    # normal ``node-cli`` daemon running on the same host. We start its
+    # systemd user unit so it heartbeats ``ssn.capability-pages`` (and
+    # any other SSN capabilities). When ``ssn_auto_approve`` is set the
+    # maintenance loop auto-approves the pending SSN registration.
+    if settings.ssn_enabled:
+        _ssn_start()
     try:
         yield
     finally:
+        if settings.ssn_enabled:
+            _ssn_stop()
         if settings.enable_mdns:
             mdns.stop()
         maintenance_task.cancel()
@@ -150,6 +141,36 @@ def _is_noop_result(result: dict) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# SSN (Server-Side Node) helpers — T-069
+# ---------------------------------------------------------------------------
+
+def _ssn_start() -> None:
+    """Start the SSN systemd user unit (best effort, never raises)."""
+    try:
+        subprocess.run(  # noqa: S603, S607 — operator-controlled unit name
+            ["systemctl", "--user", "start", settings.ssn_service_unit],
+            check=False,
+            capture_output=True,
+        )
+        logger.info("SSN: started systemd unit %s", settings.ssn_service_unit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SSN: could not start %s: %s", settings.ssn_service_unit, exc)
+
+
+def _ssn_stop() -> None:
+    """Stop the SSN systemd user unit (best effort, never raises)."""
+    try:
+        subprocess.run(  # noqa: S603, S607
+            ["systemctl", "--user", "stop", settings.ssn_service_unit],
+            check=False,
+            capture_output=True,
+        )
+        logger.info("SSN: stopped systemd unit %s", settings.ssn_service_unit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SSN: could not stop %s: %s", settings.ssn_service_unit, exc)
+
+
 def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     """Convert slowapi's default error into JSON for API consumers."""
     return JSONResponse(
@@ -171,12 +192,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 @app.middleware("http")
 async def _security_headers_middleware(request, call_next):
     response = await call_next(request)
-    path = request.url.path
-    if path.startswith("/relay/v2/capabilities/") and path.endswith("/dashboard-page"):
-        headers = _CAPABILITY_PAGE_HEADERS
-    else:
-        headers = _SECURITY_HEADERS
-    for name, value in headers.items():
+    for name, value in _SECURITY_HEADERS.items():
         response.headers[name] = value
     return response
 

@@ -232,8 +232,8 @@ def get_capabilities(
     only in the legacy ``nodes.capabilities`` JSON column but were never
     confirmed by a heartbeat are therefore no longer surfaced. The JSON
     column is only consulted as a fallback to recover fields not stored
-    in the index (``config``, ``dashboard_page``) and to cover nodes that
-    have not yet been synced into ``node_capabilities``.
+    in the index (``config``) and to cover nodes that have not yet been
+    synced into ``node_capabilities``.
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
@@ -268,8 +268,8 @@ def get_capabilities(
 
             if nc_rows:
                 # Index is authoritative – build cap dicts from it, then
-                # enrich with config/dashboard_page from the legacy JSON
-                # column (these fields are not stored in node_capabilities).
+                # enrich with config from the legacy JSON column (this field
+                # is not stored in node_capabilities).
                 legacy_by_name = {
                     c.get("name"): c
                     for c in _parse_capabilities(row["capabilities"])
@@ -293,7 +293,6 @@ def get_capabilities(
                         "available": bool(nc["available"]),
                         "input_schema": schema,
                         "config": legacy.get("config", {}),
-                        "dashboard_page": bool(legacy.get("dashboard_page", False)),
                     })
             else:
                 # Fallback: node has never been heartbeated into the index
@@ -337,7 +336,6 @@ def get_capabilities(
                         "version": cap.get("version", "1.0.0"),
                         "available": node_available,
                         "input_schema": cap.get("input_schema"),
-                        "dashboard_page": bool(cap.get("dashboard_page", False)),
                         "nodes": [],
                     }
 

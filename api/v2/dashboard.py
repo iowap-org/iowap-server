@@ -425,22 +425,17 @@ async def dashboard_capabilities(
     request: Request,
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
-    """Return capabilities with dashboard pages (session-cookie auth).
+    """Return capabilities advertised by online nodes (session-cookie auth).
 
-    ``dashboard_page`` is set to ``True`` when a file exists at
-    ``capability_pages_dir / <name> / dashboard.html``, regardless of
-    whether the node's heartbeat included the field.
+    The dashboard's **Capabilities** tab lists capabilities offered by a
+    Server-Side Node (SSN) heartbeat — notably ``ssn.capability-pages``.
+    Actual HTML page management is delegated to the SSN via tasks (T-069);
+    the relay no longer stores or serves capability pages itself.
     """
     check_dashboard_permission(ctx, "dashboard:view")
     from relay_server.core.discovery import get_capabilities
 
     caps = get_capabilities(available_only=False)
-    for cap in caps:
-        name = cap.get("name", "")
-        if name:
-            page_path = settings.capability_pages_dir / name / "dashboard.html"
-            if page_path.is_file():
-                cap["dashboard_page"] = True
     return {"capabilities": caps}
 
 

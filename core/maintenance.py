@@ -83,6 +83,32 @@ def _db_vacuum() -> Dict[str, Any]:
     return {"checkpointed": checkpointed, "vacuumed": vacuumed}
 
 
+def _ssn_auto_approve() -> Dict[str, Any]:
+    """Auto-approve pending SSN node registrations (T-069).
+
+    The SSN registers as a normal worker node. When ``ssn_auto_approve``
+    is enabled we periodically sweep for pending worker nodes and approve
+    them so the SSN can transition to ``online`` on its first heartbeat.
+    """
+    if not settings.ssn_auto_approve:
+        return {"approved": 0}
+    from relay_server.core.auth import approve_node  # noqa: PLC0415
+
+    approved = 0
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT node_id FROM nodes WHERE status = 'pending' AND role = 'worker'"
+        ).fetchall()
+        node_ids = [r["node_id"] for r in rows]
+    finally:
+        conn.close()
+    for node_id in node_ids:
+        if approve_node(node_id) is not None:
+            approved += 1
+    return {"approved": approved}
+
+
 # ---------------------------------------------------------------------------
 # MaintenanceScheduler
 # ---------------------------------------------------------------------------
@@ -252,3 +278,13 @@ class MaintenanceScheduler:
 
         # DB VACUUM — einmal pro Tag.
         self.register("db_vacuum", _db_vacuum, settings.db_vacuum_interval_seconds)
+
+        # SSN auto-approve (T-069) — only registered when ssn_enabled and
+        # ssn_auto_approve are both on. Approves pending SSN registrations
+        # so the SSN can come online without a manual admin action.
+        if settings.ssn_enabled and settings.ssn_auto_approve:
+            self.register(
+                "ssn_auto_approve",
+                _ssn_auto_approve,
+                settings.maintenance_interval_seconds,
+            )
