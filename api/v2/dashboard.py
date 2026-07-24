@@ -140,7 +140,7 @@ def _verify_csrf(request: Request) -> None:
 async def dashboard_index(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Serve the main dashboard HTML from a static file."""
     check_dashboard_permission(ctx, "dashboard:view")
-    return FileResponse(STATIC_DIR / "dashboard.html")
+    return FileResponse(STATIC_DIR / "dashboard.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @router.get("/login")
@@ -159,13 +159,18 @@ async def dashboard_agent_readme():
 
 @router.get("/static/{filename}", include_in_schema=False)
 async def dashboard_static_file(filename: str):
-    """Serve static assets (JS) for the dashboard HTML pages."""
+    """Serve static assets (JS) for the dashboard HTML pages.
+
+    Cache-Control is intentionally restrictive (no-cache / must-revalidate) so
+    that JS/CSS fixes are picked up immediately by browsers instead of being
+    served from the local cache after a deploy.
+    """
     if "/" in filename or ".." in filename:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     path = STATIC_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return FileResponse(path)
+    return FileResponse(path, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @router.post("/login")
