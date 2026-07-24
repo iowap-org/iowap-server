@@ -518,13 +518,11 @@ document.addEventListener('DOMContentLoaded', () => {
             openSsnPageModal(card.dataset.capability);
             return;
         }
-        // SSN page modal close handlers
-        const closeSsnBtn = e.target.closest('.close-ssn-page-btn');
-        if (closeSsnBtn) { hideSsnPageModal(); return; }
     });
 
-    // SSN page modal overlay click closes it
+    // SSN page modal close — direct handlers, NOT delegation (T-070 fix)
     document.getElementById('ssnPageOverlay')?.addEventListener('click', hideSsnPageModal);
+    document.querySelector('.close-ssn-page-btn')?.addEventListener('click', hideSsnPageModal);
 
     // Initial load
     loadMe().then(() => { loadAll(); loadAdmin(); });
