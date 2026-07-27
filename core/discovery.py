@@ -146,10 +146,14 @@ def heartbeat(
 
 
 def list_nodes(status: Optional[str] = None) -> List[Dict[str, Any]]:
-    """List registered nodes, optionally filtered by status."""
+    """List registered nodes, optionally filtered by status.
+
+    Special keyword ``status="all"`` disables filtering and returns every node
+    (useful for admin/CLI views that want to include offline/pending nodes).
+    """
     conn = get_conn()
     try:
-        if status:
+        if status and status.lower() != "all":
             rows = conn.execute(
                 "SELECT node_id, node_name, endpoint, capabilities, load, queue_depth, "
                 "available, last_seen, registered_at, status, role "
