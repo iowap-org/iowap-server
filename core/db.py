@@ -227,7 +227,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             role TEXT DEFAULT 'worker',
             first_heartbeat_seen BOOLEAN DEFAULT 0,
             registration_secret_hash TEXT,
-            registration_secret_expires_at TEXT
+            registration_secret_expires_at TEXT,
+            description TEXT
         )
     """)
 
@@ -401,6 +402,10 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
     if "registration_secret_expires_at" not in cols:
         conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_expires_at TEXT")
+    # T-072: ensure nodes has the description column (node-level prose,
+    # set per heartbeat by the node itself).
+    if "description" not in cols:
+        conn.execute("ALTER TABLE nodes ADD COLUMN description TEXT")
 
     # Ensure token_lookup_hash column exists in node_tokens table (C-1 fix:
     # deterministic HMAC-SHA256 lookup replaces the O(N) bcrypt scan).

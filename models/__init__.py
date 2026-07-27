@@ -354,6 +354,8 @@ class HeartbeatRequest(BaseModel):
     available: Optional[bool] = None
     endpoint: Optional[str] = Field(None, max_length=2048)
     capabilities: Optional[List[CapabilityStatus]] = None
+    node_name: Optional[str] = Field(None, max_length=128)
+    description: Optional[str] = Field(None, max_length=1024)
 
 
 class NodeHeartbeatRequest(BaseModel):
@@ -363,6 +365,8 @@ class NodeHeartbeatRequest(BaseModel):
     available: Optional[bool] = None
     endpoint: Optional[str] = Field(None, max_length=2048)
     capabilities: Optional[List[dict[str, Any]]] = None
+    node_name: Optional[str] = Field(None, max_length=128)
+    description: Optional[str] = Field(None, max_length=1024)
 
 
 # ── Presence ────────────────────────────────────────────────────

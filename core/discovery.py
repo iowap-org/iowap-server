@@ -49,12 +49,19 @@ def heartbeat(
     endpoint: Optional[str] = None,
     capabilities: Optional[List[Dict[str, Any]]] = None,
     replace_capabilities: bool = False,
+    node_name: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> bool:
     """Process a node heartbeat. Returns True if node was updated.
 
     If ``replace_capabilities`` is True, the full capabilities list is
     replaced instead of merged (used by worker nodes sending their
     complete capability set on chaque heartbeat).
+
+    T-072: ``node_name`` and ``description`` are optional top-level
+    fields that the node can set in its capability YAML and heartbeat
+    to the server. They update the corresponding columns in the
+    ``nodes`` table so ``node list``/``node info`` can display them.
     """
     conn = get_conn()
     merged = None
@@ -84,6 +91,13 @@ def heartbeat(
         if endpoint is not None:
             updates.append("endpoint = ?")
             params.append(endpoint)
+        # T-072: node-level node_name + description overrides.
+        if node_name is not None:
+            updates.append("node_name = ?")
+            params.append(node_name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
         if capabilities is not None:
             if replace_capabilities:
                 # Full replace – worker sends complete capability set
@@ -155,14 +169,14 @@ def list_nodes(status: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if status and status.lower() != "all":
             rows = conn.execute(
-                "SELECT node_id, node_name, endpoint, capabilities, load, queue_depth, "
+                "SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
                 "available, last_seen, registered_at, status, role "
                 "FROM nodes WHERE status = ? ORDER BY registered_at DESC",
                 (status,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT node_id, node_name, endpoint, capabilities, load, queue_depth, "
+                "SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
                 "available, last_seen, registered_at, status, role "
                 "FROM nodes ORDER BY registered_at DESC"
             ).fetchall()
@@ -177,7 +191,7 @@ def get_node(node_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id, node_name, endpoint, capabilities, load, queue_depth, "
+            "SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
             "available, last_seen, registered_at, status, role "
             "FROM nodes WHERE node_id = ?",
             (node_id,),
@@ -194,7 +208,7 @@ def query_nodes_by_capability(capability: str) -> List[Dict[str, Any]]:
     try:
         rows = conn.execute(
             """
-            SELECT node_id, node_name, endpoint, capabilities, load, queue_depth,
+            SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth,
                    available, last_seen, registered_at, status, role
             FROM nodes
             WHERE status IN ('approved', 'online')
@@ -244,7 +258,7 @@ def get_capabilities(
     try:
         rows = conn.execute(
             """
-            SELECT node_id, node_name, endpoint, capabilities, load,
+            SELECT node_id, node_name, description, endpoint, capabilities, load,
                    queue_depth, available, last_seen, status, role
             FROM nodes
             WHERE status IN ('approved', 'online')
@@ -491,6 +505,7 @@ def _node_row_to_dict(row: Any) -> Dict[str, Any]:
     return {
         "node_id": row["node_id"],
         "node_name": row["node_name"],
+        "description": row["description"] if "description" in row.keys() else None,
         "capabilities": _parse_capabilities(row["capabilities"]),
         "load": row["load"],
         "queue_depth": row["queue_depth"],
