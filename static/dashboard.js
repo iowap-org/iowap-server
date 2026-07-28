@@ -78,7 +78,7 @@ function showTab(mode) {
 // dashboard page on the SSN with a 📄 badge; clicking such a card opens the
 // SSN-hosted HTML in an iframe modal.
 
-let ssnPageCapabilities = new Set();
+let ssnPageCapabilities = new Map();
 
 function escAttr(s) {
   return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -91,10 +91,11 @@ function escHtml(s) {
 async function loadSsnPages() {
   try {
     const data = await fetchJson('/relay/v2/dashboard/api/ssn-pages');
-    ssnPageCapabilities = new Set(data.capabilities || []);
+    // data.capabilities is now an array of {name, node_id, url}
+    ssnPageCapabilities = new Map((data.capabilities || []).map(p => [p.name, p]));
   } catch (err) {
     // SSN not configured/offline — no pages to show.
-    ssnPageCapabilities = new Set();
+    ssnPageCapabilities = new Map();
     console.error('loadSsnPages failed:', err);
   }
 }
@@ -114,7 +115,8 @@ async function loadCapabilities() {
       return;
     }
     container.innerHTML = caps.map(c => {
-      const hasPage = ssnPageCapabilities.has(c.name);
+      const page = ssnPageCapabilities.get(c.name);
+      const hasPage = !!page;
       const clickable = hasPage ? 'cap-card-clickable' : '';
       const badge = hasPage
         ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>'
@@ -135,8 +137,10 @@ async function loadCapabilities() {
 }
 
 function openSsnPageModal(capability) {
+  const page = ssnPageCapabilities.get(capability);
+  if (!page || !page.url) return;
   const frame = document.getElementById('ssnPageFrame');
-  frame.src = `/relay/v2/dashboard/api/ssn-page/${encodeURIComponent(capability)}`;
+  frame.src = page.url;
   document.getElementById('ssnPageTitle').textContent = capability;
   document.getElementById('ssnPageOverlay').classList.remove('hidden');
   document.getElementById('ssnPageBox').classList.remove('hidden');
