@@ -44,8 +44,13 @@ from relay_server.core.users import (
 )
 from relay_server.models import AuthContext
 
+from relay_server.core.route_registry import router as node_routes_router
+
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
+
+# T-075: dynamic node routes — proxy to upstream services declared by nodes.
+router.include_router(node_routes_router)
 
 # ---------------------------------------------------------------------------
 # CSRF Policy:

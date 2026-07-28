@@ -329,6 +329,15 @@ class SimpleTaskResponse(BaseModel):
 
 # ── Heartbeat / Status ──────────────────────────────────────────
 
+class RouteDeclaration(BaseModel):
+    """A single API route declared by a node in its heartbeat (T-075)."""
+    path: str = Field(..., min_length=1, max_length=512)
+    method: str = Field(..., pattern="^(GET|POST|PUT|DELETE|PATCH)$")
+    auth: str = Field("session", pattern="^(session|node_token|none)$")
+    upstream: str = Field(..., max_length=2048)
+    description: Optional[str] = Field(None, max_length=256)
+
+
 class CapabilityStatus(BaseModel):
     name: str
     version: str = "1.0.0"
@@ -356,6 +365,7 @@ class HeartbeatRequest(BaseModel):
     capabilities: Optional[List[CapabilityStatus]] = None
     node_name: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
+    routes: Optional[List[RouteDeclaration]] = None
 
 
 class NodeHeartbeatRequest(BaseModel):
@@ -367,6 +377,7 @@ class NodeHeartbeatRequest(BaseModel):
     capabilities: Optional[List[dict[str, Any]]] = None
     node_name: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
+    routes: Optional[List[dict[str, Any]]] = None
 
 
 # ── Presence ────────────────────────────────────────────────────

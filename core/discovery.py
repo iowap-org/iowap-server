@@ -41,6 +41,29 @@ def _node_timeout_threshold() -> datetime:
     return _now() - timedelta(seconds=seconds)
 
 
+def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
+    """Replace all routes for a node (T-075). Called on each heartbeat."""
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM node_routes WHERE node_id = ?", (node_id,))
+        for route in routes:
+            conn.execute(
+                "INSERT OR REPLACE INTO node_routes (node_id, path, method, auth, upstream, description) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    node_id,
+                    route.get("path", ""),
+                    route.get("method", "GET").upper(),
+                    route.get("auth", "session"),
+                    route.get("upstream", ""),
+                    route.get("description", ""),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def heartbeat(
     node_id: str,
     load: Optional[float] = None,
@@ -51,6 +74,7 @@ def heartbeat(
     replace_capabilities: bool = False,
     node_name: Optional[str] = None,
     description: Optional[str] = None,
+    routes: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Process a node heartbeat. Returns True if node was updated.
 
@@ -149,6 +173,13 @@ def heartbeat(
         except Exception:
             # Best-effort: a stale index is self-healing on the next
             # heartbeat; the authoritative source remains the JSON column.
+            pass
+
+    # T-075: sync routes — replace all routes for this node on each heartbeat.
+    if routes is not None:
+        try:
+            _sync_node_routes(node_id, routes)
+        except Exception:
             pass
 
     # Publish event when node comes back from offline or on its first
@@ -484,6 +515,11 @@ def mark_offline_nodes() -> List[str]:
                     )
                     tasks_failed.append(task_id)
 
+        conn.commit()
+
+        # T-075: clear routes for offline nodes.
+        for nid in offline_ids:
+            conn.execute("DELETE FROM node_routes WHERE node_id = ?", (nid,))
         conn.commit()
 
         for nid in offline_ids:

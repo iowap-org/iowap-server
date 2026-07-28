@@ -32,6 +32,7 @@ async def discovery_heartbeat(
         capabilities=[c.model_dump() for c in body.capabilities] if body.capabilities else None,
         node_name=body.node_name,
         description=body.description,
+        routes=[r.model_dump() for r in body.routes] if body.routes else None,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")
@@ -54,6 +55,7 @@ async def discovery_worker_heartbeat(
         replace_capabilities=True,
         node_name=body.node_name,
         description=body.description,
+        routes=body.routes,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")

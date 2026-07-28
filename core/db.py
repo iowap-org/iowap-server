@@ -260,6 +260,21 @@ def _schema(conn: sqlite3.Connection) -> None:
         "ON node_capabilities(capability_name, capability_type)"
     )
 
+    # T-075: dynamic node routes — API endpoints declared by nodes in their
+    # capability YAML and registered via heartbeat.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS node_routes (
+            node_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            method TEXT NOT NULL,
+            auth TEXT NOT NULL DEFAULT 'session',
+            upstream TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            PRIMARY KEY (node_id, path, method),
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
+        )
+    """)
+
 
     # --- PRESENCE ---
     conn.execute("""
