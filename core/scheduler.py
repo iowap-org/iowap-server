@@ -441,6 +441,10 @@ class Scheduler:
                     "UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE task_id = ?",
                     (now, now, row["task_id"]),
                 )
+                event_bus.publish_sync(
+                    "task_completed",
+                    {"task_id": row["task_id"]},
+                )
             conn.commit()
 
             event_bus.publish_sync(
