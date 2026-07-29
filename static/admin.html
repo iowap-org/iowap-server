@@ -4,20 +4,24 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI Relay — Admin</title>
+  <link rel="stylesheet" href="/relay/v2/dashboard/static/cluster.css" />
   <link rel="stylesheet" href="/relay/v2/dashboard/static/admin.css" />
 </head>
 <body>
-  <header class="admin-header">
-    <h1>AI Relay Cluster — Admin</h1>
-    <div>
-      <span id="status">loading...</span>
-      <button class="btn btn-primary" id="btnRefresh">Refresh</button>
-      <a class="btn" href="/relay/v2/dashboard/">Portal</a>
+  <nav class="nav">
+    <div class="nav-brand"><span class="dot"></span> AI Relay Admin</div>
+    <div class="nav-links">
+      <a class="nav-link" href="/relay/v2/dashboard/">Portal</a>
+      <a class="nav-link active" href="/relay/v2/dashboard/admin">Admin</a>
+    </div>
+    <div class="nav-right">
+      <span id="status" style="color:var(--muted);font-size:.85rem">loading...</span>
+      <button class="btn" id="btnRefresh">Refresh</button>
       <form method="POST" action="/relay/v2/dashboard/logout" style="display:inline">
         <button type="submit" class="btn btn-danger">Logout</button>
       </form>
     </div>
-  </header>
+  </nav>
 
   <div class="tabs">
     <button id="tabDashboard" class="tab active" data-tab="dashboard">Dashboard</button>
@@ -25,7 +29,7 @@
     <button id="tabCapabilities" class="tab" data-tab="capabilities">Capabilities</button>
   </div>
 
-  <div id="adminMsg"></div>
+  <div id="adminMsg" class="admin-msg"></div>
 
   <div id="viewDashboard">
     <div class="section"><h2>Summary</h2><div id="summary" class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem;"></div></div>
@@ -47,7 +51,7 @@
 
     <div class="section">
       <h2>Recent Events</h2>
-      <div class="card"><pre id="events">loading...</pre></div>
+      <div class="card"><pre id="events" style="background:#10131a;padding:.75rem;border-radius:.5rem;overflow:auto;max-height:300px;font-size:.8rem;">loading...</pre></div>
     </div>
 
     <div class="section">
@@ -89,7 +93,7 @@
   <div id="tokenOverlay" class="overlay hidden"></div>
   <div id="tokenBox" class="token-box hidden">
     <h3>Node Runtime Token</h3>
-    <p class="error" style="color:var(--muted); margin:.25rem 0 1rem; font-size:.85rem;">
+    <p style="color:var(--muted);margin:.25rem 0 1rem;font-size:.85rem;">
       Copy this token and provide it to the node via <code>RELAY_RUNTIME_TOKEN</code> or write it to
       <code id="tokenPath">~/.relay/NODE_ID.token</code>.
       The token is valid for 7 days.
