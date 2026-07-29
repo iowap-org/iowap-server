@@ -58,6 +58,7 @@ _LEGACY_ALIASES = {
     "capabilities": "node-capabilities",
     "design-board": "reference-design-board",
     "proxmox-worker-setup": "node-setup",
+    "api-reference": "reference-api",
 }
 
 
