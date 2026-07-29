@@ -92,12 +92,16 @@ async def lifespan(app: FastAPI):
             mdns.stop()
         maintenance_task.cancel()
         try:
-            await maintenance_task
+            await asyncio.wait_for(maintenance_task, timeout=10)
         except asyncio.CancelledError:
             pass
+        except asyncio.TimeoutError:
+            logger.warning("Maintenance task did not stop within 10s, continuing shutdown")
         # One final sweep on graceful shutdown (best effort, never raises).
         try:
-            final = await asyncio.to_thread(maintenance.run_all)
+            final = await asyncio.wait_for(
+                asyncio.to_thread(maintenance.run_all), timeout=10
+            )
             for name, result in final.items():
                 if result and not (len(result) == 1 and result.get("error")):
                     logger.info("Maintenance [%s] shutdown run: %s", name, result)
@@ -159,14 +163,30 @@ def _ssn_start() -> None:
 
 
 def _ssn_stop() -> None:
-    """Stop the SSN systemd user unit (best effort, never raises)."""
+    """Stop the SSN systemd user unit (best effort, never raises).
+
+    Uses a 10-second timeout so a stuck SSN cannot block the relay's
+    graceful shutdown indefinitely.
+    """
     try:
         subprocess.run(  # noqa: S603, S607
             ["systemctl", "--user", "stop", settings.ssn_service_unit],
             check=False,
             capture_output=True,
+            timeout=10,
         )
         logger.info("SSN: stopped systemd unit %s", settings.ssn_service_unit)
+    except subprocess.TimeoutExpired:
+        logger.warning("SSN: stop timed out, sending SIGKILL to %s", settings.ssn_service_unit)
+        try:
+            subprocess.run(  # noqa: S603, S607
+                ["systemctl", "--user", "kill", "-s", "SIGKILL", settings.ssn_service_unit],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         logger.warning("SSN: could not stop %s: %s", settings.ssn_service_unit, exc)
 
