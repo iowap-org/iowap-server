@@ -35,6 +35,7 @@ ALLOWED_DOCS = {
     "node-cli-reference": DOCS_DIR / "node" / "cli-reference.md",
     "node-capabilities": DOCS_DIR / "node" / "capabilities.md",
     "node-token-lifecycle": DOCS_DIR / "node" / "token-lifecycle.md",
+    "node-config": DOCS_DIR / "node" / "node-config.md",
     # reference
     "reference-api": DOCS_DIR / "reference" / "api.md",
     "reference-design-board": DOCS_DIR / "reference" / "design-board.md",
