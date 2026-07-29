@@ -3,179 +3,84 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Relay Dashboard</title>
-  <style>
-    :root { --bg:#0f1115; --panel:#171a21; --text:#e6e6e6; --muted:#8892a0; --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    header { padding: 1rem 1.5rem; border-bottom: 1px solid #2a2f3a; display:flex; align-items:center; justify-content:space-between; }
-    h1 { margin:0; font-size:1.25rem; }
-    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:1rem; padding:1rem 1.5rem; }
-    .card { background:var(--panel); border:1px solid #2a2f3a; border-radius:.75rem; padding:1rem; }
-    .card h2 { margin:0 0 .75rem; font-size:1rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
-    .big { font-size:2rem; font-weight:700; }
-    .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
-    table { width:100%; border-collapse:collapse; font-size:.85rem; }
-    th, td { text-align:left; padding:.5rem; border-bottom:1px solid #2a2f3a; }
-    th { color:var(--muted); font-weight:500; }
-    .tag { display:inline-block; padding:.15rem .45rem; border-radius:.35rem; background:#263142; font-size:.75rem; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-    .refresh { padding:.5rem 1rem; background:var(--accent); color:white; border:none; border-radius:.5rem; cursor:pointer; }
-    .refresh:disabled { opacity:.5; }
-    .section { padding:0 1.5rem 1.5rem; }
-    .section h2 { color:var(--muted); font-size:1rem; text-transform:uppercase; letter-spacing:.05em; margin:1.5rem 0 .75rem; }
-    pre { background:#10131a; padding:.75rem; border-radius:.5rem; overflow:auto; max-height:300px; font-size:.8rem; }
-    .error { color:var(--bad); }
-    .inline-input { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.25rem .4rem; border-radius:.35rem; font-size:.8rem; width:120px; }
-    .inline-select { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.25rem .4rem; border-radius:.35rem; font-size:.8rem; }
-    .approve-btn { background:var(--ok); color:#041206; border:none; border-radius:.35rem; padding:.35rem .6rem; cursor:pointer; font-size:.8rem; margin-left:.5rem; }
-    .approve-btn:disabled { opacity:.5; }
-    .token-btn { background:var(--accent); color:white; border:none; border-radius:.35rem; padding:.35rem .6rem; cursor:pointer; font-size:.8rem; }
-    .pending-row { background:rgba(239,68,68,.1); }
-    .token-box { position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:var(--panel); border:1px solid #2a2f3a; border-radius:.75rem; padding:1.5rem; min-width:500px; max-width:90vw; z-index:100; }
-    .token-box h3 { margin:0 0 .75rem; }
-    .token-box pre { background:#10131a; padding:.75rem; border-radius:.5rem; word-break:break-all; }
-    .token-box button { margin-top:.75rem; margin-right:.5rem; }
-    .overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:99; }
-    .hidden { display:none !important; }
-    .tabs { display:flex; gap:.5rem; padding:1rem 1.5rem 0; }
-    .tab { padding:.5rem 1rem; background:#10131a; border:1px solid #2a2f3a; color:var(--muted); border-radius:.5rem; cursor:pointer; }
-    .tab.active { background:var(--accent); color:white; border-color:var(--accent); }
-    .form-row { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:.5rem; align-items:center; }
-    .form-row input, .form-row select { background:#10131a; border:1px solid #2a2f3a; color:var(--text); padding:.5rem; border-radius:.35rem; font-size:.85rem; }
-    .danger { background:var(--bad) !important; }
-    .muted { background:#6b7280 !important; }
-    .perm-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:.35rem; max-height:300px; overflow:auto; }
-    .perm-grid label { display:flex; align-items:center; gap:.35rem; font-size:.85rem; cursor:pointer; }
-    .modal h3 { margin:0 0 1rem; }
-    .modal p { color:var(--muted); font-size:.85rem; margin:0 0 1rem; }
-    .admin-actions { display:flex; gap:.35rem; flex-wrap:wrap; }
-    .admin-actions button { font-size:.75rem; padding:.25rem .45rem; }
-    .badge-active { background:var(--ok); color:#041206; }
-    .badge-inactive { background:#6b7280; color:white; }
-    #adminMsg { padding:0 1.5rem; min-height:1.5rem; }
-    /* T-070: SSN capability-page cards & modal */
-    .cap-card { position: relative; }
-    .cap-card-clickable { cursor: pointer; transition: border-color .15s; }
-    .cap-card-clickable:hover { border-color: var(--accent); }
-    .cap-page-badge { margin-left:.35rem; font-size:1rem; cursor: help; }
-    .ssn-box { position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:var(--panel); border:1px solid #2a2f3a; border-radius:.75rem; padding:1rem; min-width:520px; max-width:90vw; width:80vw; z-index:100; display:flex; flex-direction:column; }
-    .ssn-box h3 { margin:0 0 .75rem; }
-    #ssnPageFrame { width:100%; height:70vh; border:1px solid #2a2f3a; border-radius:.5rem; background:#fff; }
-  </style>
+  <title>AI Relay Cluster</title>
+  <link rel="stylesheet" href="/relay/v2/dashboard/static/cluster.css" />
 </head>
 <body>
-  <header>
-    <h1>AI Relay Cluster Dashboard</h1>
-    <div>
-      <span id="status">loading...</span>
-      <button class="refresh" id="btnRefresh">Refresh</button>
-      <form method="POST" action="/relay/v2/dashboard/logout" style="display:inline">
-        <button type="submit" class="refresh" style="background:#ef4444; margin-left:.5rem;">Logout</button>
-      </form>
+  <nav class="nav">
+    <div class="nav-brand"><span class="dot"></span> AI Relay Cluster</div>
+    <div class="nav-links">
+      <a class="nav-link active" data-view="overview" href="/relay/v2/dashboard/">Overview</a>
+      <a class="nav-link" data-view="nodes" href="#nodes">Nodes</a>
+      <a class="nav-link" data-view="users" href="#users">Users</a>
+      <a class="nav-link" data-view="capabilities" href="#capabilities">Capabilities</a>
+      <a class="nav-link" data-view="events" href="#events">Events</a>
     </div>
-  </header>
+    <div class="nav-right">
+      <a class="btn btn-primary" href="/relay/v2/dashboard/admin">Sign in / Admin</a>
+    </div>
+  </nav>
 
-  <div class="tabs">
-    <button id="tabDashboard" class="tab active" data-tab="dashboard">Dashboard</button>
-    <button id="tabAdmin" class="tab hidden" data-tab="admin">Admin</button>
-    <button id="tabCapabilities" class="tab" data-tab="capabilities">Capabilities</button>
-  </div>
+  <section class="hero">
+    <h1>Cluster Portal</h1>
+    <p>Public, read-only view of the AI Relay cluster.</p>
+    <span id="statusPill" class="status-pill"><span class="status-dot ok"></span> loading…</span>
+  </section>
 
-  <div id="viewDashboard">
-    <div class="grid" id="summary"></div>
+  <div class="status-bar" id="summary"></div>
 
-    <div class="section">
+  <div id="viewOverview">
+    <div class="section" id="nodesSection">
       <h2>Nodes</h2>
-      <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th><th>Action</th></tr></thead><tbody></tbody></table></div>
+      <div id="nodeCards" class="grid"></div>
     </div>
-
-    <div class="section">
-      <h2>Tasks</h2>
-      <div class="card"><table id="tasks"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody></tbody></table></div>
-    </div>
-
-    <div class="section">
-      <h2>Active Stages</h2>
-      <div class="card"><table id="stages"><thead><tr><th>Stage</th><th>Task</th><th>Capability</th><th>Status</th><th>Claimed By</th></tr></thead><tbody></tbody></table></div>
-    </div>
-
-    <div class="section">
-      <h2>Recent Events</h2>
-      <div class="card"><pre id="events">loading...</pre></div>
-    </div>
-
-    <div class="section">
-      <h2>API Endpoints</h2>
-      <div class="card"><table id="endpoints"><thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead><tbody></tbody></table></div>
-    </div>
-  </div>
-
-  <div id="viewCapabilities" class="hidden">
-    <div class="section">
-      <h2>Capabilities</h2>
-      <div id="capabilityCards" class="grid"></div>
-    </div>
-  </div>
-
-  <div id="viewAdmin" class="hidden">
-    <div id="adminMsg"></div>
 
     <div class="section" id="usersSection">
       <h2>Users</h2>
-      <div class="card">
-        <form id="createUserForm" class="form-row">
-          <input name="username" placeholder="Username" required pattern="[a-zA-Z0-9_.-]{3,40}" title="3-40 chars, alphanumeric/_/.-/">
-          <input name="password" type="password" placeholder="Password" required minlength="8">
-          <input name="email" type="email" placeholder="Email">
-          <input name="groups" placeholder="Groups (comma)" value="user">
-          <button type="submit" class="refresh">Create User</button>
-        </form>
-        <table id="users"><thead><tr><th>Username</th><th>Email</th><th>Groups</th><th>Active</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
-      </div>
+      <div id="userCards" class="grid"></div>
     </div>
 
-    <div class="section" id="groupsSection">
-      <h2>Groups &amp; Permissions</h2>
-      <div class="card">
-        <table id="groups"><thead><tr><th>Group</th><th>Description</th><th>Permissions</th><th>Actions</th></tr></thead><tbody></tbody></table>
-      </div>
+    <div class="section">
+      <h2>Activity Feed</h2>
+      <div class="card"><ul id="activityFeed" class="feed"></ul></div>
     </div>
   </div>
 
-  <div id="tokenOverlay" class="overlay hidden"></div>
-  <div id="tokenBox" class="token-box hidden">
-    <h3>Node Runtime Token</h3>
-    <p style="color:var(--muted); margin:.25rem 0 1rem; font-size:.85rem;">
-      Copy this token and provide it to the node via <code>RELAY_RUNTIME_TOKEN</code> or write it to
-      <code id="tokenPath">~/.relay/NODE_ID.token</code>.
-      The token is valid for 7 days.
-    </p>
-    <pre id="tokenValue">...</pre>
-    <button class="refresh copy-token-btn">Copy to clipboard</button>
-    <button class="refresh close-token-btn" style="background:#6b7280;">Close</button>
+  <div id="viewCapabilities" class="hidden section">
+    <h2>Capabilities</h2>
+    <div id="capabilityCards" class="grid"></div>
   </div>
 
-  <div id="permOverlay" class="overlay hidden"></div>
-  <div id="permBox" class="token-box modal hidden">
-    <h3>Edit Group Permissions</h3>
-    <p id="permGroupName">Group</p>
-    <div id="permCheckboxes" class="perm-grid"></div>
-    <div style="margin-top:1rem;">
-      <button class="refresh save-perms-btn">Save Permissions</button>
-      <button class="refresh muted cancel-perms-btn">Cancel</button>
+  <div id="viewEvents" class="hidden section">
+    <h2>Recent Events</h2>
+    <div class="card"><ul id="eventsFeed" class="feed"></ul></div>
+  </div>
+
+  <div id="viewNodes" class="hidden section">
+    <h2>All Nodes</h2>
+    <div class="card">
+      <table id="nodesTable">
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Caps</th><th>Load</th><th>Queue</th><th>Last seen</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </div>
 
-  <div id="ssnPageOverlay" class="overlay hidden"></div>
-  <div id="ssnPageBox" class="ssn-box hidden">
-    <h3 id="ssnPageTitle">Capability page</h3>
-    <iframe id="ssnPageFrame" title="Capability dashboard page"></iframe>
-    <div style="margin-top:.75rem;">
-      <button class="refresh close-ssn-page-btn" style="background:#6b7280;">Close</button>
+  <div id="viewUsers" class="hidden section">
+    <h2>All Users</h2>
+    <div class="card">
+      <table id="usersTable">
+        <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </div>
 
-<script src="/relay/v2/dashboard/static/dashboard.js"></script>
+  <footer class="footer">
+    <span>AI Relay Service — Community Dashboard</span>
+    <span id="version">v?</span>
+  </footer>
+
+  <script src="/relay/v2/dashboard/static/dashboard.js"></script>
 </body>
 </html>

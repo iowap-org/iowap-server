@@ -1,0 +1,282 @@
+/* cluster.css — Community Portal styles (Phase 20, T-044).
+ *
+ * Shared design tokens + components for the public cluster portal:
+ * hero, status-bar, node/user cards, activity feed, mini load chart.
+ * Inline <style> blocks were moved out of dashboard.html / profile
+ * pages into this file so they can be cached and reused.
+ */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1c2029;
+  --text: #e6e6e6;
+  --muted: #8892a0;
+  --accent: #3b82f6;
+  --accent-2: #2563eb;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+  --info: #3b82f6;
+  --border: #2a2f3a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.hidden { display: none !important; }
+
+/* --- Navigation bar ------------------------------------------------------ */
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.nav-brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.nav-brand .dot {
+  width: 10px; height: 10px; border-radius: 999px;
+  background: var(--ok); box-shadow: 0 0 8px var(--ok);
+}
+.nav-links { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.nav-link {
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.nav-link:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+.nav-link.active { color: #fff; background: var(--accent); }
+.nav-right { display: flex; gap: 0.5rem; align-items: center; }
+
+.btn {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-danger { background: var(--bad); border-color: var(--bad); color: #041206; }
+.btn-muted { background: #6b7280; border-color: #6b7280; color: #fff; }
+
+/* --- Hero + status pill -------------------------------------------------- */
+
+.hero {
+  padding: 2rem 1.5rem 1rem;
+}
+.hero h1 { margin: 0 0 0.25rem; font-size: 1.8rem; }
+.hero p { margin: 0; color: var(--muted); }
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: var(--ok);
+  font-size: 0.85rem;
+}
+.status-pill.warn { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.4); color: var(--warn); }
+.status-pill.bad  { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.4); color: var(--bad); }
+
+/* --- Status widget grid -------------------------------------------------- */
+
+.status-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  padding: 0 1.5rem 1rem;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.9rem 1rem;
+}
+.stat .label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat .value { font-size: 1.6rem; font-weight: 700; margin-top: 0.15rem; }
+.stat .value.ok { color: var(--ok); }
+.stat .value.warn { color: var(--warn); }
+.stat .value.bad { color: var(--bad); }
+.stat .sub { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
+
+/* --- Section headings ---------------------------------------------------- */
+
+.section { padding: 0 1.5rem 1.5rem; }
+.section h2 {
+  color: var(--muted);
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 1.25rem 0 0.75rem;
+}
+
+/* --- Node / user card grid ----------------------------------------------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.card.clickable { cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
+.card.clickable:hover { border-color: var(--accent); }
+
+.card-banner {
+  height: 48px;
+  border-radius: 0.5rem;
+  background: linear-gradient(135deg, var(--accent-2), #6366f1);
+  margin: -1rem -1rem 0;
+}
+.card-head { display: flex; align-items: center; gap: 0.6rem; }
+.avatar {
+  width: 40px; height: 40px; border-radius: 999px;
+  background: var(--panel-2);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; color: var(--text);
+  border: 2px solid var(--bg);
+  margin-top: -22px;
+  flex-shrink: 0;
+}
+.card-title { font-weight: 700; font-size: 1rem; }
+.card-sub { color: var(--muted); font-size: 0.78rem; }
+
+.status-dot {
+  display: inline-block;
+  width: 9px; height: 9px; border-radius: 999px;
+  margin-right: 0.35rem;
+  background: var(--muted);
+}
+.status-dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.status-dot.warn { background: var(--warn); }
+.status-dot.bad { background: var(--bad); }
+.status-dot.info { background: var(--info); }
+
+.tag {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.35rem;
+  background: #263142;
+  font-size: 0.72rem;
+}
+.tag.ok { color: var(--ok); background: rgba(34, 197, 94, 0.15); }
+.tag.warn { color: var(--warn); background: rgba(245, 158, 11, 0.15); }
+.tag.bad { color: var(--bad); background: rgba(239, 68, 68, 0.15); }
+.tag.info { color: var(--info); background: rgba(59, 130, 246, 0.15); }
+.tag.muted { color: var(--muted); background: rgba(107, 114, 128, 0.15); }
+
+.cap-list { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+
+.load-row { display: flex; align-items: center; gap: 0.4rem; }
+.load-bar {
+  flex: 1;
+  height: 6px;
+  background: #10131a;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.load-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--ok), var(--warn));
+  border-radius: 999px;
+}
+
+/* --- Activity feed ------------------------------------------------------- */
+
+.feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.feed li {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+}
+.feed .ev-type { color: var(--accent); font-weight: 600; }
+.feed .ev-time { color: var(--muted); float: right; }
+
+/* --- Tables -------------------------------------------------------------- */
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--panel-2); }
+
+/* --- Mini load chart (CSS-only) ----------------------------------------- */
+
+.sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 40px;
+  padding: 0.25rem 0;
+}
+.sparkline .bar {
+  width: 8px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  opacity: 0.85;
+}
+
+/* --- Footer -------------------------------------------------------------- */
+
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* --- Empty state --------------------------------------------------------- */
+
+.empty { color: var(--muted); padding: 1rem 0; }
+
+.error { color: var(--bad); }

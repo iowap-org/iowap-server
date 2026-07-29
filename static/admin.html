@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Relay — Admin</title>
+  <link rel="stylesheet" href="/relay/v2/dashboard/static/admin.css" />
+</head>
+<body>
+  <header class="admin-header">
+    <h1>AI Relay Cluster — Admin</h1>
+    <div>
+      <span id="status">loading...</span>
+      <button class="btn btn-primary" id="btnRefresh">Refresh</button>
+      <a class="btn" href="/relay/v2/dashboard/">Portal</a>
+      <form method="POST" action="/relay/v2/dashboard/logout" style="display:inline">
+        <button type="submit" class="btn btn-danger">Logout</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button id="tabDashboard" class="tab active" data-tab="dashboard">Dashboard</button>
+    <button id="tabAdmin" class="tab hidden" data-tab="admin">Admin</button>
+    <button id="tabCapabilities" class="tab" data-tab="capabilities">Capabilities</button>
+  </div>
+
+  <div id="adminMsg"></div>
+
+  <div id="viewDashboard">
+    <div class="section"><h2>Summary</h2><div id="summary" class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem;"></div></div>
+
+    <div class="section">
+      <h2>Nodes</h2>
+      <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th><th>Action</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="section">
+      <h2>Tasks</h2>
+      <div class="card"><table id="tasks"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="section">
+      <h2>Active Stages</h2>
+      <div class="card"><table id="stages"><thead><tr><th>Stage</th><th>Task</th><th>Capability</th><th>Status</th><th>Claimed By</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="section">
+      <h2>Recent Events</h2>
+      <div class="card"><pre id="events">loading...</pre></div>
+    </div>
+
+    <div class="section">
+      <h2>API Endpoints</h2>
+      <div class="card"><table id="endpoints"><thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <div id="viewCapabilities" class="hidden">
+    <div class="section">
+      <h2>Capabilities</h2>
+      <div id="capabilityCards" class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;"></div>
+    </div>
+  </div>
+
+  <div id="viewAdmin" class="hidden">
+    <div class="section" id="usersSection">
+      <h2>Users</h2>
+      <div class="card">
+        <form id="createUserForm" class="form-row">
+          <input name="username" placeholder="Username" required pattern="[a-zA-Z0-9_.-]{3,40}" title="3-40 chars, alphanumeric/_/.-/">
+          <input name="password" type="password" placeholder="Password" required minlength="8">
+          <input name="email" type="email" placeholder="Email">
+          <input name="groups" placeholder="Groups (comma)" value="user">
+          <button type="submit" class="btn btn-primary">Create User</button>
+        </form>
+        <table id="users"><thead><tr><th>Username</th><th>Email</th><th>Groups</th><th>Active</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="section" id="groupsSection">
+      <h2>Groups &amp; Permissions</h2>
+      <div class="card">
+        <table id="groups"><thead><tr><th>Group</th><th>Description</th><th>Permissions</th><th>Actions</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div id="tokenOverlay" class="overlay hidden"></div>
+  <div id="tokenBox" class="token-box hidden">
+    <h3>Node Runtime Token</h3>
+    <p class="error" style="color:var(--muted); margin:.25rem 0 1rem; font-size:.85rem;">
+      Copy this token and provide it to the node via <code>RELAY_RUNTIME_TOKEN</code> or write it to
+      <code id="tokenPath">~/.relay/NODE_ID.token</code>.
+      The token is valid for 7 days.
+    </p>
+    <pre id="tokenValue">...</pre>
+    <button class="btn btn-primary copy-token-btn">Copy to clipboard</button>
+    <button class="btn btn-muted close-token-btn">Close</button>
+  </div>
+
+  <div id="permOverlay" class="overlay hidden"></div>
+  <div id="permBox" class="token-box modal hidden">
+    <h3>Edit Group Permissions</h3>
+    <p id="permGroupName">Group</p>
+    <div id="permCheckboxes" class="perm-grid"></div>
+    <div style="margin-top:1rem;">
+      <button class="btn btn-primary save-perms-btn">Save Permissions</button>
+      <button class="btn btn-muted cancel-perms-btn">Cancel</button>
+    </div>
+  </div>
+
+  <div id="ssnPageOverlay" class="overlay hidden"></div>
+  <div id="ssnPageBox" class="ssn-box hidden">
+    <h3 id="ssnPageTitle">Capability page</h3>
+    <iframe id="ssnPageFrame" title="Capability dashboard page"></iframe>
+    <div style="margin-top:.75rem;">
+      <button class="btn btn-muted close-ssn-page-btn">Close</button>
+    </div>
+  </div>
+
+  <script src="/relay/v2/dashboard/static/admin.js"></script>
+</body>
+</html>

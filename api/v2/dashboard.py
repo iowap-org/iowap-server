@@ -142,10 +142,28 @@ def _verify_csrf(request: Request) -> None:
 
 
 @router.get("/")
-async def dashboard_index(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
-    """Serve the main dashboard HTML from a static file."""
-    check_dashboard_permission(ctx, "dashboard:view")
+async def dashboard_index():
+    """Serve the public Community Dashboard (no auth required)."""
     return FileResponse(STATIC_DIR / "dashboard.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@router.get("/admin")
+async def dashboard_admin(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
+    """Serve the admin panel (login required)."""
+    check_dashboard_permission(ctx, "dashboard:view")
+    return FileResponse(STATIC_DIR / "admin.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@router.get("/node/{node_id}")
+async def dashboard_node_profile(node_id: str):
+    """Serve the public node profile page."""
+    return FileResponse(STATIC_DIR / "node-profile.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@router.get("/user/{user_id}")
+async def dashboard_user_profile(user_id: str):
+    """Serve the public user profile page."""
+    return FileResponse(STATIC_DIR / "user-profile.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @router.get("/login")

@@ -1,51 +1,42 @@
-// dashboard.js — AI-Relay Dashboard
-// Keine onclick-Handler im HTML — alles via Event Delegation
+// dashboard.js — Community Portal (Phase 20, T-044).
+//
+// Public, read-only cluster view. Fetches the public /cluster/* endpoints
+// (no auth, no CSRF). Admin logic has moved to admin.js / admin.html.
+// Auto-refreshes every 10s. Clicking a node/user card opens the public
+// profile page; the Capabilities tab opens the SSN-hosted page (still
+// public via the SSN dynamic route).
 
-let currentUser = null;
-let allPermissions = [];
-let groupsData = [];
-let editingGroupId = null;
+let refreshTimer = null;
+let currentView = "overview";
 
 function fmt(d) {
-  if (!d) return '-';
+  if (!d) return "-";
   const dt = new Date(d);
   return isNaN(dt) ? d : dt.toLocaleString();
 }
 
-// T-083: status colour mapping. The server sends a pre-computed
-// ``status_color`` field for every node/task/stage in the overview
-// response (derived from the central status registry), so the
-// dashboard can colour status tags by category without duplicating
-// the registry logic in JS. Fall back to a simple online/offline
-// heuristic for older server responses that lack the field.
-function statusColor(entity) {
-  if (entity && entity.status_color) return entity.status_color;
-  const s = entity && entity.status;
-  if (s === 'online' || s === 'approved' || s === 'idle' || s === 'completed') return 'ok';
-  if (s === 'busy' || s === 'running' || s === 'claimed') return 'warn';
-  if (s === 'pending' || s === 'accepted') return 'info';
-  if (s === 'failed' || s === 'timed_out' || s === 'cancelled' || s === 'offline') return 'bad';
-  return 'muted';
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function getCsrfToken() {
-  const m = document.cookie.match(/(?:^|;\s*)relay_csrf=([^;]+)/);
-  return m ? decodeURIComponent(m[1]) : '';
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-async function fetchJson(path, opts={}) {
-  const res = await fetch(path, {
-    headers: {
-      ...opts.headers,
-      'Accept': 'application/json',
-      'X-CSRF-Token': getCsrfToken(),
-    },
-    ...opts
-  });
-  if (res.status === 401 || res.status === 403) {
-    location.href = '/relay/v2/dashboard/login';
-    return new Promise(() => {});
-  }
+// Status colour mapping using the server-supplied status_color field.
+function statusTag(entity) {
+  const cls = (entity && entity.status_color) || "muted";
+  const label = (entity && entity.status) || "-";
+  return `<span class="tag ${cls}">${escHtml(label)}</span>`;
+}
+
+function statusDot(entity) {
+  const cls = (entity && entity.status_color) || "muted";
+  return `<span class="status-dot ${cls}"></span>`;
+}
+
+async function fetchJson(path) {
+  const res = await fetch(path, { headers: { Accept: "application/json" } });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`${res.status} ${text || res.statusText}`);
@@ -53,498 +44,265 @@ async function fetchJson(path, opts={}) {
   return res.json();
 }
 
-async function postForm(path, formData) {
-  return fetchJson(path, { method: 'POST', body: formData });
+function showView(view) {
+  currentView = view;
+  const views = ["overview", "nodes", "users", "capabilities", "events"];
+  views.forEach((v) => {
+    const el = document.getElementById("view" + v.charAt(0).toUpperCase() + v.slice(1));
+    if (el) el.classList.toggle("hidden", v !== view);
+  });
+  document.querySelectorAll(".nav-link").forEach((a) => {
+    a.classList.toggle("active", a.dataset.view === view);
+  });
+  if (view === "capabilities") loadCapabilities();
+  if (view === "events") loadEvents();
+  if (view === "nodes") renderNodesTable();
+  if (view === "users") renderUsersTable();
 }
 
-async function delJson(path) {
-  return fetchJson(path, { method: 'DELETE' });
-}
+// --- Overview ------------------------------------------------------------
 
-function showToken(nodeId, tokenValue) {
-  document.getElementById('tokenPath').textContent = `~/.relay/${nodeId}.token`;
-  document.getElementById('tokenValue').textContent = tokenValue;
-  document.getElementById('tokenOverlay').classList.remove('hidden');
-  document.getElementById('tokenBox').classList.remove('hidden');
-}
+let lastOverview = null;
 
-function hideToken() {
-  document.getElementById('tokenOverlay').classList.add('hidden');
-  document.getElementById('tokenBox').classList.add('hidden');
-}
-
-function copyToken() {
-  navigator.clipboard.writeText(document.getElementById('tokenValue').textContent).then(() => alert('Token copied.'));
-}
-
-function showTab(mode) {
-  document.getElementById('viewDashboard').classList.toggle('hidden', mode !== 'dashboard');
-  document.getElementById('viewAdmin').classList.toggle('hidden', mode !== 'admin');
-  document.getElementById('viewCapabilities').classList.toggle('hidden', mode !== 'capabilities');
-  document.getElementById('tabDashboard').classList.toggle('active', mode === 'dashboard');
-  document.getElementById('tabAdmin').classList.toggle('active', mode === 'admin');
-  document.getElementById('tabCapabilities').classList.toggle('active', mode === 'capabilities');
-  if (mode === 'capabilities') loadCapabilities();
-}
-
-// T-069/T-070: the relay no longer serves capability dashboard pages itself.
-// HTML pages are hosted by the Server-Side Node (SSN) which advertises the
-// `ssn.capability-pages` capability. The Capabilities tab lists the
-// capabilities offered by online nodes and marks those that have a
-// dashboard page on the SSN with a 📄 badge; clicking such a card opens the
-// SSN-hosted HTML in an iframe modal.
-
-let ssnPageCapabilities = new Map();
-
-function escAttr(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-async function loadSsnPages() {
+async function loadOverview() {
   try {
-    const data = await fetchJson('/relay/v2/dashboard/api/ssn-pages');
-    // data.capabilities is now an array of {name, node_id, url}
-    ssnPageCapabilities = new Map((data.capabilities || []).map(p => [p.name, p]));
+    const data = await fetchJson("/relay/v2/cluster/overview");
+    lastOverview = data;
+    renderSummary(data.summary, data.generated_at);
+    renderNodeCards(data.nodes || []);
+    renderUserCards();
+    renderActivity(data.activity || []);
+    renderNodesTable();
+    renderUsersTable();
   } catch (err) {
-    // SSN not configured/offline — no pages to show.
-    ssnPageCapabilities = new Map();
-    console.error('loadSsnPages failed:', err);
+    document.getElementById("statusPill").innerHTML =
+      `<span class="status-dot bad"></span> error: ${escHtml(err.message)}`;
+    console.error(err);
   }
 }
+
+function renderSummary(s, generatedAt) {
+  const pill = document.getElementById("statusPill");
+  const cls = s.online_nodes > 0 ? "ok" : "bad";
+  pill.className = "status-pill " + (s.online_nodes > 0 ? "" : "bad");
+  pill.innerHTML = `<span class="status-dot ${cls}"></span> ${s.online_nodes}/${s.total_nodes} nodes online · updated ${fmt(generatedAt)}`;
+
+  const taskStatText =
+    Object.entries(s.task_stats || {})
+      .map(([k, v]) => k + ": " + v)
+      .join(" · ") || "-";
+  document.getElementById("summary").innerHTML = `
+    <div class="stat"><div class="label">Nodes online</div><div class="value ${cls}">${s.online_nodes}/${s.total_nodes}</div><div class="sub">cluster nodes</div></div>
+    <div class="stat"><div class="label">Tasks</div><div class="value">${s.total_tasks}</div><div class="sub">${taskStatText}</div></div>
+    <div class="stat"><div class="label">Active stages</div><div class="value ${s.active_stages > 0 ? "warn" : "ok"}">${s.active_stages}</div><div class="sub">in progress</div></div>
+    <div class="stat"><div class="label">Artifacts</div><div class="value">${s.total_artifacts}</div><div class="sub">stored</div></div>
+    <div class="stat"><div class="label">Capabilities</div><div class="value">${s.capability_count}</div><div class="sub">advertised</div></div>
+  `;
+}
+
+function renderNodeCards(nodes) {
+  const container = document.getElementById("nodeCards");
+  if (!nodes.length) {
+    container.innerHTML = '<p class="empty">No nodes registered.</p>';
+    return;
+  }
+  container.innerHTML = nodes
+    .map((n) => {
+      const caps = (n.capability_names || []).slice(0, 4);
+      const more = (n.capability_names || []).length - caps.length;
+      const loadPct = Math.max(0, Math.min(100, Math.round((n.load || 0) * 100)));
+      return `
+      <div class="card clickable" data-node-id="${escAttr(n.node_id)}">
+        <div class="card-banner"></div>
+        <div class="card-head">
+          <div class="avatar">${escHtml((n.node_name || n.node_id || "?").charAt(0).toUpperCase())}</div>
+          <div>
+            <div class="card-title">${escHtml(n.node_name || n.node_id)}</div>
+            <div class="card-sub mono">${escHtml(n.node_id)}</div>
+          </div>
+        </div>
+        <div>${statusDot(n)} ${statusTag(n)} <span class="tag">${escHtml(n.role)}</span></div>
+        <div class="cap-list">
+          ${caps.map((c) => `<span class="tag">${escHtml(c)}</span>`).join("")}
+          ${more > 0 ? `<span class="tag muted">+${more}</span>` : ""}
+        </div>
+        <div class="load-row"><span class="card-sub">load</span><div class="load-bar"><span style="width:${loadPct}%"></span></div><span class="card-sub">${loadPct}%</span></div>
+        <div class="card-sub">queue ${n.queue_depth ?? "-"} · last seen ${fmt(n.last_seen)}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+async function renderUserCards() {
+  try {
+    const data = await fetchJson("/relay/v2/cluster/users");
+    const users = data.users || [];
+    const container = document.getElementById("userCards");
+    if (!users.length) {
+      container.innerHTML = '<p class="empty">No human users.</p>';
+      return;
+    }
+    container.innerHTML = users
+      .map(
+        (u) => `
+      <div class="card clickable" data-user-id="${escAttr(u.user_id)}">
+        <div class="card-head">
+          <div class="avatar">${escHtml((u.username || "?").charAt(0).toUpperCase())}</div>
+          <div>
+            <div class="card-title">${escHtml(u.username)}</div>
+            <div class="card-sub">${escHtml(u.role)}</div>
+          </div>
+        </div>
+        <div>${statusDot(u)} ${statusTag(u)}</div>
+        <div class="card-sub">joined ${fmt(u.created_at)}</div>
+      </div>`
+      )
+      .join("");
+  } catch (err) {
+    console.error("renderUserCards failed:", err);
+  }
+}
+
+function renderActivity(events) {
+  const feed = document.getElementById("activityFeed");
+  if (!events.length) {
+    feed.innerHTML = '<li class="empty">No events yet.</li>';
+    return;
+  }
+  feed.innerHTML = events
+    .map(
+      (e) => `
+      <li><span class="ev-type">${escHtml(e.type)}</span>
+        <span class="ev-time">${fmt(e.timestamp)}</span>
+        <div class="card-sub">${escHtml(JSON.stringify(e.payload || {}))}</div>
+      </li>`
+    )
+    .join("");
+}
+
+// --- Nodes / Users tables (public) --------------------------------------
+
+function renderNodesTable() {
+  const nodes = (lastOverview && lastOverview.nodes) || [];
+  const tbody = document.querySelector("#nodesTable tbody");
+  if (!tbody) return;
+  tbody.innerHTML =
+    nodes
+      .map(
+        (n) => `
+      <tr class="clickable" data-node-id="${escAttr(n.node_id)}">
+        <td class="mono">${escHtml(n.node_id)}</td>
+        <td>${escHtml(n.node_name || n.node_id)}</td>
+        <td><span class="tag">${escHtml(n.role)}</span></td>
+        <td>${statusTag(n)}</td>
+        <td>${(n.capability_names || []).join(", ") || "-"}</td>
+        <td>${n.load ?? "-"}</td>
+        <td>${n.queue_depth ?? "-"}</td>
+        <td>${fmt(n.last_seen)}</td>
+      </tr>`
+      )
+      .join("") || '<tr><td colspan="8" class="empty">No nodes.</td></tr>';
+}
+
+async function renderUsersTable() {
+  const tbody = document.querySelector("#usersTable tbody");
+  if (!tbody) return;
+  try {
+    const data = await fetchJson("/relay/v2/cluster/users");
+    const users = data.users || [];
+    tbody.innerHTML =
+      users
+        .map(
+          (u) => `
+        <tr class="clickable" data-user-id="${escAttr(u.user_id)}">
+          <td>${escHtml(u.username)}</td>
+          <td><span class="tag">${escHtml(u.role)}</span></td>
+          <td>${statusTag(u)}</td>
+          <td>${fmt(u.created_at)}</td>
+        </tr>`
+        )
+        .join("") || '<tr><td colspan="4" class="empty">No users.</td></tr>';
+  } catch (err) {
+    console.error("renderUsersTable failed:", err);
+  }
+}
+
+async function loadEvents() {
+  try {
+    const data = await fetchJson("/relay/v2/cluster/activity?limit=50");
+    renderActivity(data.events || []);
+  } catch (err) {
+    console.error("loadEvents failed:", err);
+  }
+}
+
+// --- Capabilities (public list, SSN-hosted pages open in profile) --------
 
 async function loadCapabilities() {
   try {
-    // Fetch the capability list and the SSN page list in parallel so the
-    // 📄 badge is rendered together with the cards.
-    const [capsReq] = await Promise.all([
-      fetchJson('/relay/v2/dashboard/api/capabilities'),
-      loadSsnPages(),
-    ]);
-    const caps = capsReq.capabilities || [];
-    const container = document.getElementById('capabilityCards');
+    const data = await fetchJson("/relay/v2/cluster/nodes");
+    // Aggregate capability -> nodes from the public node list.
+    const capMap = new Map();
+    for (const n of data.nodes || []) {
+      for (const c of n.capability_names || []) {
+        if (!capMap.has(c)) capMap.set(c, { name: c, nodes: [] });
+        capMap.get(c).nodes.push({ node_id: n.node_id, node_name: n.node_name });
+      }
+    }
+    const caps = Array.from(capMap.values());
+    const container = document.getElementById("capabilityCards");
     if (!caps.length) {
-      container.innerHTML = '<p style="color:var(--muted);">No capabilities advertised.</p>';
+      container.innerHTML = '<p class="empty">No capabilities advertised.</p>';
       return;
     }
-    container.innerHTML = caps.map(c => {
-      const page = ssnPageCapabilities.get(c.name);
-      const hasPage = !!page;
-      const clickable = hasPage ? 'cap-card-clickable' : '';
-      const badge = hasPage
-        ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>'
-        : '';
-      const dataAttr = hasPage ? `data-capability="${escAttr(c.name)}"` : '';
-      return `
-      <div class="card cap-card ${clickable}" ${dataAttr}>
-        <h2 style="font-size:1.1rem; color:var(--text); text-transform:none; letter-spacing:0;">${escHtml(c.name)}${badge}</h2>
-        <p style="color:var(--muted); font-size:.85rem; margin:.25rem 0 .5rem;">${escHtml(c.description || 'No description')}</p>
-        <span class="tag">${escHtml(c.type || 'unknown')}</span>
-        <span class="tag" style="margin-left:.25rem;">${(c.nodes || []).length} node(s)</span>
-      </div>
-    `;
-    }).join('');
+    container.innerHTML = caps
+      .map(
+        (c) => `
+      <div class="card clickable" data-capability="${escAttr(c.name)}">
+        <div class="card-title">${escHtml(c.name)}</div>
+        <div class="card-sub">${c.nodes.length} node(s)</div>
+      </div>`
+      )
+      .join("");
   } catch (err) {
-    console.error('loadCapabilities failed:', err);
+    console.error("loadCapabilities failed:", err);
   }
 }
 
-function openSsnPageModal(capability) {
-  const page = ssnPageCapabilities.get(capability);
-  if (!page || !page.url) return;
-  const frame = document.getElementById('ssnPageFrame');
-  frame.src = page.url;
-  document.getElementById('ssnPageTitle').textContent = capability;
-  document.getElementById('ssnPageOverlay').classList.remove('hidden');
-  document.getElementById('ssnPageBox').classList.remove('hidden');
-}
+// --- Navigation ----------------------------------------------------------
 
-function hideSsnPageModal() {
-  const frame = document.getElementById('ssnPageFrame');
-  frame.src = 'about:blank';
-  document.getElementById('ssnPageOverlay').classList.add('hidden');
-  document.getElementById('ssnPageBox').classList.add('hidden');
-}
-
-function can(perm) {
-  return currentUser && (currentUser.is_master || (currentUser.permissions || []).includes(perm));
-}
-
-function adminMsg(text, isError) {
-  const el = document.getElementById('adminMsg');
-  el.textContent = text;
-  el.className = isError ? 'error' : 'ok';
-  setTimeout(() => { el.textContent = ''; el.className = ''; }, 5000);
-}
-
-async function loadMe() {
-  try {
-    currentUser = await fetchJson('/relay/v2/dashboard/api/me');
-    if (can('users:manage') || can('groups:manage')) {
-      document.getElementById('tabAdmin').classList.remove('hidden');
-    } else {
-      document.getElementById('tabAdmin').classList.add('hidden');
-    }
-    document.getElementById('usersSection').classList.toggle('hidden', !can('users:manage'));
-    document.getElementById('groupsSection').classList.toggle('hidden', !can('groups:manage'));
-  } catch (err) {
-    console.error(err);
-  }
-}
-
-async function approveNode(nodeId) {
-  const role = document.getElementById(`role-${nodeId}`).value;
-  const caps = document.getElementById(`caps-${nodeId}`).value.split(',').map(s => s.trim()).filter(Boolean).map(name => ({ name, version: '1.0' }));
-  const data = await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/approve`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, capabilities: caps })
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".nav-link").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      const view = a.dataset.view;
+      if (!view) return;
+      e.preventDefault();
+      showView(view);
+    });
   });
-  showToken(nodeId, data.token);
-  loadAll();
-}
 
-async function newToken(nodeId) {
-  const data = await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  showToken(nodeId, data.token);
-  loadAll();
-}
-
-async function deleteNode(nodeId, nodeName) {
-  if (!confirm(`Delete node ${nodeName} (${nodeId})? This cannot be undone.`)) return;
-  try {
-    await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}`, { method: 'DELETE' });
-    loadAll();
-  } catch (err) {
-    alert('Delete failed: ' + err.message);
-  }
-}
-
-function renderAction(n) {
-  let actions = '';
-  if (n.status === 'pending') {
-    const caps = (n.capability_names || []).join(', ') || 'vault';
-    actions = `
-      <select id="role-${n.node_id}" class="inline-select">
-        <option value="service" selected>service</option>
-        <option value="worker">worker</option>
-      </select>
-      <input id="caps-${n.node_id}" class="inline-input" value="${caps}" />
-      <button class="approve-btn" data-node-id="${n.node_id}">Approve</button>
-    `;
-  } else {
-    actions = `<button class="token-btn" data-node-id="${n.node_id}">New Token</button>`;
-  }
-  if (can('nodes:delete')) {
-    actions += ` <button class="refresh danger delete-btn" data-node-id="${n.node_id}" data-node-name="${(n.node_name || '').replace(/"/g, '&quot;')}">Delete</button>`;
-  }
-  return actions;
-}
-
-async function loadAdmin() {
-  if (!can('users:manage') && !can('groups:manage')) return;
-  try {
-    const reqs = [];
-    if (can('users:manage')) reqs.push(fetchJson('/relay/v2/dashboard/api/users'));
-    else reqs.push(Promise.resolve({users: []}));
-    if (can('groups:manage')) {
-      reqs.push(fetchJson('/relay/v2/dashboard/api/groups'));
-      reqs.push(fetchJson('/relay/v2/dashboard/api/permissions'));
-    } else {
-      reqs.push(Promise.resolve({groups: []}));
-      reqs.push(Promise.resolve({permissions: []}));
+  // Event delegation: open profile pages.
+  document.addEventListener("click", (e) => {
+    const nodeCard = e.target.closest("[data-node-id]");
+    if (nodeCard && nodeCard.dataset.nodeId) {
+      location.href = `/relay/v2/dashboard/node/${encodeURIComponent(nodeCard.dataset.nodeId)}`;
+      return;
     }
-    const [usersData, groupsDataRaw, permsData] = await Promise.all(reqs);
-    allPermissions = permsData.permissions || [];
-    groupsData = groupsDataRaw.groups || [];
-    renderUsers(usersData.users || []);
-    renderGroups(groupsData);
-  } catch (err) {
-    adminMsg('Admin load failed: ' + err.message, true);
-    console.error(err);
-  }
-}
+    const userCard = e.target.closest("[data-user-id]");
+    if (userCard && userCard.dataset.userId) {
+      location.href = `/relay/v2/dashboard/user/${encodeURIComponent(userCard.dataset.userId)}`;
+      return;
+    }
+    const capCard = e.target.closest("[data-capability]");
+    if (capCard && capCard.dataset.capability) {
+      // Capability pages are hosted by the SSN; the public portal just
+      // shows the node list — clicking a capability has no public page
+      // yet, so we keep it as a no-op visual cue.
+      capCard.style.opacity = "0.6";
+      return;
+    }
+  });
 
-function renderUsers(users) {
-  document.querySelector('#users tbody').innerHTML = users.map(u => `
-    <tr>
-      <td>${u.username}</td>
-      <td>${u.email || '-'}</td>
-      <td><input id="groups-${u.user_id}" class="inline-input" value="${(u.groups || []).join(', ')}" /></td>
-      <td><span class="tag ${u.is_active ? 'badge-active' : 'badge-inactive'}">${u.is_active ? 'active' : 'inactive'}</span></td>
-      <td>${fmt(u.created_at)}</td>
-      <td class="admin-actions">
-        <button class="token-btn save-groups-btn" data-user-id="${u.user_id}">Save Groups</button>
-        <button class="token-btn reset-pw-btn" data-user-id="${u.user_id}">Reset Password</button>
-        <button class="approve-btn toggle-active-btn" data-user-id="${u.user_id}" data-active="${!u.is_active}">${u.is_active ? 'Deactivate' : 'Activate'}</button>
-        <button class="refresh danger delete-user-btn" data-user-id="${u.user_id}">Delete</button>
-      </td>
-    </tr>
-  `).join('') || '<tr><td colspan="6">No users found.</td></tr>';
-}
-
-function renderGroups(groups) {
-  document.querySelector('#groups tbody').innerHTML = groups.map(g => `
-    <tr>
-      <td>${g.group_name}</td>
-      <td>${g.description || '-'}</td>
-      <td>${(g.permissions || []).map(p => `<span class="tag">${p}</span>`).join(' ')}</td>
-      <td class="admin-actions">
-        <button class="token-btn edit-perms-btn" data-group-id="${g.group_id}" data-group-name="${(g.group_name || '').replace(/"/g, '&quot;')}">Edit Permissions</button>
-      </td>
-    </tr>
-  `).join('') || '<tr><td colspan="4">No groups found.</td></tr>';
-}
-
-async function createUser(e) {
-  e.preventDefault();
-  const form = e.target;
-  const data = new FormData(form);
-  try {
-    await postForm('/relay/v2/dashboard/api/users', data);
-    adminMsg('User created.');
-    form.reset();
-    form.groups.value = 'user';
-    loadAdmin();
-  } catch (err) {
-    adminMsg('Create user failed: ' + err.message, true);
-  }
-  return false;
-}
-
-async function updateUserGroups(userId) {
-  const groups = document.getElementById(`groups-${userId}`).value;
-  try {
-    await postForm(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}/groups`,
-      new URLSearchParams({ groups }));
-    adminMsg('Groups updated.');
-    loadAdmin();
-  } catch (err) {
-    adminMsg('Update groups failed: ' + err.message, true);
-  }
-}
-
-async function resetPassword(userId) {
-  const password = prompt('Enter new password (min 8 chars):');
-  if (!password) return;
-  try {
-    await postForm(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}/password`,
-      new URLSearchParams({ password }));
-    adminMsg('Password reset.');
-  } catch (err) {
-    adminMsg('Password reset failed: ' + err.message, true);
-  }
-}
-
-async function toggleActive(userId, active) {
-  try {
-    await postForm(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}/active`,
-      new URLSearchParams({ active: active ? 'true' : 'false' }));
-    adminMsg(`User ${active ? 'activated' : 'deactivated'}.`);
-    loadAdmin();
-  } catch (err) {
-    adminMsg('Toggle active failed: ' + err.message, true);
-  }
-}
-
-async function deleteUser(userId) {
-  if (!confirm('Delete this user?')) return;
-  try {
-    await delJson(`/relay/v2/dashboard/api/users/${encodeURIComponent(userId)}`);
-    adminMsg('User deleted.');
-    loadAdmin();
-  } catch (err) {
-    adminMsg('Delete user failed: ' + err.message, true);
-  }
-}
-
-function editGroupPerms(groupId, groupName) {
-  editingGroupId = groupId;
-  document.getElementById('permGroupName').textContent = groupName;
-  const group = groupsData.find(g => g.group_id === groupId) || { permissions: [] };
-  const currentPerms = group.permissions || [];
-  document.getElementById('permCheckboxes').innerHTML = allPermissions.map(p => `
-    <label><input type="checkbox" value="${p.permission_name}" ${currentPerms.includes(p.permission_name) ? 'checked' : ''}>
-      <span>${p.permission_name}</span>
-    </label>
-  `).join('');
-  document.getElementById('permOverlay').classList.remove('hidden');
-  document.getElementById('permBox').classList.remove('hidden');
-}
-
-function hidePermModal() {
-  document.getElementById('permOverlay').classList.add('hidden');
-  document.getElementById('permBox').classList.add('hidden');
-  editingGroupId = null;
-}
-
-async function saveGroupPerms() {
-  if (!editingGroupId) return;
-  const checked = Array.from(document.querySelectorAll('#permCheckboxes input:checked')).map(i => i.value);
-  try {
-    await postForm(`/relay/v2/dashboard/api/groups/${encodeURIComponent(editingGroupId)}/permissions`,
-      new URLSearchParams({ permissions: checked.join(',') }));
-    adminMsg('Group permissions saved.');
-    hidePermModal();
-    loadAdmin();
-  } catch (err) {
-    adminMsg('Save permissions failed: ' + err.message, true);
-  }
-}
-
-async function loadAll() {
-  const btn = document.getElementById('btnRefresh');
-  btn.disabled = true;
-  document.getElementById('status').textContent = 'loading...';
-  try {
-    const [overview, endpoints, events] = await Promise.all([
-      fetchJson('/relay/v2/dashboard/api/overview'),
-      fetchJson('/relay/v2/dashboard/api/endpoints'),
-      fetchJson('/relay/v2/dashboard/api/events/recent?limit=50'),
-    ]);
-
-    const userNodes = (overview.nodes || []).filter(n => n.node_id !== '__dashboard_admin__');
-
-    const s = overview.summary;
-    const taskStatText = Object.entries(s.task_stats || {}).map(([k,v]) => k + ': ' + v).join(' · ') || '-';
-    document.getElementById('summary').innerHTML = `
-      <div class="card"><h2>Nodes</h2><div class="big ${s.online_nodes > 0 ? 'ok' : 'bad'}">${s.online_nodes}/${s.total_nodes}</div><div>online</div></div>
-      <div class="card"><h2>Tasks</h2><div class="big">${s.total_tasks}</div><div>${taskStatText}</div></div>
-      <div class="card"><h2>Active Stages</h2><div class="big ${s.active_stages > 0 ? 'warn' : 'ok'}">${s.active_stages}</div></div>
-      <div class="card"><h2>Artifacts</h2><div class="big">${s.total_artifacts}</div></div>
-    `;
-
-    document.querySelector('#nodes tbody').innerHTML = userNodes.map(n => `
-      <tr class="${n.status === 'pending' ? 'pending-row' : ''}">
-        <td class="mono">${n.node_id}</td>
-        <td>${n.node_name}</td>
-        <td><span class="tag">${n.role}</span></td>
-        <td><span class="tag ${statusColor(n)}">${n.status}</span></td>
-        <td>${(n.capability_names || []).join(', ')}</td>
-        <td>${n.load ?? '-'}</td>
-        <td>${n.queue_depth ?? '-'}</td>
-        <td>${fmt(n.last_seen)}</td>
-        <td>${renderAction(n)}</td>
-      </tr>
-    `).join('');
-
-    document.querySelector('#tasks tbody').innerHTML = (overview.tasks || []).map(t => `
-      <tr>
-        <td class="mono">${t.task_id}</td>
-        <td>${t.task_name}</td>
-        <td><span class="tag ${statusColor(t)}">${t.status}</span></td>
-        <td>${t.priority}</td>
-        <td>${fmt(t.created_at)}</td>
-      </tr>
-    `).join('');
-
-    document.querySelector('#stages tbody').innerHTML = (overview.active_stages || []).map(st => `
-      <tr>
-        <td class="mono">${st.stage_id}</td>
-        <td class="mono">${st.task_id}</td>
-        <td>${st.capability}</td>
-        <td><span class="tag ${statusColor(st)}">${st.status}</span></td>
-        <td>${st.claimed_by || '-'}</td>
-      </tr>
-    `).join('');
-
-    document.getElementById('events').textContent = (events.events || []).map(e =>
-      `[${fmt(e.timestamp)}] ${e.type} ${JSON.stringify(e.payload)}`
-    ).join('\n') || 'no events yet';
-
-    document.querySelector('#endpoints tbody').innerHTML = (endpoints.endpoints || []).map(ep => `
-      <tr>
-        <td><span class="tag">${ep.method}</span></td>
-        <td class="mono">${ep.path}</td>
-        <td>${ep.auth}</td>
-        <td>${ep.description}</td>
-      </tr>
-    `).join('');
-
-    document.getElementById('status').textContent = 'updated ' + fmt(overview.generated_at);
-  } catch (err) {
-    document.getElementById('status').innerHTML = `<span class="error">error: ${err.message}</span>`;
-    console.error(err);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    // Tabs
-    document.querySelectorAll('.tab').forEach(el => {
-        el.addEventListener('click', () => showTab(el.dataset.tab));
-    });
-
-    // Refresh
-    document.getElementById('btnRefresh')?.addEventListener('click', loadAll);
-
-    // Token overlay
-    document.querySelector('.copy-token-btn')?.addEventListener('click', copyToken);
-    document.querySelector('.close-token-btn')?.addEventListener('click', hideToken);
-    document.getElementById('tokenOverlay')?.addEventListener('click', hideToken);
-
-    // Permissions overlay
-    document.querySelector('.save-perms-btn')?.addEventListener('click', saveGroupPerms);
-    document.querySelector('.cancel-perms-btn')?.addEventListener('click', hidePermModal);
-    document.getElementById('permOverlay')?.addEventListener('click', hidePermModal);
-
-    // Create user form
-    document.getElementById('createUserForm')?.addEventListener('submit', createUser);
-
-    // Node actions (Event Delegation auf Container)
-    document.addEventListener('click', (e) => {
-        const btn = e.target.closest('.approve-btn');
-        if (btn && btn.dataset.nodeId) { approveNode(btn.dataset.nodeId); return; }
-
-        const tokenBtn = e.target.closest('.token-btn');
-        if (tokenBtn && tokenBtn.dataset.nodeId) { newToken(tokenBtn.dataset.nodeId); return; }
-
-        const delBtn = e.target.closest('.delete-btn');
-        if (delBtn) { deleteNode(delBtn.dataset.nodeId, delBtn.dataset.nodeName); return; }
-    });
-
-    // User actions (Event Delegation)
-    document.addEventListener('click', (e) => {
-        const groupsBtn = e.target.closest('.save-groups-btn');
-        if (groupsBtn) { updateUserGroups(groupsBtn.dataset.userId); return; }
-
-        const resetBtn = e.target.closest('.reset-pw-btn');
-        if (resetBtn) { resetPassword(resetBtn.dataset.userId); return; }
-
-        const toggleBtn = e.target.closest('.toggle-active-btn');
-        if (toggleBtn) { toggleActive(toggleBtn.dataset.userId, toggleBtn.dataset.active === 'true'); return; }
-
-        const delUserBtn = e.target.closest('.delete-user-btn');
-        if (delUserBtn) { deleteUser(delUserBtn.dataset.userId); return; }
-    });
-
-    // Group permissions
-    document.addEventListener('click', (e) => {
-        const editBtn = e.target.closest('.edit-perms-btn');
-        if (editBtn) { editGroupPerms(editBtn.dataset.groupId, editBtn.dataset.groupName); return; }
-    });
-
-    // Capability cards with an SSN dashboard page (T-070)
-    document.addEventListener('click', (e) => {
-        const card = e.target.closest('.cap-card-clickable');
-        if (card && card.dataset.capability) {
-            openSsnPageModal(card.dataset.capability);
-            return;
-        }
-    });
-
-    // SSN page modal close — direct handlers, NOT delegation (T-070 fix)
-    document.getElementById('ssnPageOverlay')?.addEventListener('click', hideSsnPageModal);
-    document.querySelector('.close-ssn-page-btn')?.addEventListener('click', hideSsnPageModal);
-
-    // Initial load
-    loadMe().then(() => { loadAll(); loadAdmin(); });
-    setInterval(() => { loadAll(); if (!document.getElementById('viewAdmin').classList.contains('hidden')) loadAdmin(); }, 10000);
+  loadOverview();
+  refreshTimer = setInterval(loadOverview, 10000);
 });

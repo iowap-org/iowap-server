@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Node Profile — AI Relay Cluster</title>
+  <link rel="stylesheet" href="/relay/v2/dashboard/static/cluster.css" />
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-brand"><span class="dot"></span> AI Relay Cluster</div>
+    <div class="nav-links">
+      <a class="nav-link" href="/relay/v2/dashboard/">Overview</a>
+      <a class="nav-link" href="/relay/v2/dashboard/#nodes">Nodes</a>
+      <a class="nav-link" href="/relay/v2/dashboard/#users">Users</a>
+    </div>
+    <div class="nav-right">
+      <a class="btn btn-primary" href="/relay/v2/dashboard/admin">Sign in / Admin</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div id="nodeHead" style="display:flex;align-items:center;gap:.75rem;">
+      <div class="avatar" style="width:56px;height:56px;font-size:1.5rem;">?</div>
+      <div>
+        <h1 id="nodeName">loading…</h1>
+        <p class="mono" id="nodeId"></p>
+      </div>
+    </div>
+    <span id="statusPill" class="status-pill"><span class="status-dot"></span> loading…</span>
+  </section>
+
+  <div class="status-bar" id="stats"></div>
+
+  <div class="section">
+    <h2>Capabilities</h2>
+    <div id="capabilities" class="grid"></div>
+  </div>
+
+  <div class="section">
+    <h2>Load (recent activity)</h2>
+    <div class="card"><div id="loadChart" class="sparkline"></div></div>
+  </div>
+
+  <div class="section">
+    <h2>Recent Tasks</h2>
+    <div class="card">
+      <table id="tasks">
+        <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th><th>Completed</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span>AI Relay Service — Node Profile</span>
+    <a href="/relay/v2/dashboard/">← back to portal</a>
+  </footer>
+
+  <script src="/relay/v2/dashboard/static/node-profile.js"></script>
+</body>
+</html>
