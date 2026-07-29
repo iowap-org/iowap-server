@@ -1,112 +1,48 @@
 /* admin.css — Admin area styles (Phase 20, T-044).
  *
- * Login-protected admin pages under /admin/ reuse the cluster design
- * tokens but add table/form/modal styling for user, group and node
- * management. Inline <style> blocks were moved out of the old
- * dashboard.html into this file.
+ * Only admin-specific styling lives here. All shared design tokens
+ * (colours, body, .nav, .btn, .card, .tag, .status-dot, .stat, .grid,
+ * .load-bar, .feed, tables, .section, .tabs, .empty, .error) come from
+ * cluster.css. This file adds only what the admin area needs on top:
+ * the message banner, the create-user form, the inline node approve
+ * inputs, the action buttons inside node/user cards, the permissions
+ * grid, the token/permissions/SSN-page modals and a few small helpers
+ * used by admin.js to compose the node cards.
  */
 
-/* Reuse the portal tokens so admin pages share the look. */
-:root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1c2029;
-  --text: #e6e6e6;
-  --muted: #8892a0;
-  --accent: #3b82f6;
-  --ok: #22c55e;
-  --warn: #f59e0b;
-  --bad: #ef4444;
-  --info: #3b82f6;
-  --border: #2a2f3a;
-}
+/* --- Message banner ----------------------------------------------------- */
 
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, sans-serif;
-}
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-.hidden { display: none !important; }
+.admin-msg { padding: 0 1.5rem; min-height: 1.5rem; font-size: 0.85rem; }
+.admin-msg.error { color: var(--bad); }
+.admin-msg.ok { color: var(--ok); }
 
-/* --- Admin header ------------------------------------------------------- */
+/* --- Nav helpers (cluster.css owns .nav / .nav-right) ------------------- */
 
-.admin-header {
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.admin-header h1 { margin: 0; font-size: 1.25rem; }
-.admin-msg { padding: 0 1.5rem; min-height: 1.5rem; }
-.error { color: var(--bad); }
-.ok { color: var(--ok); }
+.nav-status { color: var(--muted); font-size: 0.85rem; }
+.nav-form { display: inline; }
 
-/* --- Tables ------------------------------------------------------------ */
+/* --- Tabs (cluster.css owns the base; admin adds the row layout) -------- */
 
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 500; }
-.pending-row { background: rgba(239, 68, 68, 0.1); }
-
-.tag {
-  display: inline-block;
-  padding: 0.15rem 0.45rem;
-  border-radius: 0.35rem;
-  background: #263142;
-  font-size: 0.75rem;
-}
-.tag.ok { color: var(--ok); background: rgba(34, 197, 94, 0.15); }
-.tag.warn { color: var(--warn); background: rgba(245, 158, 11, 0.15); }
-.tag.bad { color: var(--bad); background: rgba(239, 68, 68, 0.15); }
-.tag.info { color: var(--info); background: rgba(59, 130, 246, 0.15); }
-.tag.muted { color: var(--muted); background: rgba(107, 114, 128, 0.15); }
-.badge-active { background: var(--ok); color: #041206; }
-.badge-inactive { background: #6b7280; color: #fff; }
-
-/* --- Forms + buttons --------------------------------------------------- */
-
-.btn {
-  padding: 0.45rem 0.9rem;
-  border: 1px solid var(--border);
+.tabs { display: flex; gap: 0.5rem; padding: 1rem 1.5rem 0; }
+.tab {
+  padding: 0.5rem 1rem;
   background: var(--panel-2);
-  color: var(--text);
+  border: 1px solid var(--border);
+  color: var(--muted);
   border-radius: 0.5rem;
   cursor: pointer;
   font-size: 0.85rem;
 }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-danger { background: var(--bad); border-color: var(--bad); color: #041206; }
-.btn-muted { background: #6b7280; border-color: #6b7280; color: #fff; }
-.btn:disabled { opacity: 0.5; }
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-.inline-input {
-  background: #10131a;
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 0.25rem 0.4rem;
-  border-radius: 0.35rem;
-  font-size: 0.8rem;
-  width: 120px;
-}
-.inline-select {
-  background: #10131a;
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 0.25rem 0.4rem;
-  border-radius: 0.35rem;
-  font-size: 0.8rem;
-}
+/* --- Create-user form --------------------------------------------------- */
 
 .form-row {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
-  margin-bottom: 0.5rem;
+  margin-bottom: 1rem;
   align-items: center;
 }
 .form-row input,
@@ -118,6 +54,24 @@ th { color: var(--muted); font-weight: 500; }
   border-radius: 0.35rem;
   font-size: 0.85rem;
 }
+.form-row input:focus,
+.form-row select:focus { border-color: var(--accent); outline: none; }
+
+/* --- Inline inputs (node approve form, user groups edit) ---------------- */
+
+.inline-input,
+.inline-select {
+  background: #10131a;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.25rem 0.4rem;
+  border-radius: 0.35rem;
+  font-size: 0.8rem;
+}
+.inline-input { width: 140px; }
+
+/* --- Action buttons inside cards / tables -------------------------------- */
+
 .approve-btn {
   background: var(--ok);
   color: #041206;
@@ -126,9 +80,10 @@ th { color: var(--muted); font-weight: 500; }
   padding: 0.35rem 0.6rem;
   cursor: pointer;
   font-size: 0.8rem;
-  margin-left: 0.5rem;
 }
+.approve-btn:hover { opacity: 0.9; }
 .approve-btn:disabled { opacity: 0.5; }
+
 .token-btn {
   background: var(--accent);
   color: #fff;
@@ -138,42 +93,49 @@ th { color: var(--muted); font-weight: 500; }
   cursor: pointer;
   font-size: 0.8rem;
 }
-.danger { background: var(--bad) !important; }
-.muted { background: #6b7280 !important; }
+.token-btn:hover { opacity: 0.9; }
+
 .admin-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
 .admin-actions button { font-size: 0.75rem; padding: 0.25rem 0.45rem; }
 
-/* --- Sections ---------------------------------------------------------- */
+/* --- Node card composition ---------------------------------------------- */
+/* cluster.css owns .card / .card-head / .avatar / .card-title / .card-sub /
+ * .cap-list / .load-row / .load-bar. These helpers just arrange the bits
+ * admin.js renders for each node. */
 
-.section { padding: 0 1.5rem 1.5rem; }
-.section h2 {
+.node-card { gap: 0.5rem; }
+.card-head-text { display: flex; flex-direction: column; min-width: 0; }
+.card-head-text .card-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-meta { color: var(--muted); font-size: 0.82rem; display: flex; align-items: center; }
+.card-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+/* Unknown load — empty bar segment instead of a 0% fill. */
+.load-bar > span.load-unknown { width: 0; }
+
+/* --- Activity feed payload line ----------------------------------------- */
+
+.feed .ev-payload {
+  display: block;
   color: var(--muted);
-  font-size: 1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 1.5rem 0 0.75rem;
-}
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+  word-break: break-all;
 }
 
-/* --- Tabs -------------------------------------------------------------- */
-
-.tabs { display: flex; gap: 0.5rem; padding: 1rem 1.5rem 0; }
-.tab {
-  padding: 0.5rem 1rem;
-  background: #10131a;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 0.5rem;
-  cursor: pointer;
-}
-.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-
-/* --- Modals ------------------------------------------------------------ */
+/* --- Modals -------------------------------------------------------------- */
 
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: 99; }
 
@@ -193,11 +155,19 @@ th { color: var(--muted); font-weight: 500; }
   padding: 0.75rem;
   border-radius: 0.5rem;
   word-break: break-all;
+  margin: 0 0 0.75rem;
 }
-.token-box button { margin-top: 0.75rem; margin-right: 0.5rem; }
 
 .modal h3 { margin: 0 0 1rem; }
-.modal p { color: var(--muted); font-size: 0.85rem; margin: 0 0 1rem; }
+
+.modal-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+.modal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
+/* --- Permissions grid ---------------------------------------------------- */
 
 .perm-grid {
   display: grid;
@@ -221,8 +191,15 @@ th { color: var(--muted); font-weight: 500; }
   z-index: 100; display: flex; flex-direction: column;
 }
 .ssn-box h3 { margin: 0 0 0.75rem; }
-#ssnPageFrame { width: 100%; height: 70vh; border: 1px solid var(--border); border-radius: 0.5rem; background: #fff; }
-.cap-card { position: relative; }
+#ssnPageFrame {
+  width: 100%; height: 70vh;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+/* --- Capability card clickability + SSN page badge ---------------------- */
+
 .cap-card-clickable { cursor: pointer; transition: border-color 0.15s; }
 .cap-card-clickable:hover { border-color: var(--accent); }
 .cap-page-badge { margin-left: 0.35rem; font-size: 1rem; cursor: help; }

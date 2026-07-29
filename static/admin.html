@@ -15,9 +15,9 @@
       <a class="nav-link active" href="/relay/v2/dashboard/admin">Admin</a>
     </div>
     <div class="nav-right">
-      <span id="status" style="color:var(--muted);font-size:.85rem">loading...</span>
+      <span id="status" class="nav-status">loading...</span>
       <button class="btn" id="btnRefresh">Refresh</button>
-      <form method="POST" action="/relay/v2/dashboard/logout" style="display:inline">
+      <form method="POST" action="/relay/v2/dashboard/logout" class="nav-form">
         <button type="submit" class="btn btn-danger">Logout</button>
       </form>
     </div>
@@ -33,7 +33,10 @@
 
   <!-- Dashboard Tab -->
   <div id="viewDashboard">
-    <div class="section"><h2>Summary</h2><div id="summary" class="status-bar"></div></div>
+    <div class="section">
+      <h2>Summary</h2>
+      <div id="summary" class="status-bar"></div>
+    </div>
 
     <div class="section">
       <h2>Nodes</h2>
@@ -42,22 +45,69 @@
 
     <div class="section">
       <h2>Tasks</h2>
-      <div class="card"><table id="tasks"><thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody></tbody></table></div>
+      <div class="card">
+        <table id="tasks">
+          <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="section">
       <h2>Active Stages</h2>
-      <div class="card"><table id="stages"><thead><tr><th>Stage</th><th>Task</th><th>Capability</th><th>Status</th><th>Claimed By</th></tr></thead><tbody></tbody></table></div>
+      <div class="card">
+        <table id="stages">
+          <thead><tr><th>Stage</th><th>Task</th><th>Capability</th><th>Status</th><th>Claimed By</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="section">
       <h2>Recent Events</h2>
-      <div class="card"><ul id="events" class="feed"></ul></div>
+      <div class="card">
+        <ul id="events" class="feed"></ul>
+      </div>
     </div>
 
     <div class="section">
       <h2>API Endpoints</h2>
-      <div class="card"><table id="endpoints"><thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead><tbody></tbody></table></div>
+      <div class="card">
+        <table id="endpoints">
+          <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Tab -->
+  <div id="viewAdmin" class="hidden">
+    <div class="section" id="usersSection">
+      <h2>Users</h2>
+      <div class="card">
+        <form id="createUserForm" class="form-row">
+          <input name="username" placeholder="Username" required pattern="[a-zA-Z0-9_.-]{3,40}" title="3-40 chars, alphanumeric/_/.-/" />
+          <input name="password" type="password" placeholder="Password" required minlength="8" />
+          <input name="email" type="email" placeholder="Email" />
+          <input name="groups" placeholder="Groups (comma)" value="user" />
+          <button type="submit" class="btn btn-primary">Create User</button>
+        </form>
+        <table id="users">
+          <thead><tr><th>Username</th><th>Email</th><th>Groups</th><th>Active</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section" id="groupsSection">
+      <h2>Groups &amp; Permissions</h2>
+      <div class="card">
+        <table id="groups">
+          <thead><tr><th>Group</th><th>Description</th><th>Permissions</th><th>Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -69,60 +119,40 @@
     </div>
   </div>
 
-  <!-- Admin Tab -->
-  <div id="viewAdmin" class="hidden">
-    <div class="section" id="usersSection">
-      <h2>Users</h2>
-      <div class="card">
-        <form id="createUserForm" class="form-row">
-          <input name="username" placeholder="Username" required pattern="[a-zA-Z0-9_.-]{3,40}" title="3-40 chars, alphanumeric/_/.-/">
-          <input name="password" type="password" placeholder="Password" required minlength="8">
-          <input name="email" type="email" placeholder="Email">
-          <input name="groups" placeholder="Groups (comma)" value="user">
-          <button type="submit" class="btn btn-primary">Create User</button>
-        </form>
-        <table id="users"><thead><tr><th>Username</th><th>Email</th><th>Groups</th><th>Active</th><th>Created</th><th>Actions</th></tr></thead><tbody></tbody></table>
-      </div>
-    </div>
-
-    <div class="section" id="groupsSection">
-      <h2>Groups &amp; Permissions</h2>
-      <div class="card">
-        <table id="groups"><thead><tr><th>Group</th><th>Description</th><th>Permissions</th><th>Actions</th></tr></thead><tbody></tbody></table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modals -->
+  <!-- Token Modal -->
   <div id="tokenOverlay" class="overlay hidden"></div>
   <div id="tokenBox" class="token-box hidden">
     <h3>Node Runtime Token</h3>
-    <p style="color:var(--muted);margin:.25rem 0 1rem;font-size:.85rem;">
+    <p class="modal-hint">
       Copy this token and provide it to the node via <code>RELAY_RUNTIME_TOKEN</code> or write it to
       <code id="tokenPath">~/.relay/NODE_ID.token</code>.
       The token is valid for 7 days.
     </p>
     <pre id="tokenValue">...</pre>
-    <button class="btn btn-primary copy-token-btn">Copy to clipboard</button>
-    <button class="btn btn-muted close-token-btn">Close</button>
+    <div class="modal-actions">
+      <button class="btn btn-primary copy-token-btn">Copy to clipboard</button>
+      <button class="btn btn-muted close-token-btn">Close</button>
+    </div>
   </div>
 
+  <!-- Permissions Modal -->
   <div id="permOverlay" class="overlay hidden"></div>
   <div id="permBox" class="token-box modal hidden">
     <h3>Edit Group Permissions</h3>
-    <p id="permGroupName">Group</p>
+    <p id="permGroupName" class="modal-hint">Group</p>
     <div id="permCheckboxes" class="perm-grid"></div>
-    <div style="margin-top:1rem;">
+    <div class="modal-actions">
       <button class="btn btn-primary save-perms-btn">Save Permissions</button>
       <button class="btn btn-muted cancel-perms-btn">Cancel</button>
     </div>
   </div>
 
+  <!-- SSN Page Modal -->
   <div id="ssnPageOverlay" class="overlay hidden"></div>
   <div id="ssnPageBox" class="ssn-box hidden">
     <h3 id="ssnPageTitle">Capability page</h3>
     <iframe id="ssnPageFrame" title="Capability dashboard page"></iframe>
-    <div style="margin-top:.75rem;">
+    <div class="modal-actions">
       <button class="btn btn-muted close-ssn-page-btn">Close</button>
     </div>
   </div>

@@ -5,6 +5,10 @@
 // needs auth; this file keeps the session-cookie/CSRF auth and the
 // mutating admin operations (users, groups, node approve/token/delete,
 // SSN capability pages).
+//
+// Rendering uses the shared cluster.css components (stat cards, node
+// cards with avatars / status-dots / cap-lists / load-bars, the activity
+// feed list) so the admin area looks like the rest of the portal.
 
 let currentUser = null;
 let allPermissions = [];
@@ -100,21 +104,18 @@ function can(perm) {
 function adminMsg(text, isError) {
   const el = document.getElementById("adminMsg");
   el.textContent = text;
-  el.className = isError ? "adminMsg error" : "adminMsg ok";
+  el.className = "admin-msg " + (isError ? "error" : "ok");
   setTimeout(() => {
     el.textContent = "";
-    el.className = "adminMsg";
+    el.className = "admin-msg";
   }, 5000);
 }
 
 async function loadMe() {
   try {
     currentUser = await fetchJson("/relay/v2/dashboard/api/me");
-    if (can("users:manage") || can("groups:manage")) {
-      document.getElementById("tabAdmin").classList.remove("hidden");
-    } else {
-      document.getElementById("tabAdmin").classList.add("hidden");
-    }
+    const canAdmin = can("users:manage") || can("groups:manage");
+    document.getElementById("tabAdmin").classList.toggle("hidden", !canAdmin);
     document.getElementById("usersSection").classList.toggle("hidden", !can("users:manage"));
     document.getElementById("groupsSection").classList.toggle("hidden", !can("groups:manage"));
   } catch (err) {
@@ -171,7 +172,7 @@ function renderAction(n) {
     actions = `<button class="token-btn" data-node-id="${n.node_id}">New Token</button>`;
   }
   if (can("nodes:delete")) {
-    actions += ` <button class="btn danger delete-btn" data-node-id="${n.node_id}" data-node-name="${escAttr(n.node_name || "")}">Delete</button>`;
+    actions += ` <button class="btn btn-danger delete-btn" data-node-id="${n.node_id}" data-node-name="${escAttr(n.node_name || "")}">Delete</button>`;
   }
   return actions;
 }
@@ -211,17 +212,17 @@ function renderUsers(users) {
       <td>${escHtml(u.username)}</td>
       <td>${escHtml(u.email || "-")}</td>
       <td><input id="groups-${u.user_id}" class="inline-input" value="${escAttr((u.groups || []).join(", "))}" /></td>
-      <td><span class="tag ${u.is_active ? "badge-active" : "badge-inactive"}">${u.is_active ? "active" : "inactive"}</span></td>
+      <td><span class="tag ${u.is_active ? "ok" : "muted"}">${u.is_active ? "active" : "inactive"}</span></td>
       <td>${fmt(u.created_at)}</td>
       <td class="admin-actions">
         <button class="token-btn save-groups-btn" data-user-id="${u.user_id}">Save Groups</button>
         <button class="token-btn reset-pw-btn" data-user-id="${u.user_id}">Reset Password</button>
         <button class="approve-btn toggle-active-btn" data-user-id="${u.user_id}" data-active="${!u.is_active}">${u.is_active ? "Deactivate" : "Activate"}</button>
-        <button class="btn danger delete-user-btn" data-user-id="${u.user_id}">Delete</button>
+        <button class="btn btn-danger delete-user-btn" data-user-id="${u.user_id}">Delete</button>
       </td>
     </tr>`
       )
-      .join("") || '<tr><td colspan="6">No users found.</td></tr>';
+      .join("") || '<tr><td colspan="6" class="empty">No users found.</td></tr>';
 }
 
 function renderGroups(groups) {
@@ -238,7 +239,7 @@ function renderGroups(groups) {
       </td>
     </tr>`
       )
-      .join("") || '<tr><td colspan="4">No groups found.</td></tr>';
+      .join("") || '<tr><td colspan="4" class="empty">No groups found.</td></tr>';
 }
 
 async function createUser(e) {
@@ -336,7 +337,106 @@ async function saveGroupPerms() {
   }
 }
 
-// --- Overview / tables ---------------------------------------------------
+// --- Overview / cards / feed --------------------------------------------
+
+function renderSummary(s) {
+  const taskStatText = Object.entries(s.task_stats || {}).map(([k, v]) => k + ": " + v).join(" · ") || "-";
+  const nodesClass = s.online_nodes > 0 ? "ok" : s.total_nodes > 0 ? "bad" : "muted";
+  const stagesClass = s.active_stages > 0 ? "warn" : "ok";
+  document.getElementById("summary").innerHTML = `
+    <div class="stat"><div class="label">Nodes</div><div class="value ${nodesClass}">${s.online_nodes}/${s.total_nodes}</div><div class="sub">online</div></div>
+    <div class="stat"><div class="label">Tasks</div><div class="value">${s.total_tasks}</div><div class="sub">${escHtml(taskStatText)}</div></div>
+    <div class="stat"><div class="label">Active Stages</div><div class="value ${stagesClass}">${s.active_stages}</div><div class="sub">in progress</div></div>
+    <div class="stat"><div class="label">Artifacts</div><div class="value">${s.total_artifacts}</div><div class="sub">stored</div></div>
+  `;
+}
+
+function renderNodeCard(n) {
+  const initial = (n.node_name || n.node_id || "?").charAt(0).toUpperCase();
+  const load = n.load ?? null;
+  const loadPct = load == null ? null : Math.min(load, 100);
+  return `
+    <div class="card node-card">
+      <div class="card-head">
+        <div class="avatar">${escHtml(initial)}</div>
+        <div class="card-head-text">
+          <div class="card-title">${escHtml(n.node_name || n.node_id)}</div>
+          <div class="card-sub mono">${escHtml(n.node_id)}</div>
+        </div>
+      </div>
+      <div class="card-meta">
+        <span class="status-dot ${statusColor(n)}"></span>${escHtml(n.status)} · ${escHtml(n.role || "-")}
+      </div>
+      <div class="cap-list">${(n.capability_names || []).map((c) => `<span class="tag">${escHtml(c)}</span>`).join("") || '<span class="card-sub">no caps</span>'}</div>
+      <div class="load-row">
+        <div class="load-bar"><span class="${loadPct == null ? "load-unknown" : ""}" ${loadPct == null ? "" : `style="width:${loadPct}%"`}></span></div>
+        <span class="card-sub">load ${load == null ? "?" : load}%</span>
+      </div>
+      <div class="card-foot">
+        <span class="card-sub">queue: ${n.queue_depth ?? "?"}</span>
+        <span class="card-sub">${fmt(n.last_seen)}</span>
+      </div>
+      <div class="card-actions">${renderAction(n)}</div>
+    </div>`;
+}
+
+function renderTasks(tasks) {
+  document.querySelector("#tasks tbody").innerHTML = (tasks || [])
+    .map(
+      (t) => `
+    <tr>
+      <td class="mono">${escHtml(t.task_id)}</td>
+      <td>${escHtml(t.task_name)}</td>
+      <td><span class="tag ${statusColor(t)}">${escHtml(t.status)}</span></td>
+      <td>${t.priority}</td>
+      <td>${fmt(t.created_at)}</td>
+    </tr>`
+    )
+    .join("") || '<tr><td colspan="5" class="empty">No tasks.</td></tr>';
+}
+
+function renderStages(stages) {
+  document.querySelector("#stages tbody").innerHTML = (stages || [])
+    .map(
+      (st) => `
+    <tr>
+      <td class="mono">${escHtml(st.stage_id)}</td>
+      <td class="mono">${escHtml(st.task_id)}</td>
+      <td>${escHtml(st.capability)}</td>
+      <td><span class="tag ${statusColor(st)}">${escHtml(st.status)}</span></td>
+      <td>${escHtml(st.claimed_by || "-")}</td>
+    </tr>`
+    )
+    .join("") || '<tr><td colspan="5" class="empty">No active stages.</td></tr>';
+}
+
+function renderEvents(events) {
+  const list = events || [];
+  document.getElementById("events").innerHTML = list
+    .map(
+      (e) => `
+    <li>
+      <span class="ev-time">${fmt(e.timestamp)}</span>
+      <span class="ev-type">${escHtml(e.type)}</span>
+      <span class="ev-payload">${escHtml(JSON.stringify(e.payload))}</span>
+    </li>`
+    )
+    .join("") || '<li class="empty">no events yet</li>';
+}
+
+function renderEndpoints(endpoints) {
+  document.querySelector("#endpoints tbody").innerHTML = (endpoints || [])
+    .map(
+      (ep) => `
+    <tr>
+      <td><span class="tag">${escHtml(ep.method)}</span></td>
+      <td class="mono">${escHtml(ep.path)}</td>
+      <td>${escHtml(ep.auth)}</td>
+      <td>${escHtml(ep.description)}</td>
+    </tr>`
+    )
+    .join("") || '<tr><td colspan="4" class="empty">No endpoints.</td></tr>';
+}
 
 async function loadAll() {
   const btn = document.getElementById("btnRefresh");
@@ -350,77 +450,14 @@ async function loadAll() {
     ]);
 
     const userNodes = (overview.nodes || []).filter((n) => n.node_id !== "__dashboard_admin__");
-    const s = overview.summary;
-    const taskStatText = Object.entries(s.task_stats || {}).map(([k, v]) => k + ": " + v).join(" · ") || "-";
-    document.getElementById("summary").innerHTML = `
-      <div class="stat"><div class="label">Nodes</div><div class="value ${s.online_nodes > 0 ? "ok" : "bad"}">${s.online_nodes}/${s.total_nodes}</div><div class="sub">online</div></div>
-      <div class="stat"><div class="label">Tasks</div><div class="value">${s.total_tasks}</div><div class="sub">${taskStatText}</div></div>
-      <div class="stat"><div class="label">Active Stages</div><div class="value ${s.active_stages > 0 ? "warn" : "ok"}">${s.active_stages}</div></div>
-      <div class="stat"><div class="label">Artifacts</div><div class="value">${s.total_artifacts}</div></div>
-    `;
 
-    document.getElementById("nodeCards").innerHTML = userNodes
-      .map(
-        (n) => `
-      <div class="card clickable ${n.status === "pending" ? "" : ""}" onclick="document.getElementById('tabAdmin').click()">
-        <div class="card-head">
-          <div class="avatar" style="background:linear-gradient(135deg,var(--accent),#6366f1)">${escHtml((n.node_name || "?")[0].toUpperCase())}</div>
-          <div>
-            <div class="card-title">${escHtml(n.node_name)} <span class="mono card-sub">${escHtml(n.node_id)}</span></div>
-            <div><span class="status-dot ${statusColor(n)}"></span>${escHtml(n.status)} · load ${n.load ?? "?"}%</div>
-          </div>
-        </div>
-        <div class="cap-list">${(n.capability_names || []).map((c) => `<span class="tag">${escHtml(c)}</span>`).join("")}</div>
-        <div class="load-bar"><span style="width:${Math.min(n.load ?? 0, 100)}%"></span></div>
-        <div class="card-sub" style="display:flex;justify-content:space-between">
-          <span>queue: ${n.queue_depth ?? "?"}</span>
-          <span>${fmt(n.last_seen)}</span>
-          <span>${renderAction(n)}</span>
-        </div>
-      </div>`
-      )
-      .join("") || '<p class="empty">No nodes registered.</p>';
-
-    document.querySelector("#tasks tbody").innerHTML = (overview.tasks || [])
-      .map(
-        (t) => `
-      <tr>
-        <td class="mono">${escHtml(t.task_id)}</td>
-        <td>${escHtml(t.task_name)}</td>
-        <td><span class="tag ${statusColor(t)}">${escHtml(t.status)}</span></td>
-        <td>${t.priority}</td>
-        <td>${fmt(t.created_at)}</td>
-      </tr>`
-      )
-      .join("");
-
-    document.querySelector("#stages tbody").innerHTML = (overview.active_stages || [])
-      .map(
-        (st) => `
-      <tr>
-        <td class="mono">${escHtml(st.stage_id)}</td>
-        <td class="mono">${escHtml(st.task_id)}</td>
-        <td>${escHtml(st.capability)}</td>
-        <td><span class="tag ${statusColor(st)}">${escHtml(st.status)}</span></td>
-        <td>${escHtml(st.claimed_by || "-")}</td>
-      </tr>`
-      )
-      .join("");
-
-    document.getElementById("events").textContent =
-      (events.events || []).map((e) => `[${fmt(e.timestamp)}] ${e.type} ${JSON.stringify(e.payload)}`).join("\n") || "no events yet";
-
-    document.querySelector("#endpoints tbody").innerHTML = (endpoints.endpoints || [])
-      .map(
-        (ep) => `
-      <tr>
-        <td><span class="tag">${escHtml(ep.method)}</span></td>
-        <td class="mono">${escHtml(ep.path)}</td>
-        <td>${escHtml(ep.auth)}</td>
-        <td>${escHtml(ep.description)}</td>
-      </tr>`
-      )
-      .join("");
+    renderSummary(overview.summary || {});
+    document.getElementById("nodeCards").innerHTML =
+      userNodes.map(renderNodeCard).join("") || '<p class="empty">No nodes registered.</p>';
+    renderTasks(overview.tasks);
+    renderStages(overview.active_stages);
+    renderEvents(events.events);
+    renderEndpoints(endpoints.endpoints);
 
     document.getElementById("status").textContent = "updated " + fmt(overview.generated_at);
   } catch (err) {
@@ -443,6 +480,24 @@ async function loadSsnPages() {
   }
 }
 
+function renderCapabilityCard(c) {
+  const page = ssnPageCapabilities.get(c.name);
+  const hasPage = !!page;
+  const clickable = hasPage ? "clickable cap-card-clickable" : "";
+  const badge = hasPage ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>' : "";
+  const dataAttr = hasPage ? `data-capability="${escAttr(c.name)}"` : "";
+  const nodeCount = (c.nodes || []).length;
+  return `
+    <div class="card ${clickable}" ${dataAttr}>
+      <div class="card-title">${escHtml(c.name)}${badge}</div>
+      <p class="card-sub">${escHtml(c.description || "No description")}</p>
+      <div class="cap-list">
+        <span class="tag">${escHtml(c.type || "unknown")}</span>
+        <span class="tag">${nodeCount} node(s)</span>
+      </div>
+    </div>`;
+}
+
 async function loadCapabilities() {
   try {
     const [capsReq] = await Promise.all([
@@ -455,22 +510,7 @@ async function loadCapabilities() {
       container.innerHTML = '<p class="empty">No capabilities advertised.</p>';
       return;
     }
-    container.innerHTML = caps
-      .map((c) => {
-        const page = ssnPageCapabilities.get(c.name);
-        const hasPage = !!page;
-        const clickable = hasPage ? "cap-card-clickable" : "";
-        const badge = hasPage ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>' : "";
-        const dataAttr = hasPage ? `data-capability="${escAttr(c.name)}"` : "";
-        return `
-      <div class="card cap-card ${clickable}" ${dataAttr}>
-        <h2 style="font-size:1.1rem;color:var(--text);text-transform:none;letter-spacing:0;margin:0;">${escHtml(c.name)}${badge}</h2>
-        <p class="card-sub">${escHtml(c.description || "No description")}</p>
-        <span class="tag">${escHtml(c.type || "unknown")}</span>
-        <span class="tag" style="margin-left:.25rem;">${(c.nodes || []).length} node(s)</span>
-      </div>`;
-      })
-      .join("");
+    container.innerHTML = caps.map(renderCapabilityCard).join("");
   } catch (err) {
     console.error("loadCapabilities failed:", err);
   }
@@ -510,6 +550,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("createUserForm")?.addEventListener("submit", createUser);
 
+  // Node actions (approve / token / delete) live inside the node cards.
   document.addEventListener("click", (e) => {
     const btn = e.target.closest(".approve-btn");
     if (btn && btn.dataset.nodeId) {
@@ -528,6 +569,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // User actions inside the users table.
   document.addEventListener("click", (e) => {
     const groupsBtn = e.target.closest(".save-groups-btn");
     if (groupsBtn) {
@@ -551,6 +593,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Group permissions button.
   document.addEventListener("click", (e) => {
     const editBtn = e.target.closest(".edit-perms-btn");
     if (editBtn) {
@@ -559,6 +602,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // SSN capability page card click.
   document.addEventListener("click", (e) => {
     const card = e.target.closest(".cap-card-clickable");
     if (card && card.dataset.capability) {
