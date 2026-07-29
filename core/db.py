@@ -11,7 +11,6 @@ from typing import Optional
 
 from relay_server.config import settings
 
-
 # ---------------------------------------------------------------------------
 # Secret redaction for audit logs (T-024)
 # ---------------------------------------------------------------------------
@@ -171,7 +170,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             is_active BOOLEAN DEFAULT 1,
             force_password_change BOOLEAN DEFAULT 1,
             created_at TEXT NOT NULL,
-            created_by TEXT
+            created_by TEXT,
+            status TEXT DEFAULT 'active'
         )
     """)
     conn.execute("""
@@ -228,7 +228,8 @@ def _schema(conn: sqlite3.Connection) -> None:
             first_heartbeat_seen BOOLEAN DEFAULT 0,
             registration_secret_hash TEXT,
             registration_secret_expires_at TEXT,
-            description TEXT
+            description TEXT,
+            consecutive_high_load INTEGER DEFAULT 0
         )
     """)
 
@@ -482,6 +483,35 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     if "retry_count" not in ts_cols:
         conn.execute(
             "ALTER TABLE task_stages ADD COLUMN retry_count INTEGER DEFAULT 0"
+        )
+
+    # T-079 / T-085: users.status column. The legacy ``is_active`` boolean
+    # is kept for backward compatibility; the new ``status`` text column
+    # carries the canonical status ("active" / "inactive") from the central
+    # status registry (core/status.py). Existing rows are backfilled from
+    # ``is_active`` when that column exists so an active user maps to
+    # "active" and a deactivated one to "inactive".
+    user_cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "status" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
+        # Backfill from is_active for any pre-existing rows, but only
+        # when the legacy column is present (some very old databases
+        # predate is_active entirely).
+        if "is_active" in user_cols:
+            conn.execute(
+                "UPDATE users SET status = CASE WHEN is_active = 0 THEN 'inactive' "
+                "ELSE 'active' END WHERE status IS NULL"
+            )
+
+    # T-081: nodes.consecutive_high_load — counter used by the auto-busy
+    # logic in discovery.mark_offline_nodes(). A node whose load stays at
+    # or above its load_cap for ``consecutive_high_load`` heartbeats in a
+    # row is automatically transitioned to "busy"; the counter resets to
+    # 0 whenever the load drops back below the cap.
+    node_cols = [r[1] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()]
+    if "consecutive_high_load" not in node_cols:
+        conn.execute(
+            "ALTER TABLE nodes ADD COLUMN consecutive_high_load INTEGER DEFAULT 0"
         )
 
     # T-053: ensure node_capabilities has the description and input_schema

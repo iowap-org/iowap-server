@@ -366,6 +366,15 @@ class HeartbeatRequest(BaseModel):
     node_name: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
     routes: Optional[List[RouteDeclaration]] = None
+    # T-081: explicit node status request (e.g. "busy"/"idle" from
+    # `node-cli node busy`/`idle`). Validated against the central
+    # status registry on the server side; invalid transitions are
+    # silently ignored.
+    status: Optional[str] = Field(None, max_length=64)
+    # T-081: per-node load ceiling used by the auto-busy logic. When
+    # ``load`` stays at or above this value for N consecutive
+    # heartbeats the node is transitioned to "busy" automatically.
+    load_cap: Optional[float] = Field(None, ge=0.0, le=1000000.0)
 
 
 class NodeHeartbeatRequest(BaseModel):
@@ -378,6 +387,9 @@ class NodeHeartbeatRequest(BaseModel):
     node_name: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
     routes: Optional[List[dict[str, Any]]] = None
+    # T-081: explicit node status request + load ceiling (see HeartbeatRequest).
+    status: Optional[str] = Field(None, max_length=64)
+    load_cap: Optional[float] = Field(None, ge=0.0, le=1000000.0)
 
 
 # ── Presence ────────────────────────────────────────────────────

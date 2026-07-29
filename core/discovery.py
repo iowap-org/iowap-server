@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional
 from relay_server.config import settings
 from relay_server.core.db import get_conn, sync_node_capabilities
 from relay_server.core.events import event_bus
+from relay_server.core.status import (
+    StatusCategory,
+    node_can_transition,
+    node_statuses_in_category,
+)
 
 
 def _now() -> datetime:
@@ -75,6 +80,8 @@ def heartbeat(
     node_name: Optional[str] = None,
     description: Optional[str] = None,
     routes: Optional[List[Dict[str, Any]]] = None,
+    status: Optional[str] = None,
+    load_cap: Optional[float] = None,
 ) -> bool:
     """Process a node heartbeat. Returns True if node was updated.
 
@@ -86,22 +93,37 @@ def heartbeat(
     fields that the node can set in its capability YAML and heartbeat
     to the server. They update the corresponding columns in the
     ``nodes`` table so ``node list``/``node info`` can display them.
+
+    T-081: ``status`` is the explicit node status the node wants to
+    transition to (e.g. ``busy`` / ``idle`` set by ``node-cli node
+    busy``/``idle``). The transition is validated via the central
+    registry (:func:`relay_server.core.status.can_transition`);
+    invalid transitions are ignored. ``load_cap`` is the per-node
+    load ceiling; when ``load >= load_cap`` for
+    :data:`settings.auto_busy_consecutive_heartbeats` heartbeats in a
+    row, the node is automatically transitioned to ``busy`` (and back
+    to ``idle`` once the load drops).
     """
     conn = get_conn()
     merged = None
     was_offline = False
     first_heartbeat = False
+    status_changed_to: Optional[str] = None
     try:
         row = conn.execute(
-            "SELECT node_id, status, available, capabilities, first_heartbeat_seen FROM nodes WHERE node_id = ?",
+            "SELECT node_id, status, available, capabilities, first_heartbeat_seen, "
+            "consecutive_high_load FROM nodes WHERE node_id = ?",
             (node_id,),
         ).fetchone()
         if not row:
             return False
 
         now = _format_time(_now())
+        old_status = row["status"]
         updates = ["last_seen = ?"]
         params: List[Any] = [now]
+        new_status = old_status
+        consecutive_high_load = int(row["consecutive_high_load"] or 0)
 
         if load is not None:
             updates.append("load = ?")
@@ -141,17 +163,66 @@ def heartbeat(
         else:
             merged = None
 
+        # T-081: explicit node status requested by the node
+        # (e.g. `node-cli node busy`). Validate via the central
+        # registry; silently ignore invalid transitions.
+        if status is not None and status != old_status:
+            if node_can_transition(old_status, status):
+                new_status = status
+                updates.append("status = ?")
+                params.append(new_status)
+                status_changed_to = new_status
+
+        # T-081: auto-busy based on load. When the node's load stays
+        # at or above its load_cap for N consecutive heartbeats, flip
+        # it to "busy"; reset the counter (and revert to "idle" when
+        # the node is currently busy) once the load drops back.
+        if load is not None:
+            cap = load_cap if load_cap is not None else None
+            if cap is not None and cap > 0:
+                if load >= cap:
+                    consecutive_high_load += 1
+                else:
+                    consecutive_high_load = 0
+                updates.append("consecutive_high_load = ?")
+                params.append(consecutive_high_load)
+
+                threshold = getattr(
+                    settings, "auto_busy_consecutive_heartbeats", 3
+                )
+                if (
+                    consecutive_high_load >= threshold
+                    and new_status in ("online", "idle", "approved")
+                ):
+                    new_status = "busy"
+                    updates.append("status = ?")
+                    params.append(new_status)
+                    status_changed_to = new_status
+                elif (
+                    consecutive_high_load == 0
+                    and new_status == "busy"
+                    and status is None
+                ):
+                    # Load fell back below the cap and the node did not
+                    # explicitly request busy → revert to idle.
+                    new_status = "idle"
+                    updates.append("status = ?")
+                    params.append(new_status)
+                    status_changed_to = new_status
+
         # If the node was marked offline, bring it back online.
         # Also transition from approved → online on any heartbeat so a
         # freshly approved node doesn't stay approved forever.
-        was_offline = row["status"] == "offline"
-        is_approved = row["status"] == "approved"
-        if was_offline or is_approved:
+        was_offline = old_status == "offline"
+        is_approved = old_status == "approved"
+        if (was_offline or is_approved) and status_changed_to is None:
+            new_status = "online"
             updates.append("status = ?")
-            params.append("online")
+            params.append(new_status)
+            status_changed_to = new_status if old_status != new_status else None
 
         # Track first approved heartbeat for node_online semantics.
-        is_approved = row["status"] in ("approved", "offline")
+        is_approved = old_status in ("approved", "offline")
         first_heartbeat = is_approved and not row["first_heartbeat_seen"]
         if first_heartbeat:
             updates.append("first_heartbeat_seen = ?")
@@ -186,6 +257,21 @@ def heartbeat(
     # heartbeat after being approved.
     if was_offline or first_heartbeat:
         event_bus.publish_sync("node_online", {"node_id": node_id})
+
+    # T-082: publish a status_changed event for any node status
+    # transition that happened during this heartbeat (explicit request
+    # via the ``status`` field, auto-busy, or the approved/offline →
+    # online recovery above).
+    if status_changed_to is not None and status_changed_to != old_status:
+        event_bus.publish_sync(
+            "status_changed",
+            {
+                "entity_type": "node",
+                "entity_id": node_id,
+                "old_status": old_status,
+                "new_status": status_changed_to,
+            },
+        )
 
     return True
 
@@ -430,31 +516,54 @@ def get_capability_by_name(name: str) -> Optional[dict]:
 
 
 def mark_offline_nodes() -> List[str]:
-    """Mark approved/online nodes as offline if heartbeat timeout exceeded.
+    """Mark alive nodes as offline if heartbeat timeout exceeded (T-080).
 
     Admin nodes do not send heartbeats and are therefore excluded.
     Uses a re-check in the UPDATE WHERE clause to avoid TOCTOU races:
     a node that heartbeats between SELECT and UPDATE will not be marked offline.
+
+    T-080: the set of statuses eligible for offline-marking is derived
+    from the central registry — every node status in the AVAILABLE or
+    BUSY category (approved, online, idle, busy, maintenance) is a live
+    node that should be flagged offline when it stops heartbeating.
+    PENDING (``pending``) nodes have never heartbeated and are left
+    alone; OFFLINE nodes are already offline.
 
     T-061: when a node is marked offline, all of its ``claimed`` stages
     are transitioned to ``failed`` (and the owning task is failed too
     if every stage has reached a terminal state). This prevents stages
     from staying ``claimed`` forever when a node dies without releasing
     its claims.
+
+    T-082: a ``status_changed`` event is published for every node and
+    stage transitioned here.
     """
     threshold = _format_time(_node_timeout_threshold())
+    # AVAILABLE + BUSY node statuses (approved, online, idle, busy, maintenance).
+    live_statuses = node_statuses_in_category(StatusCategory.AVAILABLE) + \
+        node_statuses_in_category(StatusCategory.BUSY)
+    placeholders = ",".join("?" for _ in live_statuses) or "''"
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT node_id FROM nodes
-            WHERE status IN ('approved', 'online') AND last_seen < ? AND role != 'admin'
+            WHERE status IN ({placeholders}) AND last_seen < ? AND role != 'admin'
             """,
-            (threshold,),
+            [*live_statuses, threshold],
         ).fetchall()
         candidate_ids = [r["node_id"] for r in rows]
         if not candidate_ids:
             return []
+
+        # Capture the old status of each candidate so we can publish
+        # accurate status_changed events after the UPDATE.
+        old_status_map: dict[str, str] = {
+            nid: conn.execute(
+                "SELECT status FROM nodes WHERE node_id = ?", (nid,)
+            ).fetchone()["status"]
+            for nid in candidate_ids
+        }
 
         # Re-check last_seen in the UPDATE to avoid TOCTOU:
         # only mark offline if last_seen is STILL below threshold.
@@ -524,13 +633,40 @@ def mark_offline_nodes() -> List[str]:
 
         for nid in offline_ids:
             event_bus.publish_sync("node_offline", {"node_id": nid})
+            event_bus.publish_sync(
+                "status_changed",
+                {
+                    "entity_type": "node",
+                    "entity_id": nid,
+                    "old_status": old_status_map.get(nid),
+                    "new_status": "offline",
+                },
+            )
         for s in failed_stages:
             event_bus.publish_sync(
                 "stage_failed",
                 {"stage_id": s["stage_id"], "task_id": s["task_id"]},
             )
+            event_bus.publish_sync(
+                "status_changed",
+                {
+                    "entity_type": "stage",
+                    "entity_id": s["stage_id"],
+                    "old_status": "claimed",
+                    "new_status": "failed",
+                },
+            )
         for task_id in tasks_failed:
             event_bus.publish_sync("task_failed", {"task_id": task_id})
+            event_bus.publish_sync(
+                "status_changed",
+                {
+                    "entity_type": "task",
+                    "entity_id": task_id,
+                    "old_status": "running",
+                    "new_status": "failed",
+                },
+            )
 
         return offline_ids
     finally:

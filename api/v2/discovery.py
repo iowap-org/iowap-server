@@ -6,12 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from relay_server.api.v2.security import get_auth_context
 from relay_server.core.discovery import (
-    get_capabilities, get_capability_by_name,
-    heartbeat, list_nodes, query_nodes_by_capability,
+    get_capabilities,
+    get_capability_by_name,
+    heartbeat,
+    list_nodes,
+    query_nodes_by_capability,
 )
 from relay_server.models import (
-    AuthContext, DiscoveryDetailResponse, DiscoveryResponse,
-    HeartbeatRequest, NodeHeartbeatRequest,
+    AuthContext,
+    DiscoveryDetailResponse,
+    DiscoveryResponse,
+    HeartbeatRequest,
+    NodeHeartbeatRequest,
 )
 
 router = APIRouter()
@@ -22,7 +28,13 @@ async def discovery_heartbeat(
     body: HeartbeatRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Node heartbeat updating last_seen and optional metadata."""
+    """Node heartbeat updating last_seen and optional metadata.
+
+    T-081: an optional ``status`` field lets the node request an
+    explicit status transition (e.g. ``busy`` / ``idle`` from
+    ``node-cli node busy``/``idle``). ``load_cap`` carries the
+    per-node load ceiling used by the auto-busy logic.
+    """
     ok = heartbeat(
         node_id=ctx.node_id,
         load=body.load,
@@ -33,6 +45,8 @@ async def discovery_heartbeat(
         node_name=body.node_name,
         description=body.description,
         routes=[r.model_dump() for r in body.routes] if body.routes else None,
+        status=body.status,
+        load_cap=body.load_cap,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")
@@ -44,7 +58,11 @@ async def discovery_worker_heartbeat(
     body: NodeHeartbeatRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Worker heartbeat with full capability data (replace mode)."""
+    """Worker heartbeat with full capability data (replace mode).
+
+    T-081: forwards ``status`` and ``load_cap`` like the regular
+    heartbeat endpoint.
+    """
     ok = heartbeat(
         node_id=ctx.node_id,
         load=body.load,
@@ -56,6 +74,8 @@ async def discovery_worker_heartbeat(
         node_name=body.node_name,
         description=body.description,
         routes=body.routes,
+        status=body.status,
+        load_cap=body.load_cap,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")

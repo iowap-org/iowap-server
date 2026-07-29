@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn, get_capability_details, get_node_capability_names
+from relay_server.core.db import get_capability_details, get_conn, get_node_capability_names
 from relay_server.core.events import event_bus
-
+from relay_server.core.status import node_can_claim, node_claim_statuses
 
 # ---------------------------------------------------------------------------
 # Retry helper for SQLite lock contention
@@ -144,6 +144,15 @@ class Scheduler:
 
             conn.commit()
             event_bus.publish_sync("task_created", {"task_id": task_id, "task_name": task_name})
+            event_bus.publish_sync(
+                "status_changed",
+                {
+                    "entity_type": "task",
+                    "entity_id": task_id,
+                    "old_status": None,
+                    "new_status": "pending",
+                },
+            )
             return {"task_id": task_id, "status": "pending", "stage_count": len(stage_records)}
         finally:
             conn.close()
@@ -241,15 +250,17 @@ class Scheduler:
         try:
             # Determine capabilities of the node if not provided.
             if not capability:
-                # Verify the node exists and is approved/online (status
-                # gate). The capability names come from the normalized
+                # T-080: status gate via the central registry. A node may
+                # claim stages only when its status is AVAILABLE (approved,
+                # online, idle). BUSY / OFFLINE / TERMINAL nodes cannot
+                # claim. The capability names come from the normalized
                 # node_capabilities index (T-026) instead of json.loads
                 # on the nodes.capabilities TEXT column.
                 node_row = conn.execute(
-                    "SELECT capabilities FROM nodes WHERE node_id = ? AND status IN ('approved', 'online')",
+                    "SELECT capabilities, status FROM nodes WHERE node_id = ?",
                     (node_id,),
                 ).fetchone()
-                if not node_row:
+                if not node_row or not node_can_claim(node_row["status"]):
                     return None
 
                 # Use the normalized index for capability names. Fall back
@@ -345,16 +356,40 @@ class Scheduler:
                     continue
 
                 # Update task status to running if first claim.
+                task_before = conn.execute(
+                    "SELECT status FROM tasks WHERE task_id = ?", (row["task_id"],)
+                ).fetchone()
+                task_old_status = task_before["status"] if task_before else None
                 conn.execute(
                     "UPDATE tasks SET status = 'running', updated_at = ? WHERE task_id = ? AND status = 'pending'",
                     (now, row["task_id"]),
                 )
+                task_new_status = "running" if task_old_status == "pending" else task_old_status
                 conn.commit()
 
                 event_bus.publish_sync(
                     "stage_claimed",
                     {"task_id": row["task_id"], "stage_id": stage_id, "node_id": node_id},
                 )
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "stage",
+                        "entity_id": stage_id,
+                        "old_status": "pending",
+                        "new_status": "claimed",
+                    },
+                )
+                if task_old_status != task_new_status:
+                    event_bus.publish_sync(
+                        "status_changed",
+                        {
+                            "entity_type": "task",
+                            "entity_id": row["task_id"],
+                            "old_status": task_old_status,
+                            "new_status": task_new_status,
+                        },
+                    )
                 stage_dict = _stage_row_to_dict(
                     conn.execute(
                         "SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,)
@@ -445,11 +480,29 @@ class Scheduler:
                     "task_completed",
                     {"task_id": row["task_id"]},
                 )
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "task",
+                        "entity_id": row["task_id"],
+                        "old_status": "running",
+                        "new_status": "completed",
+                    },
+                )
             conn.commit()
 
             event_bus.publish_sync(
                 "stage_completed",
                 {"task_id": row["task_id"], "stage_id": stage_id, "node_id": node_id},
+            )
+            event_bus.publish_sync(
+                "status_changed",
+                {
+                    "entity_type": "stage",
+                    "entity_id": stage_id,
+                    "old_status": "claimed",
+                    "new_status": "completed",
+                },
             )
             return _stage_row_to_dict(
                 conn.execute("SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,)).fetchone()
@@ -525,8 +578,36 @@ class Scheduler:
 
             for stage_id in failed_stage_ids:
                 event_bus.publish_sync("stage_failed", {"stage_id": stage_id})
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "stage",
+                        "entity_id": stage_id,
+                        "old_status": "claimed",
+                        "new_status": "failed",
+                    },
+                )
+            for stage_id in released:
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "stage",
+                        "entity_id": stage_id,
+                        "old_status": "claimed",
+                        "new_status": "pending",
+                    },
+                )
             for task_id in tasks_failed:
                 event_bus.publish_sync("task_failed", {"task_id": task_id})
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "task",
+                        "entity_id": task_id,
+                        "old_status": "running",
+                        "new_status": "failed",
+                    },
+                )
 
             return {
                 "released": released,
@@ -600,10 +681,28 @@ class Scheduler:
                         "stage_timed_out",
                         {"stage_id": stage_id},
                     )
+                    event_bus.publish_sync(
+                        "status_changed",
+                        {
+                            "entity_type": "stage",
+                            "entity_id": stage_id,
+                            "old_status": "claimed",
+                            "new_status": "timed_out",
+                        },
+                    )
                 for task_id in tasks_timed_out:
                     event_bus.publish_sync(
                         "task_timed_out",
                         {"task_id": task_id},
+                    )
+                    event_bus.publish_sync(
+                        "status_changed",
+                        {
+                            "entity_type": "task",
+                            "entity_id": task_id,
+                            "old_status": "running",
+                            "new_status": "timed_out",
+                        },
                     )
 
             return {
@@ -631,15 +730,18 @@ class Scheduler:
         conn = get_conn()
         try:
             # Pending stages whose capability is not advertised by any
-            # approved/online node. We intentionally do NOT filter on
+            # AVAILABLE node (T-080: status gate via the central registry).
+            # We intentionally do NOT filter on
             # ``node_capabilities.available``: that flag is only flipped
             # to 1 by an explicit worker-heartbeat, so a freshly approved
             # node (still on its first heartbeat) would otherwise be
             # treated as "not covering" the capability and its pending
             # stages would be failed spuriously. The authoritative
             # availability signal is the owning node's ``status``.
+            claim_statuses = node_claim_statuses()
+            placeholders = ",".join("?" for _ in claim_statuses) or "''"
             rows = conn.execute(
-                """
+                f"""
                 SELECT ts.stage_id, ts.task_id
                 FROM task_stages ts
                 WHERE ts.status = 'pending'
@@ -647,9 +749,10 @@ class Scheduler:
                       SELECT 1 FROM node_capabilities nc
                       JOIN nodes n ON n.node_id = nc.node_id
                       WHERE nc.capability_name = ts.capability
-                        AND n.status IN ('approved', 'online')
+                        AND n.status IN ({placeholders})
                   )
                 """,
+                claim_statuses,
             ).fetchall()
             if not rows:
                 return {"stages_failed": [], "tasks_failed": []}
@@ -683,10 +786,28 @@ class Scheduler:
                     "stage_failed",
                     {"stage_id": stage_id, "reason": "orphaned_capability"},
                 )
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "stage",
+                        "entity_id": stage_id,
+                        "old_status": "pending",
+                        "new_status": "failed",
+                    },
+                )
             for task_id in tasks_failed:
                 event_bus.publish_sync(
                     "task_failed",
                     {"task_id": task_id, "reason": "orphaned_stages"},
+                )
+                event_bus.publish_sync(
+                    "status_changed",
+                    {
+                        "entity_type": "task",
+                        "entity_id": task_id,
+                        "old_status": "running",
+                        "new_status": "failed",
+                    },
                 )
 
             return {

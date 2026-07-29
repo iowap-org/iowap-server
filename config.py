@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     default_timeout_seconds: int = 300
     max_retries: int = 2
 
+    # T-081: auto-busy — number of consecutive heartbeats a node's load
+    # must stay at or above its load_cap before the server transitions
+    # it to "busy". The counter resets as soon as the load drops below
+    # the cap, at which point the node reverts to "idle".
+    auto_busy_consecutive_heartbeats: int = 3
+
     # Maintenance (T-050)
     maintenance_interval_seconds: int = 5
     artifact_cleanup_max_age_days: float = 7.0

@@ -12,6 +12,22 @@ function fmt(d) {
   return isNaN(dt) ? d : dt.toLocaleString();
 }
 
+// T-083: status colour mapping. The server sends a pre-computed
+// ``status_color`` field for every node/task/stage in the overview
+// response (derived from the central status registry), so the
+// dashboard can colour status tags by category without duplicating
+// the registry logic in JS. Fall back to a simple online/offline
+// heuristic for older server responses that lack the field.
+function statusColor(entity) {
+  if (entity && entity.status_color) return entity.status_color;
+  const s = entity && entity.status;
+  if (s === 'online' || s === 'approved' || s === 'idle' || s === 'completed') return 'ok';
+  if (s === 'busy' || s === 'running' || s === 'claimed') return 'warn';
+  if (s === 'pending' || s === 'accepted') return 'info';
+  if (s === 'failed' || s === 'timed_out' || s === 'cancelled' || s === 'offline') return 'bad';
+  return 'muted';
+}
+
 function getCsrfToken() {
   const m = document.cookie.match(/(?:^|;\s*)relay_csrf=([^;]+)/);
   return m ? decodeURIComponent(m[1]) : '';
@@ -409,7 +425,7 @@ async function loadAll() {
         <td class="mono">${n.node_id}</td>
         <td>${n.node_name}</td>
         <td><span class="tag">${n.role}</span></td>
-        <td><span class="tag ${n.status === 'online' ? 'ok' : 'bad'}">${n.status}</span></td>
+        <td><span class="tag ${statusColor(n)}">${n.status}</span></td>
         <td>${(n.capability_names || []).join(', ')}</td>
         <td>${n.load ?? '-'}</td>
         <td>${n.queue_depth ?? '-'}</td>
@@ -422,7 +438,7 @@ async function loadAll() {
       <tr>
         <td class="mono">${t.task_id}</td>
         <td>${t.task_name}</td>
-        <td><span class="tag">${t.status}</span></td>
+        <td><span class="tag ${statusColor(t)}">${t.status}</span></td>
         <td>${t.priority}</td>
         <td>${fmt(t.created_at)}</td>
       </tr>
@@ -433,7 +449,7 @@ async function loadAll() {
         <td class="mono">${st.stage_id}</td>
         <td class="mono">${st.task_id}</td>
         <td>${st.capability}</td>
-        <td><span class="tag ${st.status === 'claimed' ? 'warn' : 'ok'}">${st.status}</span></td>
+        <td><span class="tag ${statusColor(st)}">${st.status}</span></td>
         <td>${st.claimed_by || '-'}</td>
       </tr>
     `).join('');

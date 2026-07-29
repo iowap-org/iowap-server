@@ -1,4 +1,5 @@
 import secrets
+
 """Dashboard router for the relay service — static UI + API endpoints."""
 
 import asyncio
@@ -6,9 +7,9 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -19,6 +20,7 @@ from relay_server.api.v2.security import (
 )
 from relay_server.config import settings
 from relay_server.core.db import get_conn
+from relay_server.core.route_registry import router as node_routes_router
 from relay_server.core.session import (
     CSRF_MAX_AGE_SECONDS,
     MASTER_SEED_SESSION_MAX_AGE_SECONDS,
@@ -43,8 +45,6 @@ from relay_server.core.users import (
     set_user_password,
 )
 from relay_server.models import AuthContext
-
-from relay_server.core.route_registry import router as node_routes_router
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
@@ -321,6 +321,8 @@ async def dashboard_me(request: Request, ctx: AuthContext = Depends(require_dash
 async def dashboard_overview(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Aggregated cluster overview for the dashboard."""
     check_dashboard_permission(ctx, "dashboard:view")
+    from relay_server.core.status import get_category, status_color
+
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc)
@@ -335,6 +337,7 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
             if r["node_id"] == DASHBOARD_ADMIN_NODE:
                 continue
             cap_list = _safe_json(r["capabilities"], [])
+            cat = get_category(r["status"])
             nodes.append(
                 {
                     "node_id": r["node_id"],
@@ -343,6 +346,8 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
                     "capabilities": cap_list,
                     "capability_names": [c.get("name") for c in cap_list],
                     "status": r["status"],
+                    "status_category": cat.value if cat else None,
+                    "status_color": status_color(r["status"]),
                     "role": r["role"],
                     "last_seen": r["last_seen"],
                     "first_heartbeat_seen": r["first_heartbeat_seen"],
@@ -358,17 +363,21 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
             "SELECT task_id, task_name, status, priority, created_at, completed_at "
             "FROM tasks ORDER BY created_at DESC LIMIT 50"
         ).fetchall()
-        tasks = [
-            {
-                "task_id": r["task_id"],
-                "task_name": r["task_name"],
-                "status": r["status"],
-                "priority": r["priority"],
-                "created_at": r["created_at"],
-                "completed_at": r["completed_at"],
-            }
-            for r in task_rows
-        ]
+        tasks = []
+        for r in task_rows:
+            cat = get_category(r["status"])
+            tasks.append(
+                {
+                    "task_id": r["task_id"],
+                    "task_name": r["task_name"],
+                    "status": r["status"],
+                    "status_category": cat.value if cat else None,
+                    "status_color": status_color(r["status"]),
+                    "priority": r["priority"],
+                    "created_at": r["created_at"],
+                    "completed_at": r["completed_at"],
+                }
+            )
 
         status_counts = conn.execute(
             "SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status"
@@ -379,18 +388,22 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
             "SELECT stage_id, task_id, stage_name, capability, status, claimed_by, claimed_at "
             "FROM task_stages WHERE status IN ('pending','claimed') ORDER BY created_at DESC LIMIT 50"
         ).fetchall()
-        active_stages = [
-            {
-                "stage_id": r["stage_id"],
-                "task_id": r["task_id"],
-                "stage_name": r["stage_name"],
-                "capability": r["capability"],
-                "status": r["status"],
-                "claimed_by": r["claimed_by"],
-                "claimed_at": r["claimed_at"],
-            }
-            for r in stage_rows
-        ]
+        active_stages = []
+        for r in stage_rows:
+            cat = get_category(r["status"])
+            active_stages.append(
+                {
+                    "stage_id": r["stage_id"],
+                    "task_id": r["task_id"],
+                    "stage_name": r["stage_name"],
+                    "capability": r["capability"],
+                    "status": r["status"],
+                    "status_category": cat.value if cat else None,
+                    "status_color": status_color(r["status"]),
+                    "claimed_by": r["claimed_by"],
+                    "claimed_at": r["claimed_at"],
+                }
+            )
 
         artifact_rows = conn.execute(
             "SELECT artifact_id, task_id, stage_id, name, mime_type, size_bytes, created_at "
@@ -531,11 +544,11 @@ async def _fetch_ssn_pages() -> list[dict[str, str]]:
     (Dynamic Route URL to the page). Errors map to an empty list.
     """
     from relay_server.api.v2.scheduler import scheduler_create_simple_task
-    from relay_server.core.scheduler import Scheduler
-    from relay_server.models import SimpleTaskRequest
 
     # Find the SSN node_id from the ssn.capability-pages capability.
     from relay_server.core.discovery import get_capability_by_name
+    from relay_server.core.scheduler import Scheduler
+    from relay_server.models import SimpleTaskRequest
     cap = get_capability_by_name(SSN_PAGES_CAPABILITY)
     if not cap or not cap.get("nodes"):
         return []
