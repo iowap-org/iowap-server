@@ -1,29 +1,106 @@
-/* admin.css — Admin area styles (Phase 20, T-044).
+/* admin.css — Admin Dashboard styles.
  *
- * Only admin-specific styling lives here. All shared design tokens
- * (colours, body, .nav, .btn, .card, .tag, .status-dot, .stat, .grid,
- * .load-bar, .feed, tables, .section, .tabs, .empty, .error) come from
- * cluster.css. This file adds only what the admin area needs on top:
- * the message banner, the create-user form, the inline node approve
- * inputs, the action buttons inside node/user cards, the permissions
- * grid, the token/permissions/SSN-page modals and a few small helpers
- * used by admin.js to compose the node cards.
+ * Complete rewrite: brings the Community Portal mockup look to the admin
+ * area. This file loads AFTER cluster.css and re-declares the design
+ * tokens + mockup components (nav, hero, status-bar, node cards,
+ * activity feed, footer) so the admin looks exactly like the reference
+ * mockup, then adds the admin-only specifics (tabs, modals, create-user
+ * form, inline inputs, permissions grid, SSN page, action buttons).
+ *
+ * cluster.css is intentionally NOT modified — every override lives here.
  */
 
-/* --- Message banner ----------------------------------------------------- */
+/* ===== Design tokens (mockup palette, override cluster.css) ============= */
 
-.admin-msg { padding: 0 1.5rem; min-height: 1.5rem; font-size: 0.85rem; }
-.admin-msg.error { color: var(--bad); }
-.admin-msg.ok { color: var(--ok); }
+:root {
+  --bg: #0b0d14;
+  --nav: #12141e;
+  --panel: #181b26;
+  --panel-2: #1c2030;
+  --text: #e4e8f0;
+  --muted: #848aa0;
+  --accent: #6c8cff;
+  --accent-2: #a78bfa;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --info: #60a5fa;
+  --border: #262a38;
+}
 
-/* --- Nav helpers (cluster.css owns .nav / .nav-right) ------------------- */
+body { background: var(--bg); color: var(--text); }
 
-.nav-status { color: var(--muted); font-size: 0.85rem; }
+/* keep cluster.css helpers working */
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.hidden { display: none !important; }
+.empty { color: var(--muted); padding: 1rem 0; }
+.error { color: var(--bad); }
+
+/* ===== Top navigation (mockup .topnav) ================================= */
+
+.topnav {
+  background: var(--nav);
+  border-bottom: 1px solid var(--border);
+  padding: 0 2rem;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  gap: 0.25rem;
+}
+.topnav .logo {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--accent);
+  margin-right: 2rem;
+  letter-spacing: -0.02em;
+}
+.topnav .logo span { color: var(--muted); font-weight: 400; }
+.topnav-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.35rem;
+  transition: all 0.15s;
+  cursor: pointer;
+}
+.topnav-link:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); text-decoration: none; }
+.topnav-link.active { color: var(--accent); background: rgba(108, 140, 255, 0.08); }
+.topnav .spacer { flex: 1; }
+.topnav-avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; font-weight: 600; cursor: pointer;
+  margin-left: 0.5rem;
+}
+.nav-status { color: var(--muted); font-size: 0.85rem; margin-right: 0.5rem; }
 .nav-form { display: inline; }
 
-/* --- Tabs (cluster.css owns the base; admin adds the row layout) -------- */
+/* ===== Buttons (override cluster.css .btn to mockup style) ============== */
 
-.tabs { display: flex; gap: 0.5rem; padding: 1rem 1.5rem 0; }
+.btn {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 0.4rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s;
+}
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-danger { background: var(--bad); border-color: var(--bad); color: #041206; }
+.btn-muted { background: #6b7280; border-color: #6b7280; color: #fff; }
+.btn-ghost { background: transparent; }
+
+/* ===== Tab strip ======================================================= */
+
+.tabs { display: flex; gap: 0.5rem; padding: 1rem 2rem 0; }
 .tab {
   padding: 0.5rem 1rem;
   background: var(--panel-2);
@@ -32,11 +109,291 @@
   border-radius: 0.5rem;
   cursor: pointer;
   font-size: 0.85rem;
+  transition: all 0.15s;
 }
 .tab:hover { color: var(--text); }
 .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-/* --- Create-user form --------------------------------------------------- */
+/* ===== Message banner ================================================== */
+
+.admin-msg { padding: 0 2rem; min-height: 1.5rem; font-size: 0.85rem; }
+.admin-msg.error { color: var(--bad); }
+.admin-msg.ok { color: var(--ok); }
+
+/* ===== Hero (override cluster.css .hero) =============================== */
+
+.hero {
+  padding: 3rem 2rem 2rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; }
+.hero p {
+  color: var(--muted);
+  font-size: 1rem;
+  max-width: 600px;
+  margin: 0 auto 1.5rem;
+}
+.hero .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  padding: 0.35rem 1rem;
+  border-radius: 2rem;
+  font-size: 0.85rem;
+  color: var(--ok);
+}
+.hero .pill .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok);
+  display: inline-block;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* ===== Status bar (mockup flex row) ===================================== */
+
+.status-bar-wrap { display: flex; justify-content: center; }
+.status-bar {
+  display: flex;
+  gap: 0;
+  background: var(--nav);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  margin: -1.5rem auto 2rem;
+  max-width: 700px;
+  overflow: hidden;
+  padding: 0;
+}
+.status-item {
+  flex: 1;
+  padding: 1rem;
+  text-align: center;
+  border-right: 1px solid var(--border);
+}
+.status-item:last-child { border-right: none; }
+.status-item .num { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+.status-item .num.ok { color: var(--ok); }
+.status-item .num.warn { color: var(--warn); }
+.status-item .num.bad { color: var(--bad); }
+.status-item .num.info { color: var(--info); }
+.status-item .lbl {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+/* ===== Container + sections (mockup layout) ============================= */
+
+.container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+
+.section {
+  margin: 2rem 0 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.section h2 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+.section .link { font-size: 0.8rem; color: var(--accent); text-decoration: none; }
+.section .link:hover { text-decoration: underline; }
+
+/* ===== Panel (table wrapper) =========================================== */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0.5rem 1rem;
+  margin-bottom: 2rem;
+  overflow-x: auto;
+}
+
+/* ===== Tables (override cluster.css) =================================== */
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.55rem 0.5rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+tbody tr:last-child td { border-bottom: none; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--panel-2); }
+
+/* status tag inside tables */
+.tag {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.3rem;
+  font-size: 0.72rem;
+}
+.tag.ok { color: var(--ok); background: rgba(52, 211, 153, 0.15); }
+.tag.warn { color: var(--warn); background: rgba(251, 191, 36, 0.15); }
+.tag.bad { color: var(--bad); background: rgba(248, 113, 113, 0.15); }
+.tag.info { color: var(--info); background: rgba(96, 165, 250, 0.15); }
+.tag.muted { color: var(--muted); background: rgba(132, 138, 160, 0.15); }
+
+/* ===== Node cards (mockup profile-card style) ========================== */
+
+.node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.node-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: border-color 0.15s;
+  cursor: pointer;
+}
+.node-card:hover { border-color: var(--accent); }
+.node-card .banner {
+  height: 48px;
+  background: linear-gradient(135deg, var(--accent), transparent);
+}
+.node-card .banner.warn { background: linear-gradient(135deg, var(--warn), transparent); }
+.node-card .banner.ssn { background: linear-gradient(135deg, var(--accent-2), transparent); }
+.node-card .banner.ct { background: linear-gradient(135deg, var(--info), transparent); }
+.node-card .body { padding: 0 1rem 1rem; margin-top: -20px; }
+.node-card .node-avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 2px solid var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.node-card .node-avatar.cyberfox { background: linear-gradient(135deg, var(--accent), var(--ok)); }
+.node-card .node-avatar.mac { background: linear-gradient(135deg, var(--warn), var(--bad)); }
+.node-card .node-avatar.ssn { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
+.node-card .node-avatar.ct { background: linear-gradient(135deg, var(--info), var(--ok)); }
+.node-card .node-avatar.default { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.node-card .node-name { font-weight: 600; font-size: 0.95rem; }
+.node-card .node-id { font-size: 0.7rem; color: var(--muted); font-family: ui-monospace, monospace; margin-left: 0.4rem; }
+.node-card .node-status {
+  font-size: 0.75rem;
+  display: flex; align-items: center;
+  gap: 0.35rem;
+  margin: 0.35rem 0;
+  color: var(--muted);
+}
+.node-card .node-status .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.node-card .node-caps { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
+.node-card .node-caps .c {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+  background: rgba(108, 140, 255, 0.1);
+  color: var(--info);
+}
+.node-card .node-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.node-card .load-mini {
+  height: 3px;
+  background: var(--bg);
+  border-radius: 2px;
+  margin-top: 0.35rem;
+  overflow: hidden;
+}
+.node-card .load-mini .f { height: 100%; border-radius: 2px; }
+.node-card .card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* ===== Activity feed (mockup) =========================================== */
+
+.activity {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.activity-item:last-child { border-bottom: none; }
+.activity .icon {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+.activity .ts { color: var(--muted); font-size: 0.75rem; margin-left: auto; white-space: nowrap; }
+.activity .highlight { color: var(--accent); }
+.activity .ok { color: var(--ok); }
+.activity .warn { color: var(--warn); }
+.activity .bad { color: var(--bad); }
+.activity .ev-body { min-width: 0; }
+
+/* ===== Footer (mockup) ================================================= */
+
+.footer-mockup {
+  text-align: center;
+  padding: 2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+}
+.footer-mockup a { color: var(--accent); text-decoration: none; }
+.footer-mockup a:hover { text-decoration: underline; }
+
+/* ===== Capability cards (grid reuses cluster.css .grid) ================ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.cap-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cap-card:hover { border-color: var(--accent); }
+.cap-card .cap-name { font-weight: 600; font-size: 1rem; }
+.cap-card .cap-desc { color: var(--muted); font-size: 0.85rem; }
+.cap-card .cap-page-badge {
+  margin-left: 0.4rem;
+  font-size: 0.95rem;
+  cursor: help;
+}
+.cap-card-clickable { cursor: pointer; transition: border-color 0.15s; }
+.cap-card-clickable:hover { border-color: var(--accent); }
+
+/* ===== Create-user form ================================================= */
 
 .form-row {
   display: flex;
@@ -51,13 +408,13 @@
   border: 1px solid var(--border);
   color: var(--text);
   padding: 0.5rem;
-  border-radius: 0.35rem;
+  border-radius: 0.4rem;
   font-size: 0.85rem;
 }
 .form-row input:focus,
 .form-row select:focus { border-color: var(--accent); outline: none; }
 
-/* --- Inline inputs (node approve form, user groups edit) ---------------- */
+/* ===== Inline inputs (node approve form, user groups edit) ============= */
 
 .inline-input,
 .inline-select {
@@ -70,7 +427,7 @@
 }
 .inline-input { width: 140px; }
 
-/* --- Action buttons inside cards / tables -------------------------------- */
+/* ===== Action buttons inside cards / tables ============================= */
 
 .approve-btn {
   background: var(--ok);
@@ -82,7 +439,6 @@
   font-size: 0.8rem;
 }
 .approve-btn:hover { opacity: 0.9; }
-.approve-btn:disabled { opacity: 0.5; }
 
 .token-btn {
   background: var(--accent);
@@ -98,48 +454,11 @@
 .admin-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
 .admin-actions button { font-size: 0.75rem; padding: 0.25rem 0.45rem; }
 
-/* --- Node card composition ---------------------------------------------- */
-/* cluster.css owns .card / .card-head / .avatar / .card-title / .card-sub /
- * .cap-list / .load-row / .load-bar. These helpers just arrange the bits
- * admin.js renders for each node. */
-
-.node-card { gap: 0.5rem; }
-.card-head-text { display: flex; flex-direction: column; min-width: 0; }
-.card-head-text .card-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-meta { color: var(--muted); font-size: 0.82rem; display: flex; align-items: center; }
-.card-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  align-items: center;
-  border-top: 1px solid var(--border);
-  padding-top: 0.5rem;
-}
-
-/* Unknown load — empty bar segment instead of a 0% fill. */
-.load-bar > span.load-unknown { width: 0; }
-
-/* --- Activity feed payload line ----------------------------------------- */
-
-.feed .ev-payload {
-  display: block;
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.75rem;
-  margin-top: 0.15rem;
-  word-break: break-all;
-}
-
-/* --- Modals -------------------------------------------------------------- */
+/* ===== Modals ========================================================== */
 
 .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: 99; }
 
-.token-box {
+.modal-box {
   position: fixed;
   top: 50%; left: 50%; transform: translate(-50%, -50%);
   background: var(--panel);
@@ -149,25 +468,25 @@
   min-width: 500px; max-width: 90vw;
   z-index: 100;
 }
-.token-box h3 { margin: 0 0 0.75rem; }
-.token-box pre {
+.modal-box h3 { margin: 0 0 0.75rem; }
+.modal-box pre {
   background: #10131a;
   padding: 0.75rem;
   border-radius: 0.5rem;
   word-break: break-all;
   margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  overflow: auto;
 }
-
-.modal h3 { margin: 0 0 1rem; }
-
 .modal-hint {
   color: var(--muted);
   font-size: 0.85rem;
   margin: 0 0 1rem;
 }
+.modal-hint code { font-family: ui-monospace, monospace; }
 .modal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
 
-/* --- Permissions grid ---------------------------------------------------- */
+/* ===== Permissions grid ================================================= */
 
 .perm-grid {
   display: grid;
@@ -181,7 +500,7 @@
   font-size: 0.85rem; cursor: pointer;
 }
 
-/* --- SSN page modal (admin keeps capability-page iframe) ---------------- */
+/* ===== SSN page modal ================================================== */
 
 .ssn-box {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -198,8 +517,17 @@
   background: #fff;
 }
 
-/* --- Capability card clickability + SSN page badge ---------------------- */
+/* ===== Responsive ====================================================== */
 
-.cap-card-clickable { cursor: pointer; transition: border-color 0.15s; }
-.cap-card-clickable:hover { border-color: var(--accent); }
-.cap-page-badge { margin-left: 0.35rem; font-size: 1rem; cursor: help; }
+@media (max-width: 768px) {
+  .topnav { padding: 0 1rem; overflow-x: auto; }
+  .topnav-link { font-size: 0.8rem; padding: 0.5rem 0.6rem; }
+  .hero { padding: 2rem 1rem 1.5rem; }
+  .hero h1 { font-size: 1.5rem; }
+  .status-bar { flex-wrap: wrap; margin: -1rem 1rem 1.5rem; max-width: none; }
+  .status-item { flex: 1 1 50%; border-bottom: 1px solid var(--border); }
+  .container { padding: 0 1rem; }
+  .node-grid { grid-template-columns: 1fr; }
+  .tabs { padding: 1rem 1rem 0; }
+  .admin-msg { padding: 0 1rem; }
+}

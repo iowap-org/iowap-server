@@ -1,14 +1,11 @@
-// admin.js — Admin area (Phase 20, T-044).
+// admin.js — Admin Dashboard (Community Portal mockup style).
 //
-// Login-protected admin functions split out of the old dashboard.js.
-// The public Community Portal (dashboard.html/dashboard.js) no longer
-// needs auth; this file keeps the session-cookie/CSRF auth and the
-// mutating admin operations (users, groups, node approve/token/delete,
-// SSN capability pages).
-//
-// Rendering uses the shared cluster.css components (stat cards, node
-// cards with avatars / status-dots / cap-lists / load-bars, the activity
-// feed list) so the admin area looks like the rest of the portal.
+// Complete rewrite. Same backend API contract as before (session cookie
+// + CSRF, fetchJson/postForm/delJson, node approve/token/delete, user +
+// group management, SSN capability pages) but rendering in the mockup
+// style: status-bar row, node profile cards (banner, avatar, name+id,
+// status dot, caps, load-mini, meta + actions), activity feed (icon +
+// text + ts). User/group tables stay tables.
 
 let currentUser = null;
 let allPermissions = [];
@@ -16,19 +13,33 @@ let groupsData = [];
 let editingGroupId = null;
 let ssnPageCapabilities = new Map();
 
+// ===== helpers ==========================================================
+
 function fmt(d) {
   if (!d) return "-";
   const dt = new Date(d);
   return isNaN(dt) ? d : dt.toLocaleString();
 }
-
-function escAttr(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function timeAgo(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (isNaN(dt)) return "";
+  const s = Math.floor((Date.now() - dt.getTime()) / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d2 = Math.floor(h / 24);
+  return d2 + "d ago";
+}
 function statusColor(entity) {
   if (entity && entity.status_color) return entity.status_color;
   const s = entity && entity.status;
@@ -38,11 +49,16 @@ function statusColor(entity) {
   if (s === "failed" || s === "timed_out" || s === "cancelled" || s === "offline") return "bad";
   return "muted";
 }
-
+function statusVar(name) {
+  const map = { ok: "var(--ok)", warn: "var(--warn)", bad: "var(--bad)", info: "var(--info)", muted: "var(--muted)" };
+  return map[name] || "var(--muted)";
+}
 function getCsrfToken() {
   const m = document.cookie.match(/(?:^|;\s*)relay_csrf=([^;]+)/);
   return m ? decodeURIComponent(m[1]) : "";
 }
+
+// ===== API wrappers =====================================================
 
 async function fetchJson(path, opts = {}) {
   const res = await fetch(path, {
@@ -63,38 +79,11 @@ async function fetchJson(path, opts = {}) {
   }
   return res.json();
 }
-
 async function postForm(path, formData) {
   return fetchJson(path, { method: "POST", body: formData });
 }
 async function delJson(path) {
   return fetchJson(path, { method: "DELETE" });
-}
-
-function showTab(mode) {
-  document.getElementById("viewDashboard").classList.toggle("hidden", mode !== "dashboard");
-  document.getElementById("viewAdmin").classList.toggle("hidden", mode !== "admin");
-  document.getElementById("viewCapabilities").classList.toggle("hidden", mode !== "capabilities");
-  document.getElementById("tabDashboard").classList.toggle("active", mode === "dashboard");
-  document.getElementById("tabAdmin").classList.toggle("active", mode === "admin");
-  document.getElementById("tabCapabilities").classList.toggle("active", mode === "capabilities");
-  if (mode === "capabilities") loadCapabilities();
-}
-
-// --- Token overlay -------------------------------------------------------
-
-function showToken(nodeId, tokenValue) {
-  document.getElementById("tokenPath").textContent = `~/.relay/${nodeId}.token`;
-  document.getElementById("tokenValue").textContent = tokenValue;
-  document.getElementById("tokenOverlay").classList.remove("hidden");
-  document.getElementById("tokenBox").classList.remove("hidden");
-}
-function hideToken() {
-  document.getElementById("tokenOverlay").classList.add("hidden");
-  document.getElementById("tokenBox").classList.add("hidden");
-}
-function copyToken() {
-  navigator.clipboard.writeText(document.getElementById("tokenValue").textContent).then(() => alert("Token copied."));
 }
 
 function can(perm) {
@@ -111,23 +100,63 @@ function adminMsg(text, isError) {
   }, 5000);
 }
 
+// ===== tabs =============================================================
+
+function showTab(mode) {
+  document.getElementById("viewDashboard").classList.toggle("hidden", mode !== "dashboard");
+  document.getElementById("viewAdmin").classList.toggle("hidden", mode !== "admin");
+  document.getElementById("viewCapabilities").classList.toggle("hidden", mode !== "capabilities");
+  document.getElementById("tabDashboard").classList.toggle("active", mode === "dashboard");
+  document.getElementById("tabAdmin").classList.toggle("active", mode === "admin");
+  document.getElementById("tabCapabilities").classList.toggle("active", mode === "capabilities");
+  if (mode === "capabilities") loadCapabilities();
+}
+
+// ===== current user =====================================================
+
 async function loadMe() {
   try {
     currentUser = await fetchJson("/relay/v2/dashboard/api/me");
-    const canAdmin = can("users:manage") || can("groups:manage");
-    document.getElementById("tabAdmin").classList.toggle("hidden", !canAdmin);
+    document.getElementById("tabAdmin").classList.toggle("hidden", !can("users:manage") && !can("groups:manage"));
     document.getElementById("usersSection").classList.toggle("hidden", !can("users:manage"));
     document.getElementById("groupsSection").classList.toggle("hidden", !can("groups:manage"));
+    const initials = (currentUser.username || currentUser.user_id || "?")
+      .slice(0, 2)
+      .toUpperCase();
+    document.getElementById("navAvatar").textContent = initials;
   } catch (err) {
     console.error(err);
   }
 }
 
-// --- Node actions --------------------------------------------------------
+// ===== Token modal ======================================================
+
+function showToken(nodeId, tokenValue) {
+  document.getElementById("tokenPath").textContent = `~/.relay/${nodeId}.token`;
+  document.getElementById("tokenValue").textContent = tokenValue;
+  document.getElementById("tokenOverlay").classList.remove("hidden");
+  document.getElementById("tokenBox").classList.remove("hidden");
+}
+function hideToken() {
+  document.getElementById("tokenOverlay").classList.add("hidden");
+  document.getElementById("tokenBox").classList.add("hidden");
+}
+function copyToken() {
+  navigator.clipboard
+    .writeText(document.getElementById("tokenValue").textContent)
+    .then(() => alert("Token copied."));
+}
+
+// ===== node actions =====================================================
 
 async function approveNode(nodeId) {
   const role = document.getElementById(`role-${nodeId}`).value;
-  const caps = document.getElementById(`caps-${nodeId}`).value.split(",").map((s) => s.trim()).filter(Boolean).map((name) => ({ name, version: "1.0" }));
+  const caps = document
+    .getElementById(`caps-${nodeId}`)
+    .value.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, version: "1.0" }));
   const data = await fetchJson(`/relay/v2/admin/nodes/${encodeURIComponent(nodeId)}/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -177,7 +206,161 @@ function renderAction(n) {
   return actions;
 }
 
-// --- Admin (users/groups) ------------------------------------------------
+// ===== renderers (mockup style) ========================================
+
+function renderSummary(s) {
+  const online = s.online_nodes ?? 0;
+  const total = s.total_nodes ?? 0;
+  const nodesClass = online > 0 ? "ok" : total > 0 ? "bad" : "";
+  const stagesClass = (s.active_stages ?? 0) > 0 ? "warn" : "ok";
+  const capsCount = (s.total_capabilities ?? 0);
+  document.getElementById("summary").innerHTML = `
+    <div class="status-item"><div class="num ${nodesClass}">${online}/${total}</div><div class="lbl">nodes online</div></div>
+    <div class="status-item"><div class="num">${s.total_tasks ?? 0}</div><div class="lbl">tasks total</div></div>
+    <div class="status-item"><div class="num ${stagesClass}">${s.active_stages ?? 0}</div><div class="lbl">active stages</div></div>
+    <div class="status-item"><div class="num">${s.total_artifacts ?? 0}</div><div class="lbl">artifacts</div></div>
+    <div class="status-item"><div class="num info">${capsCount}</div><div class="lbl">capabilities</div></div>
+  `;
+}
+
+function nodeAvatarClass(nodeName) {
+  const n = (nodeName || "").toLowerCase();
+  if (n.includes("cyberfox") || n.includes("felix")) return "cyberfox";
+  if (n.includes("mac") || n.includes("m4")) return "mac";
+  if (n.includes("ssn")) return "ssn";
+  if (n.includes("ct")) return "ct";
+  return "default";
+}
+function nodeBannerClass(nodeName) {
+  const n = (nodeName || "").toLowerCase();
+  if (n.includes("mac") || n.includes("m4")) return "warn";
+  if (n.includes("ssn")) return "ssn";
+  if (n.includes("ct")) return "ct";
+  return "";
+}
+function nodeAvatarEmoji(nodeName) {
+  const n = (nodeName || "").toLowerCase();
+  if (n.includes("cyberfox") || n.includes("felix")) return "🦊";
+  if (n.includes("mac") || n.includes("m4")) return "💻";
+  if (n.includes("ssn")) return "☁";
+  if (n.includes("ct")) return "🌐";
+  return (nodeName || "?").charAt(0).toUpperCase();
+}
+
+function renderNodeCard(n) {
+  const color = statusColor(n);
+  const load = n.load;
+  const loadPct = load == null ? null : Math.min(load, 100);
+  const loadColor = loadPct == null ? "var(--muted)" : loadPct >= 85 ? "var(--bad)" : loadPct >= 60 ? "var(--warn)" : "var(--ok)";
+  const loadText = load == null ? "?" : load + "%";
+  const statusText = n.status == null ? "unknown" : String(n.status);
+  const name = n.node_name || n.node_id;
+  const caps = (n.capability_names || [])
+    .map((c) => `<span class="c">${escHtml(c)}</span>`)
+    .join("");
+  return `
+    <div class="node-card" data-node-id="${escAttr(n.node_id)}">
+      <div class="banner ${nodeBannerClass(n.node_name)}"></div>
+      <div class="body">
+        <div class="node-avatar ${nodeAvatarClass(n.node_name)}">${escHtml(nodeAvatarEmoji(n.node_name))}</div>
+        <div class="node-name">${escHtml(name)}<span class="node-id">${escHtml(n.node_id)}</span></div>
+        <div class="node-status"><span class="dot" style="background:${statusVar(color)}"></span>${escHtml(statusText)} · load ${loadText}</div>
+        <div class="node-caps">${caps || '<span class="node-id">no caps</span>'}</div>
+        <div class="load-mini"><div class="f" style="width:${loadPct == null ? 0 : loadPct}%;background:${loadColor}"></div></div>
+        <div class="node-meta">
+          <span>▲ ${n.task_count ?? 0} tasks</span>
+          <span>queue: ${n.queue_depth ?? 0}</span>
+          <span>${timeAgo(n.last_seen) || "—"}</span>
+        </div>
+        <div class="card-actions">${renderAction(n)}</div>
+      </div>
+    </div>`;
+}
+
+function renderTasks(tasks) {
+  document.querySelector("#tasks tbody").innerHTML =
+    (tasks || [])
+      .map(
+        (t) => `
+      <tr>
+        <td class="mono">${escHtml(t.task_id)}</td>
+        <td>${escHtml(t.task_name)}</td>
+        <td><span class="tag ${statusColor(t)}">${escHtml(t.status)}</span></td>
+        <td>${t.priority}</td>
+        <td>${fmt(t.created_at)}</td>
+      </tr>`
+      )
+      .join("") || '<tr><td colspan="5" class="empty">No tasks.</td></tr>';
+}
+
+function renderStages(stages) {
+  document.querySelector("#stages tbody").innerHTML =
+    (stages || [])
+      .map(
+        (st) => `
+      <tr>
+        <td class="mono">${escHtml(st.stage_id)}</td>
+        <td class="mono">${escHtml(st.task_id)}</td>
+        <td>${escHtml(st.capability)}</td>
+        <td><span class="tag ${statusColor(st)}">${escHtml(st.status)}</span></td>
+        <td>${escHtml(st.claimed_by || "-")}</td>
+      </tr>`
+      )
+      .join("") || '<tr><td colspan="5" class="empty">No active stages.</td></tr>';
+}
+
+function eventIcon(type) {
+  const t = (type || "").toLowerCase();
+  if (t.includes("complet") || t.includes("success")) return "✅";
+  if (t.includes("fail") || t.includes("error")) return "❌";
+  if (t.includes("claim") || t.includes("assign")) return "🔄";
+  if (t.includes("status") || t.includes("change")) return "⚡";
+  if (t.includes("online") || t.includes("join") || t.includes("register")) return "🔗";
+  if (t.includes("artifact") || t.includes("upload")) return "📦";
+  if (t.includes("approve")) return "🛡";
+  if (t.includes("delete")) return "🗑";
+  if (t.includes("user")) return "👤";
+  return "•";
+}
+
+function renderEvents(events) {
+  const list = events || [];
+  document.getElementById("events").innerHTML =
+    list
+      .map((e) => {
+        const type = e.type || "event";
+        const payload = e.payload || {};
+        let body = `<span class="highlight">${escHtml(type)}</span>`;
+        try {
+          const ps = JSON.stringify(payload);
+          if (ps && ps !== "{}") body += ` — <span class="ok">${escHtml(ps)}</span>`;
+        } catch (_) {}
+        return `
+      <div class="activity-item">
+        <div class="icon">${eventIcon(type)}</div>
+        <div class="ev-body">${body}</div>
+        <div class="ts">${fmt(e.timestamp)}</div>
+      </div>`;
+      })
+      .join("") || '<div class="activity-item empty">No events yet.</div>';
+}
+
+function renderEndpoints(endpoints) {
+  document.querySelector("#endpoints tbody").innerHTML =
+    (endpoints || [])
+      .map(
+        (ep) => `
+      <tr>
+        <td><span class="tag">${escHtml(ep.method)}</span></td>
+        <td class="mono">${escHtml(ep.path)}</td>
+        <td>${escHtml(ep.auth)}</td>
+        <td>${escHtml(ep.description)}</td>
+      </tr>`
+      )
+      .join("") || '<tr><td colspan="4" class="empty">No endpoints.</td></tr>';
+}
+
+// ===== admin (users / groups) ==========================================
 
 async function loadAdmin() {
   if (!can("users:manage") && !can("groups:manage")) return;
@@ -301,6 +484,8 @@ async function deleteUser(userId) {
   }
 }
 
+// ===== group permissions modal =========================================
+
 function editGroupPerms(groupId, groupName) {
   editingGroupId = groupId;
   document.getElementById("permGroupName").textContent = groupName;
@@ -337,138 +522,7 @@ async function saveGroupPerms() {
   }
 }
 
-// --- Overview / cards / feed --------------------------------------------
-
-function renderSummary(s) {
-  const taskStatText = Object.entries(s.task_stats || {}).map(([k, v]) => k + ": " + v).join(" · ") || "-";
-  const nodesClass = s.online_nodes > 0 ? "ok" : s.total_nodes > 0 ? "bad" : "muted";
-  const stagesClass = s.active_stages > 0 ? "warn" : "ok";
-  document.getElementById("summary").innerHTML = `
-    <div class="stat"><div class="label">Nodes</div><div class="value ${nodesClass}">${s.online_nodes}/${s.total_nodes}</div><div class="sub">online</div></div>
-    <div class="stat"><div class="label">Tasks</div><div class="value">${s.total_tasks}</div><div class="sub">${escHtml(taskStatText)}</div></div>
-    <div class="stat"><div class="label">Active Stages</div><div class="value ${stagesClass}">${s.active_stages}</div><div class="sub">in progress</div></div>
-    <div class="stat"><div class="label">Artifacts</div><div class="value">${s.total_artifacts}</div><div class="sub">stored</div></div>
-  `;
-}
-
-function renderNodeCard(n) {
-  const initial = (n.node_name || n.node_id || "?").charAt(0).toUpperCase();
-  const load = n.load ?? null;
-  const loadPct = load == null ? null : Math.min(load, 100);
-  return `
-    <div class="card node-card">
-      <div class="card-head">
-        <div class="avatar">${escHtml(initial)}</div>
-        <div class="card-head-text">
-          <div class="card-title">${escHtml(n.node_name || n.node_id)}</div>
-          <div class="card-sub mono">${escHtml(n.node_id)}</div>
-        </div>
-      </div>
-      <div class="card-meta">
-        <span class="status-dot ${statusColor(n)}"></span>${escHtml(n.status)} · ${escHtml(n.role || "-")}
-      </div>
-      <div class="cap-list">${(n.capability_names || []).map((c) => `<span class="tag">${escHtml(c)}</span>`).join("") || '<span class="card-sub">no caps</span>'}</div>
-      <div class="load-row">
-        <div class="load-bar"><span class="${loadPct == null ? "load-unknown" : ""}" ${loadPct == null ? "" : `style="width:${loadPct}%"`}></span></div>
-        <span class="card-sub">load ${load == null ? "?" : load}%</span>
-      </div>
-      <div class="card-foot">
-        <span class="card-sub">queue: ${n.queue_depth ?? "?"}</span>
-        <span class="card-sub">${fmt(n.last_seen)}</span>
-      </div>
-      <div class="card-actions">${renderAction(n)}</div>
-    </div>`;
-}
-
-function renderTasks(tasks) {
-  document.querySelector("#tasks tbody").innerHTML = (tasks || [])
-    .map(
-      (t) => `
-    <tr>
-      <td class="mono">${escHtml(t.task_id)}</td>
-      <td>${escHtml(t.task_name)}</td>
-      <td><span class="tag ${statusColor(t)}">${escHtml(t.status)}</span></td>
-      <td>${t.priority}</td>
-      <td>${fmt(t.created_at)}</td>
-    </tr>`
-    )
-    .join("") || '<tr><td colspan="5" class="empty">No tasks.</td></tr>';
-}
-
-function renderStages(stages) {
-  document.querySelector("#stages tbody").innerHTML = (stages || [])
-    .map(
-      (st) => `
-    <tr>
-      <td class="mono">${escHtml(st.stage_id)}</td>
-      <td class="mono">${escHtml(st.task_id)}</td>
-      <td>${escHtml(st.capability)}</td>
-      <td><span class="tag ${statusColor(st)}">${escHtml(st.status)}</span></td>
-      <td>${escHtml(st.claimed_by || "-")}</td>
-    </tr>`
-    )
-    .join("") || '<tr><td colspan="5" class="empty">No active stages.</td></tr>';
-}
-
-function renderEvents(events) {
-  const list = events || [];
-  document.getElementById("events").innerHTML = list
-    .map(
-      (e) => `
-    <li>
-      <span class="ev-time">${fmt(e.timestamp)}</span>
-      <span class="ev-type">${escHtml(e.type)}</span>
-      <span class="ev-payload">${escHtml(JSON.stringify(e.payload))}</span>
-    </li>`
-    )
-    .join("") || '<li class="empty">no events yet</li>';
-}
-
-function renderEndpoints(endpoints) {
-  document.querySelector("#endpoints tbody").innerHTML = (endpoints || [])
-    .map(
-      (ep) => `
-    <tr>
-      <td><span class="tag">${escHtml(ep.method)}</span></td>
-      <td class="mono">${escHtml(ep.path)}</td>
-      <td>${escHtml(ep.auth)}</td>
-      <td>${escHtml(ep.description)}</td>
-    </tr>`
-    )
-    .join("") || '<tr><td colspan="4" class="empty">No endpoints.</td></tr>';
-}
-
-async function loadAll() {
-  const btn = document.getElementById("btnRefresh");
-  btn.disabled = true;
-  document.getElementById("status").textContent = "loading...";
-  try {
-    const [overview, endpoints, events] = await Promise.all([
-      fetchJson("/relay/v2/dashboard/api/overview"),
-      fetchJson("/relay/v2/dashboard/api/endpoints"),
-      fetchJson("/relay/v2/dashboard/api/events/recent?limit=50"),
-    ]);
-
-    const userNodes = (overview.nodes || []).filter((n) => n.node_id !== "__dashboard_admin__");
-
-    renderSummary(overview.summary || {});
-    document.getElementById("nodeCards").innerHTML =
-      userNodes.map(renderNodeCard).join("") || '<p class="empty">No nodes registered.</p>';
-    renderTasks(overview.tasks);
-    renderStages(overview.active_stages);
-    renderEvents(events.events);
-    renderEndpoints(endpoints.endpoints);
-
-    document.getElementById("status").textContent = "updated " + fmt(overview.generated_at);
-  } catch (err) {
-    document.getElementById("status").innerHTML = `<span class="error">error: ${escHtml(err.message)}</span>`;
-    console.error(err);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// --- SSN capability pages -----------------------------------------------
+// ===== SSN capability pages ============================================
 
 async function loadSsnPages() {
   try {
@@ -483,17 +537,17 @@ async function loadSsnPages() {
 function renderCapabilityCard(c) {
   const page = ssnPageCapabilities.get(c.name);
   const hasPage = !!page;
-  const clickable = hasPage ? "clickable cap-card-clickable" : "";
+  const clickable = hasPage ? "cap-card-clickable" : "";
   const badge = hasPage ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>' : "";
   const dataAttr = hasPage ? `data-capability="${escAttr(c.name)}"` : "";
   const nodeCount = (c.nodes || []).length;
   return `
-    <div class="card ${clickable}" ${dataAttr}>
-      <div class="card-title">${escHtml(c.name)}${badge}</div>
-      <p class="card-sub">${escHtml(c.description || "No description")}</p>
-      <div class="cap-list">
-        <span class="tag">${escHtml(c.type || "unknown")}</span>
-        <span class="tag">${nodeCount} node(s)</span>
+    <div class="cap-card ${clickable}" ${dataAttr}>
+      <div class="cap-name">${escHtml(c.name)}${badge}</div>
+      <p class="cap-desc">${escHtml(c.description || "No description")}</p>
+      <div class="node-caps">
+        <span class="tag info">${escHtml(c.type || "unknown")}</span>
+        <span class="tag muted">${nodeCount} node(s)</span>
       </div>
     </div>`;
 }
@@ -533,6 +587,40 @@ function hideSsnPageModal() {
   document.getElementById("ssnPageBox").classList.add("hidden");
 }
 
+// ===== main load =======================================================
+
+async function loadAll() {
+  const btn = document.getElementById("btnRefresh");
+  btn.disabled = true;
+  document.getElementById("status").textContent = "loading...";
+  try {
+    const [overview, endpoints, events] = await Promise.all([
+      fetchJson("/relay/v2/dashboard/api/overview"),
+      fetchJson("/relay/v2/dashboard/api/endpoints"),
+      fetchJson("/relay/v2/dashboard/api/events/recent?limit=50"),
+    ]);
+
+    const userNodes = (overview.nodes || []).filter((n) => n.node_id !== "__dashboard_admin__");
+
+    renderSummary(overview.summary || {});
+    document.getElementById("nodeCards").innerHTML =
+      userNodes.map(renderNodeCard).join("") || '<p class="empty">No nodes registered.</p>';
+    renderTasks(overview.tasks);
+    renderStages(overview.active_stages);
+    renderEvents(events.events);
+    renderEndpoints(endpoints.endpoints);
+
+    document.getElementById("status").textContent = "updated " + fmt(overview.generated_at);
+  } catch (err) {
+    document.getElementById("status").innerHTML = `<span class="error">error: ${escHtml(err.message)}</span>`;
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ===== bootstrap =======================================================
+
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".tab").forEach((el) => {
     el.addEventListener("click", () => showTab(el.dataset.tab));
@@ -550,11 +638,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("createUserForm")?.addEventListener("submit", createUser);
 
-  // Node actions (approve / token / delete) live inside the node cards.
+  // Node actions (approve / token / delete) inside node cards.
   document.addEventListener("click", (e) => {
-    const btn = e.target.closest(".approve-btn");
-    if (btn && btn.dataset.nodeId) {
-      approveNode(btn.dataset.nodeId);
+    const approveBtn = e.target.closest(".approve-btn");
+    if (approveBtn && approveBtn.dataset.nodeId) {
+      approveNode(approveBtn.dataset.nodeId);
       return;
     }
     const tokenBtn = e.target.closest(".token-btn");
