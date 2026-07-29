@@ -31,12 +31,13 @@
 
   <div id="adminMsg" class="admin-msg"></div>
 
+  <!-- Dashboard Tab -->
   <div id="viewDashboard">
-    <div class="section"><h2>Summary</h2><div id="summary" class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem;"></div></div>
+    <div class="section"><h2>Summary</h2><div id="summary" class="status-bar"></div></div>
 
     <div class="section">
       <h2>Nodes</h2>
-      <div class="card"><table id="nodes"><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Status</th><th>Capabilities</th><th>Load</th><th>Queue</th><th>Last Seen</th><th>Action</th></tr></thead><tbody></tbody></table></div>
+      <div id="nodeCards" class="grid"></div>
     </div>
 
     <div class="section">
@@ -51,7 +52,7 @@
 
     <div class="section">
       <h2>Recent Events</h2>
-      <div class="card"><pre id="events" style="background:#10131a;padding:.75rem;border-radius:.5rem;overflow:auto;max-height:300px;font-size:.8rem;">loading...</pre></div>
+      <div class="card"><ul id="events" class="feed"></ul></div>
     </div>
 
     <div class="section">
@@ -60,13 +61,15 @@
     </div>
   </div>
 
+  <!-- Capabilities Tab -->
   <div id="viewCapabilities" class="hidden">
     <div class="section">
       <h2>Capabilities</h2>
-      <div id="capabilityCards" class="grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;"></div>
+      <div id="capabilityCards" class="grid"></div>
     </div>
   </div>
 
+  <!-- Admin Tab -->
   <div id="viewAdmin" class="hidden">
     <div class="section" id="usersSection">
       <h2>Users</h2>
@@ -90,6 +93,7 @@
     </div>
   </div>
 
+  <!-- Modals -->
   <div id="tokenOverlay" class="overlay hidden"></div>
   <div id="tokenBox" class="token-box hidden">
     <h3>Node Runtime Token</h3>

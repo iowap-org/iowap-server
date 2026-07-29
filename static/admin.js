@@ -353,28 +353,33 @@ async function loadAll() {
     const s = overview.summary;
     const taskStatText = Object.entries(s.task_stats || {}).map(([k, v]) => k + ": " + v).join(" · ") || "-";
     document.getElementById("summary").innerHTML = `
-      <div><div class="card-sub">Nodes</div><div class="value ${s.online_nodes > 0 ? "ok" : "bad"}" style="font-size:1.5rem;font-weight:700;">${s.online_nodes}/${s.total_nodes}</div><div class="card-sub">online</div></div>
-      <div><div class="card-sub">Tasks</div><div class="value" style="font-size:1.5rem;font-weight:700;">${s.total_tasks}</div><div class="card-sub">${taskStatText}</div></div>
-      <div><div class="card-sub">Active Stages</div><div class="value ${s.active_stages > 0 ? "warn" : "ok"}" style="font-size:1.5rem;font-weight:700;">${s.active_stages}</div></div>
-      <div><div class="card-sub">Artifacts</div><div class="value" style="font-size:1.5rem;font-weight:700;">${s.total_artifacts}</div></div>
+      <div class="stat"><div class="label">Nodes</div><div class="value ${s.online_nodes > 0 ? "ok" : "bad"}">${s.online_nodes}/${s.total_nodes}</div><div class="sub">online</div></div>
+      <div class="stat"><div class="label">Tasks</div><div class="value">${s.total_tasks}</div><div class="sub">${taskStatText}</div></div>
+      <div class="stat"><div class="label">Active Stages</div><div class="value ${s.active_stages > 0 ? "warn" : "ok"}">${s.active_stages}</div></div>
+      <div class="stat"><div class="label">Artifacts</div><div class="value">${s.total_artifacts}</div></div>
     `;
 
-    document.querySelector("#nodes tbody").innerHTML = userNodes
+    document.getElementById("nodeCards").innerHTML = userNodes
       .map(
         (n) => `
-      <tr class="${n.status === "pending" ? "pending-row" : ""}">
-        <td class="mono">${escHtml(n.node_id)}</td>
-        <td>${escHtml(n.node_name)}</td>
-        <td><span class="tag">${escHtml(n.role)}</span></td>
-        <td><span class="tag ${statusColor(n)}">${escHtml(n.status)}</span></td>
-        <td>${(n.capability_names || []).join(", ")}</td>
-        <td>${n.load ?? "-"}</td>
-        <td>${n.queue_depth ?? "-"}</td>
-        <td>${fmt(n.last_seen)}</td>
-        <td>${renderAction(n)}</td>
-      </tr>`
+      <div class="card clickable ${n.status === "pending" ? "" : ""}" onclick="document.getElementById('tabAdmin').click()">
+        <div class="card-head">
+          <div class="avatar" style="background:linear-gradient(135deg,var(--accent),#6366f1)">${escHtml((n.node_name || "?")[0].toUpperCase())}</div>
+          <div>
+            <div class="card-title">${escHtml(n.node_name)} <span class="mono card-sub">${escHtml(n.node_id)}</span></div>
+            <div><span class="status-dot ${statusColor(n)}"></span>${escHtml(n.status)} · load ${n.load ?? "?"}%</div>
+          </div>
+        </div>
+        <div class="cap-list">${(n.capability_names || []).map((c) => `<span class="tag">${escHtml(c)}</span>`).join("")}</div>
+        <div class="load-bar"><span style="width:${Math.min(n.load ?? 0, 100)}%"></span></div>
+        <div class="card-sub" style="display:flex;justify-content:space-between">
+          <span>queue: ${n.queue_depth ?? "?"}</span>
+          <span>${fmt(n.last_seen)}</span>
+          <span>${renderAction(n)}</span>
+        </div>
+      </div>`
       )
-      .join("");
+      .join("") || '<p class="empty">No nodes registered.</p>';
 
     document.querySelector("#tasks tbody").innerHTML = (overview.tasks || [])
       .map(
