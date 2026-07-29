@@ -340,6 +340,7 @@ def main(argv=None):
         port=args.port,
         log_level=settings.log_level,
         reload=settings.reload,
+        timeout_graceful_shutdown=5,
     )
 
 
