@@ -1,34 +1,49 @@
-/* cluster.css — Community Portal styles (Phase 20, T-044).
+/* cluster.css — Community Portal + Profile styles (Phase 20, T-044).
  *
- * Shared design tokens + components for the public cluster portal:
- * hero, status-bar, node/user cards, activity feed, mini load chart.
- * Inline <style> blocks were moved out of dashboard.html / profile
- * pages into this file so they can be cached and reused.
+ * Single style source for the public cluster portal (dashboard,
+ * node-profile, user-profile). Implements the Community Mockup look
+ * (`.hermes/plans/admin-mockup-reference.html`): dark palette, sticky
+ * top nav, centered hero with live status pill, 5-item status bar,
+ * profile-style node/user cards, activity feed, footer.
+ *
+ * No inline `style=""` attributes are used by the portal pages — every
+ * visual rule lives here. admin.css loads AFTER this file in the admin
+ * area and re-declares the shared tokens + components for the admin
+ * panel, so changes here do not leak into the admin look.
+ *
+ * login.html / change-password.html / bootstrap.html load only this
+ * file and rely on the CSS variables (--bg, --panel, --text, --border,
+ * --accent) plus the `.hidden` / `.error` helpers — those are kept
+ * stable at the top.
  */
 
+/* ===== Design tokens (mockup palette) ================================== */
+
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1c2029;
-  --text: #e6e6e6;
-  --muted: #8892a0;
-  --accent: #3b82f6;
-  --accent-2: #2563eb;
-  --ok: #22c55e;
-  --warn: #f59e0b;
-  --bad: #ef4444;
-  --info: #3b82f6;
-  --border: #2a2f3a;
+  --bg: #0b0d14;
+  --nav: #12141e;
+  --surface: #181b26;
+  --panel: #181b26;
+  --panel-2: #1c2030;
+  --text: #e4e8f0;
+  --muted: #848aa0;
+  --accent: #6c8cff;
+  --accent-2: #a78bfa;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --info: #60a5fa;
+  --border: #262a38;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  margin: 0;
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -36,222 +51,444 @@ a:hover { text-decoration: underline; }
 
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .hidden { display: none !important; }
+.empty { color: var(--muted); padding: 1rem 0; }
+.error { color: var(--bad); }
 
-/* --- Navigation bar ------------------------------------------------------ */
+/* ===== Top navigation (mockup `<nav>`) ================================= */
 
-.nav {
+nav.topnav {
+  background: var(--nav);
+  border-bottom: 1px solid var(--border);
+  padding: 0 2rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  height: 56px;
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: 50;
+  gap: 0.25rem;
 }
-.nav-brand {
+nav.topnav .logo {
   font-weight: 700;
   font-size: 1.05rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  color: var(--accent);
+  margin-right: 2rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
-.nav-brand .dot {
-  width: 10px; height: 10px; border-radius: 999px;
-  background: var(--ok); box-shadow: 0 0 8px var(--ok);
-}
-.nav-links { display: flex; gap: 0.25rem; flex-wrap: wrap; }
-.nav-link {
-  padding: 0.4rem 0.75rem;
-  border-radius: 0.5rem;
+nav.topnav .logo span { color: var(--muted); font-weight: 400; }
+nav.topnav .topnav-link {
   color: var(--muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.35rem;
+  transition: all 0.15s;
   cursor: pointer;
 }
-.nav-link:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
-.nav-link.active { color: #fff; background: var(--accent); }
-.nav-right { display: flex; gap: 0.5rem; align-items: center; }
+nav.topnav .topnav-link:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  text-decoration: none;
+}
+nav.topnav .topnav-link.active {
+  color: var(--accent);
+  background: rgba(108, 140, 255, 0.08);
+}
+nav.topnav .spacer { flex: 1; }
+nav.topnav .topnav-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ===== Buttons ========================================================= */
 
 .btn {
   padding: 0.45rem 0.9rem;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
-  border-radius: 0.5rem;
+  border-radius: 0.4rem;
   cursor: pointer;
   font-size: 0.85rem;
+  transition: all 0.15s;
+  text-decoration: none;
 }
-.btn:hover { border-color: var(--accent); }
+.btn:hover { border-color: var(--accent); text-decoration: none; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn-danger { background: var(--bad); border-color: var(--bad); color: #041206; }
 .btn-muted { background: #6b7280; border-color: #6b7280; color: #fff; }
+.btn-ghost { background: transparent; }
 
-/* --- Hero + status pill -------------------------------------------------- */
+/* ===== Hero + live status pill ======================================== */
 
 .hero {
-  padding: 2rem 1.5rem 1rem;
+  padding: 3rem 2rem 2rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
 }
-.hero h1 { margin: 0 0 0.25rem; font-size: 1.8rem; }
-.hero p { margin: 0; color: var(--muted); }
+.hero h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; }
+.hero p {
+  color: var(--muted);
+  font-size: 1rem;
+  max-width: 600px;
+  margin: 0 auto 1.5rem;
+}
+.hero .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  padding: 0.35rem 1rem;
+  border-radius: 2rem;
+  font-size: 0.85rem;
+  color: var(--ok);
+}
+.hero .pill.warn {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.2);
+  color: var(--warn);
+}
+.hero .pill.bad {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.2);
+  color: var(--bad);
+}
+.hero .pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  display: inline-block;
+  animation: pulse 2s infinite;
+}
+.hero .pill.warn .dot { background: var(--warn); }
+.hero .pill.bad .dot { background: var(--bad); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Profile hero variant: left-aligned, larger avatar, no center text. */
+.hero.profile {
+  text-align: left;
+  padding: 2.5rem 2rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.hero.profile .avatar-lg {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 3px solid var(--bg);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: -28px;
+}
+.hero.profile .head-text { flex: 1; min-width: 0; }
+.hero.profile h1 { font-size: 1.6rem; margin: 0 0 0.15rem; }
+.hero.profile .sub {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+.hero.profile .pill { margin-top: 0.25rem; }
+
+/* ===== Status bar (5-item flex row) ==================================== */
+
+.status-bar-wrap { display: flex; justify-content: center; padding: 0 1rem; }
+.status-bar {
+  display: flex;
+  gap: 0;
+  background: var(--nav);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  margin: -1.5rem auto 2rem;
+  max-width: 700px;
+  overflow: hidden;
+  padding: 0;
+  width: 100%;
+}
+.status-item {
+  flex: 1;
+  padding: 1rem;
+  text-align: center;
+  border-right: 1px solid var(--border);
+}
+.status-item:last-child { border-right: none; }
+.status-item .num { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+.status-item .num.ok { color: var(--ok); }
+.status-item .num.warn { color: var(--warn); }
+.status-item .num.bad { color: var(--bad); }
+.status-item .num.info { color: var(--info); }
+.status-item .lbl {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+/* ===== Container + section headers ==================================== */
+
+.container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+.section {
+  margin: 2rem 0 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.section h2 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+.section .link { font-size: 0.8rem; color: var(--accent); text-decoration: none; }
+.section .link:hover { text-decoration: underline; }
+
+/* ===== Node profile cards ============================================= */
+
+.node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.node-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: border-color 0.15s;
+  cursor: pointer;
+}
+.node-card:hover { border-color: var(--accent); }
+.node-card .banner {
+  height: 48px;
+  background: linear-gradient(135deg, var(--accent), transparent);
+}
+.node-card .banner.warn { background: linear-gradient(135deg, var(--warn), transparent); }
+.node-card .banner.ssn { background: linear-gradient(135deg, var(--accent-2), transparent); }
+.node-card .banner.ct { background: linear-gradient(135deg, var(--info), transparent); }
+.node-card .body { padding: 0 1rem 1rem; margin-top: -20px; }
+.node-card .node-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+.node-card .node-avatar.cyberfox { background: linear-gradient(135deg, var(--accent), var(--ok)); }
+.node-card .node-avatar.mac { background: linear-gradient(135deg, var(--warn), var(--bad)); }
+.node-card .node-avatar.ssn { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
+.node-card .node-avatar.ct { background: linear-gradient(135deg, var(--info), var(--ok)); }
+.node-card .node-avatar.default { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.node-card .node-name { font-weight: 600; font-size: 0.95rem; }
+.node-card .node-id {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  margin-left: 0.4rem;
+}
+.node-card .node-status {
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.35rem 0;
+  color: var(--muted);
+}
+.node-card .node-status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.node-card .node-caps { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
+.node-card .node-caps .c {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+  background: rgba(108, 140, 255, 0.1);
+  color: var(--info);
+}
+.node-card .node-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.node-card .load-mini {
+  height: 3px;
+  background: var(--bg);
+  border-radius: 2px;
+  margin-top: 0.35rem;
+  overflow: hidden;
+}
+.node-card .load-mini .f { height: 100%; border-radius: 2px; }
+
+/* ===== User profile cards ============================================= */
+
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.user-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.user-card:hover { border-color: var(--accent); }
+.user-card.inactive { opacity: 0.5; }
+.user-card .top { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+.user-card .u-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+.user-card .u-name { font-weight: 600; font-size: 0.9rem; }
+.user-card .u-role { font-size: 0.7rem; color: var(--muted); }
+.user-card .u-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.user-card .u-meta span { display: flex; align-items: center; gap: 0.25rem; }
+
+/* ===== Status pill (small, for profile headers) ====================== */
+
 .status-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  margin-top: 0.75rem;
   padding: 0.35rem 0.7rem;
   border-radius: 999px;
-  background: rgba(34, 197, 94, 0.12);
-  border: 1px solid rgba(34, 197, 94, 0.4);
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.4);
   color: var(--ok);
   font-size: 0.85rem;
 }
-.status-pill.warn { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.4); color: var(--warn); }
-.status-pill.bad  { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.4); color: var(--bad); }
-
-/* --- Status widget grid -------------------------------------------------- */
-
-.status-bar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.75rem;
-  padding: 0 1.5rem 1rem;
+.status-pill.warn {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--warn);
 }
-.stat {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 0.9rem 1rem;
+.status-pill.bad {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--bad);
 }
-.stat .label {
+.status-pill.muted {
+  background: rgba(132, 138, 160, 0.12);
+  border-color: rgba(132, 138, 160, 0.4);
   color: var(--muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
-.stat .value { font-size: 1.6rem; font-weight: 700; margin-top: 0.15rem; }
-.stat .value.ok { color: var(--ok); }
-.stat .value.warn { color: var(--warn); }
-.stat .value.bad { color: var(--bad); }
-.stat .sub { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
-
-/* --- Section headings ---------------------------------------------------- */
-
-.section { padding: 0 1.5rem 1.5rem; }
-.section h2 {
-  color: var(--muted);
-  font-size: 0.95rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 1.25rem 0 0.75rem;
+.status-pill.info {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.4);
+  color: var(--info);
 }
-
-/* --- Node / user card grid ----------------------------------------------- */
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 1rem;
-}
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.card.clickable { cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
-.card.clickable:hover { border-color: var(--accent); }
-
-.card-banner {
-  height: 48px;
-  border-radius: 0.5rem;
-  background: linear-gradient(135deg, var(--accent-2), #6366f1);
-  margin: -1rem -1rem 0;
-}
-.card-head { display: flex; align-items: center; gap: 0.6rem; }
-.avatar {
-  width: 40px; height: 40px; border-radius: 999px;
-  background: var(--panel-2);
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; color: var(--text);
-  border: 2px solid var(--bg);
-  margin-top: -22px;
-  flex-shrink: 0;
-}
-.card-title { font-weight: 700; font-size: 1rem; }
-.card-sub { color: var(--muted); font-size: 0.78rem; }
-
-.status-dot {
+.status-pill .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
   display: inline-block;
-  width: 9px; height: 9px; border-radius: 999px;
-  margin-right: 0.35rem;
-  background: var(--muted);
 }
+.status-pill.warn .status-dot { background: var(--warn); }
+.status-pill.bad .status-dot { background: var(--bad); }
+.status-pill.muted .status-dot { background: var(--muted); }
+.status-pill.info .status-dot { background: var(--info); }
+
+/* status-color helper used inline by JS via class name only */
 .status-dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .status-dot.warn { background: var(--warn); }
 .status-dot.bad { background: var(--bad); }
 .status-dot.info { background: var(--info); }
+.status-dot.muted { background: var(--muted); }
+
+/* ===== Tags / pills =================================================== */
 
 .tag {
   display: inline-block;
   padding: 0.15rem 0.45rem;
-  border-radius: 0.35rem;
-  background: #263142;
+  border-radius: 0.3rem;
   font-size: 0.72rem;
 }
-.tag.ok { color: var(--ok); background: rgba(34, 197, 94, 0.15); }
-.tag.warn { color: var(--warn); background: rgba(245, 158, 11, 0.15); }
-.tag.bad { color: var(--bad); background: rgba(239, 68, 68, 0.15); }
-.tag.info { color: var(--info); background: rgba(59, 130, 246, 0.15); }
-.tag.muted { color: var(--muted); background: rgba(107, 114, 128, 0.15); }
+.tag.ok { color: var(--ok); background: rgba(52, 211, 153, 0.15); }
+.tag.warn { color: var(--warn); background: rgba(251, 191, 36, 0.15); }
+.tag.bad { color: var(--bad); background: rgba(248, 113, 113, 0.15); }
+.tag.info { color: var(--info); background: rgba(96, 165, 250, 0.15); }
+.tag.muted { color: var(--muted); background: rgba(132, 138, 160, 0.15); }
 
-.cap-list { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+/* ===== Capability list (cards) ======================================== */
 
-.load-row { display: flex; align-items: center; gap: 0.4rem; }
-.load-bar {
-  flex: 1;
-  height: 6px;
-  background: #10131a;
-  border-radius: 999px;
-  overflow: hidden;
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
 }
-.load-bar > span {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, var(--ok), var(--warn));
-  border-radius: 999px;
-}
-
-/* --- Activity feed ------------------------------------------------------- */
-
-.feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
-.feed li {
-  background: var(--panel-2);
+.card {
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.82rem;
+  border-radius: 1rem;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
-.feed .ev-type { color: var(--accent); font-weight: 600; }
-.feed .ev-time { color: var(--muted); float: right; }
+.card .card-title { font-weight: 600; font-size: 1rem; }
+.card .card-sub { color: var(--muted); font-size: 0.78rem; }
+.card pre {
+  background: #10131a;
+  padding: 0.5rem;
+  border-radius: 0.4rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  max-height: 160px;
+  font-family: ui-monospace, monospace;
+}
 
-/* --- Tables -------------------------------------------------------------- */
-
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 500; }
-tr.clickable { cursor: pointer; }
-tr.clickable:hover { background: var(--panel-2); }
-
-/* --- Mini load chart (CSS-only) ----------------------------------------- */
+/* ===== Mini load chart (CSS-only) ===================================== */
 
 .sparkline {
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 40px;
+  height: 48px;
   padding: 0.25rem 0;
 }
 .sparkline .bar {
@@ -261,9 +498,124 @@ tr.clickable:hover { background: var(--panel-2); }
   min-height: 2px;
   opacity: 0.85;
 }
+.sparkline .bar.warn { background: var(--warn); }
+.sparkline .bar.bad { background: var(--bad); }
 
-/* --- Footer -------------------------------------------------------------- */
+/* ===== Tables ========================================================= */
 
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.55rem 0.5rem; border-bottom: 1px solid var(--border); }
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+tbody tr:last-child td { border-bottom: none; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--panel-2); }
+
+/* table wrapper panel */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0.5rem 1rem;
+  margin-bottom: 2rem;
+  overflow-x: auto;
+}
+
+/* ===== Activity feed ================================================== */
+
+.activity {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.activity-item:last-child { border-bottom: none; }
+.activity .icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+.activity .ts {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.activity .ev-body { min-width: 0; }
+.activity .highlight { color: var(--accent); }
+.activity .ok { color: var(--ok); }
+.activity .warn { color: var(--warn); }
+.activity .bad { color: var(--bad); }
+
+/* ===== Profile meta grid (stats on profile pages) ===================== */
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+.meta-grid .meta {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.9rem 1rem;
+}
+.meta-grid .meta .lbl {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.meta-grid .meta .val { font-size: 1.3rem; font-weight: 700; margin-top: 0.15rem; }
+.meta-grid .meta .val.sm { font-size: 1rem; font-weight: 600; }
+.meta-grid .meta .val.ok { color: var(--ok); }
+.meta-grid .meta .val.warn { color: var(--warn); }
+.meta-grid .meta .val.bad { color: var(--bad); }
+.meta-grid .meta .val.info { color: var(--info); }
+
+/* ===== Groups chip row ================================================ */
+
+.chip-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* ===== Footer ========================================================= */
+
+.footer-mockup {
+  text-align: center;
+  padding: 2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+}
+.footer-mockup a { color: var(--accent); text-decoration: none; }
+.footer-mockup a:hover { text-decoration: underline; }
+
+/* legacy footer class kept for any leftover pages */
 .footer {
   border-top: 1px solid var(--border);
   padding: 1rem 1.5rem;
@@ -275,8 +627,33 @@ tr.clickable:hover { background: var(--panel-2); }
   gap: 0.5rem;
 }
 
-/* --- Empty state --------------------------------------------------------- */
+/* ===== Back link (profile pages) ====================================== */
 
-.empty { color: var(--muted); padding: 1rem 0; }
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+  padding: 0.5rem 0;
+}
+.back-link:hover { color: var(--accent); text-decoration: none; }
 
-.error { color: var(--bad); }
+/* ===== Responsive ===================================================== */
+
+@media (max-width: 768px) {
+  nav.topnav { padding: 0 1rem; overflow-x: auto; }
+  nav.topnav .logo { margin-right: 1rem; }
+  nav.topnav .topnav-link { font-size: 0.8rem; padding: 0.5rem 0.6rem; }
+  .hero { padding: 2rem 1rem 1.5rem; }
+  .hero h1 { font-size: 1.5rem; }
+  .hero.profile { padding: 1.5rem 1rem 1rem; }
+  .hero.profile .avatar-lg { width: 56px; height: 56px; font-size: 1.4rem; margin-top: -22px; }
+  .status-bar { flex-wrap: wrap; margin: -1rem 1rem 1.5rem; max-width: none; }
+  .status-item { flex: 1 1 50%; border-bottom: 1px solid var(--border); }
+  .container { padding: 0 1rem; }
+  .node-grid,
+  .user-grid,
+  .grid { grid-template-columns: 1fr; }
+}

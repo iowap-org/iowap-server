@@ -7,54 +7,69 @@
   <link rel="stylesheet" href="/relay/v2/dashboard/static/cluster.css" />
 </head>
 <body>
-  <nav class="nav">
-    <div class="nav-brand"><span class="dot"></span> AI Relay Cluster</div>
-    <div class="nav-links">
-      <a class="nav-link" href="/relay/v2/dashboard/">Overview</a>
-      <a class="nav-link" href="/relay/v2/dashboard/#nodes">Nodes</a>
-      <a class="nav-link" href="/relay/v2/dashboard/#users">Users</a>
-    </div>
-    <div class="nav-right">
-      <a class="btn btn-primary" href="/relay/v2/dashboard/admin">Sign in / Admin</a>
-    </div>
+
+  <!-- ===== Nav ===== -->
+  <nav class="topnav">
+    <div class="logo">⟐ relay<span>.cluster</span></div>
+    <a class="topnav-link" href="/relay/v2/dashboard/">Overview</a>
+    <a class="topnav-link" href="/relay/v2/dashboard/#nodes">Nodes</a>
+    <a class="topnav-link" href="/relay/v2/dashboard/#users">Users</a>
+    <div class="spacer"></div>
+    <a class="btn btn-primary" href="/relay/v2/dashboard/admin">Admin</a>
   </nav>
 
-  <section class="hero">
-    <div id="nodeHead" style="display:flex;align-items:center;gap:.75rem;">
-      <div class="avatar" style="width:56px;height:56px;font-size:1.5rem;">?</div>
-      <div>
-        <h1 id="nodeName">loading…</h1>
-        <p class="mono" id="nodeId"></p>
-      </div>
+  <!-- ===== Profile hero ===== -->
+  <section class="hero profile">
+    <div id="nodeAvatar" class="avatar-lg">?</div>
+    <div class="head-text">
+      <h1 id="nodeName">loading…</h1>
+      <p id="nodeId" class="sub mono"></p>
+      <span id="statusPill" class="status-pill"><span class="status-dot"></span> loading…</span>
     </div>
-    <span id="statusPill" class="status-pill"><span class="status-dot"></span> loading…</span>
   </section>
 
-  <div class="status-bar" id="stats"></div>
+  <div class="container">
 
-  <div class="section">
-    <h2>Capabilities</h2>
+    <!-- Stats -->
+    <div id="stats" class="meta-grid"></div>
+
+    <!-- Capabilities -->
+    <div class="section">
+      <h2>🧩 Capabilities</h2>
+    </div>
     <div id="capabilities" class="grid"></div>
-  </div>
 
-  <div class="section">
-    <h2>Load (recent activity)</h2>
-    <div class="card"><div id="loadChart" class="sparkline"></div></div>
-  </div>
+    <!-- Load chart -->
+    <div class="section">
+      <h2>📈 Load (recent activity)</h2>
+    </div>
+    <div class="panel">
+      <div id="loadChart" class="sparkline"></div>
+    </div>
 
-  <div class="section">
-    <h2>Recent Tasks</h2>
-    <div class="card">
+    <!-- Recent tasks -->
+    <div class="section">
+      <h2>📋 Recent Tasks</h2>
+    </div>
+    <div class="panel">
       <table id="tasks">
         <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Priority</th><th>Created</th><th>Completed</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
+
+    <!-- Activity for this node -->
+    <div class="section">
+      <h2>📡 Recent Activity</h2>
+      <a class="link" href="/relay/v2/dashboard/">Cluster feed →</a>
+    </div>
+    <div id="events" class="activity"></div>
+
   </div>
 
-  <footer class="footer">
-    <span>AI Relay Service — Node Profile</span>
-    <a href="/relay/v2/dashboard/">← back to portal</a>
+  <!-- ===== Footer ===== -->
+  <footer class="footer-mockup">
+    <p><a href="/relay/v2/dashboard/">AI Relay Service</a> · Node Profile · <a href="/relay/v2/dashboard/">← back to portal</a></p>
   </footer>
 
   <script src="/relay/v2/dashboard/static/node-profile.js"></script>
