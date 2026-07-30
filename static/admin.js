@@ -259,7 +259,7 @@ function renderNodeCard(n) {
     .map((c) => `<span class="c">${escHtml(c)}</span>`)
     .join("");
   return `
-    <div class="node-card" data-node-id="${escAttr(n.node_id)}">
+    <div class="node-card" data-node-id="${escAttr(n.node_id)}" onclick="window.open('/relay/v2/dashboard/node/${escAttr(encodeURIComponent(n.node_name || n.node_id))}', '_blank')" style="cursor:pointer">
       <div class="banner ${nodeBannerClass(n.node_name)}"></div>
       <div class="body">
         <div class="node-avatar ${nodeAvatarClass(n.node_name)}">${escHtml(nodeAvatarEmoji(n.node_name))}</div>
