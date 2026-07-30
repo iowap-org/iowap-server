@@ -39,6 +39,7 @@ ALLOWED_DOCS = {
     # reference
     "reference-api": DOCS_DIR / "reference" / "api.md",
     "reference-design-board": DOCS_DIR / "reference" / "design-board.md",
+    "reference-database-backends": DOCS_DIR / "reference" / "database-backends.md",
 }
 
 # Reverse map: absolute file path -> doc name (for link rewriting)
