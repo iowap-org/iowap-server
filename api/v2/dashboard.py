@@ -358,7 +358,7 @@ async def dashboard_bootstrap_create_admin(
 async def dashboard_logout(request: Request):
     """Clear the dashboard session cookie (GET, no CSRF required)."""
     response = RedirectResponse(
-        url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
+        url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER
     )
     _clear_cookies(response)
     return response
