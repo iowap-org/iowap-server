@@ -259,7 +259,7 @@ function renderNodeCard(n) {
     .map((c) => `<span class="c">${escHtml(c)}</span>`)
     .join("");
   return `
-    <div class="node-card" data-node-id="${escAttr(n.node_id)}" onclick="window.open('/relay/v2/dashboard/node/${escAttr(encodeURIComponent(n.node_name || n.node_id))}', '_blank')" style="cursor:pointer">
+    <div class="node-card" data-node-id="${escAttr(n.node_id)}" data-node-name="${escAttr(n.node_name || n.node_id)}">
       <div class="banner ${nodeBannerClass(n.node_name)}"></div>
       <div class="body">
         <div class="node-avatar ${nodeAvatarClass(n.node_name)}">${escHtml(nodeAvatarEmoji(n.node_name))}</div>
@@ -640,6 +640,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Node actions (approve / token / delete) inside node cards.
   document.addEventListener("click", (e) => {
+    // Click on a node card → open profile page
+    const card = e.target.closest(".node-card");
+    if (card && !e.target.closest("button, .approve-btn, .token-btn, .delete-btn")) {
+      const name = card.dataset.nodeName;
+      if (name) {
+        window.open("/relay/v2/dashboard/node/" + encodeURIComponent(name), "_blank");
+        return;
+      }
+    }
     const approveBtn = e.target.closest(".approve-btn");
     if (approveBtn && approveBtn.dataset.nodeId) {
       approveNode(approveBtn.dataset.nodeId);
