@@ -354,10 +354,9 @@ async def dashboard_bootstrap_create_admin(
     return {"status": "ok", "user_id": user["user_id"], "temporary_password": temp_password}
 
 
-@router.post("/logout")
-async def dashboard_logout(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
-    """Clear the dashboard session cookie."""
-    _verify_csrf(request)
+@router.get("/logout")
+async def dashboard_logout(request: Request):
+    """Clear the dashboard session cookie (GET, no CSRF required)."""
     response = RedirectResponse(
         url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
     )
