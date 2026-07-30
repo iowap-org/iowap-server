@@ -3,62 +3,72 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Relay Cluster — Community</title>
+  <title>AI Relay Cluster</title>
   <link rel="stylesheet" href="/relay/v2/dashboard/static/cluster.css" />
+  <style>
+    .teaser { text-align: center; padding: 4rem 1.5rem 2rem; max-width: 800px; margin: 0 auto; }
+    .teaser h1 { font-size: 2.2rem; margin: 0 0 .5rem; }
+    .teaser p { color: var(--muted); font-size: 1.05rem; max-width: 560px; margin: 0 auto 2rem; }
+    .doc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin: 0 auto; }
+    .doc-card { background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; padding: 1.25rem; text-align: left; cursor: pointer; transition: border-color .15s; text-decoration: none; color: inherit; display: block; }
+    .doc-card:hover { border-color: var(--accent); text-decoration: none; }
+    .doc-card .icon { font-size: 1.5rem; margin-bottom: .5rem; }
+    .doc-card h3 { margin: 0 0 .25rem; font-size: 1rem; color: var(--text); }
+    .doc-card p { margin: 0; color: var(--muted); font-size: .82rem; }
+    .teaser .btn { display: inline-block; margin-top: 2rem; padding: .6rem 1.2rem; background: var(--accent); color: #fff; border-radius: .5rem; text-decoration: none; font-size: .9rem; }
+    .teaser .btn:hover { text-decoration: none; opacity: .9; }
+  </style>
 </head>
 <body>
-
-  <!-- ===== Nav ===== -->
   <nav class="topnav">
     <div class="logo">⟐ relay<span>.cluster</span></div>
-    <a class="topnav-link active" href="/relay/v2/dashboard/">Overview</a>
-    <a class="topnav-link" href="#nodes">Nodes</a>
-    <a class="topnav-link" href="#users">Users</a>
-    <a class="topnav-link" href="#activity">Activity</a>
     <div class="spacer"></div>
     <a class="btn btn-primary" href="/relay/v2/dashboard/admin">Admin</a>
   </nav>
 
-  <!-- ===== Hero ===== -->
-  <section class="hero">
-    <h1>AI Relay Cluster</h1>
-    <p>Distributed agent coordination layer — nodes, tasks, capabilities and users across your cluster.</p>
-    <div id="heroPill" class="pill"><span class="dot"></span> All systems operational</div>
-  </section>
+  <div class="teaser">
+    <h1>AI Relay Service</h1>
+    <p>Distributed agent coordination layer. Manage nodes, tasks, capabilities and users across your cluster.</p>
+    <div id="heroPill" class="pill"><span class="dot"></span> loading…</div>
 
-  <!-- ===== Status bar (5 items) ===== -->
-  <div class="status-bar-wrap">
-    <div id="summary" class="status-bar"></div>
+    <div class="doc-grid" style="margin-top:2rem">
+      <a class="doc-card" href="/relay/v2/docs/node-setup">
+        <div class="icon">🚀</div>
+        <h3>Getting Started</h3>
+        <p>Set up your first worker node and connect it to the relay.</p>
+      </a>
+      <a class="doc-card" href="/relay/v2/docs/node-cli-reference">
+        <div class="icon">📖</div>
+        <h3>CLI Reference</h3>
+        <p>Complete reference for all <code>node-cli</code> commands.</p>
+      </a>
+      <a class="doc-card" href="/relay/v2/docs/reference-api">
+        <div class="icon">🔌</div>
+        <h3>API Reference</h3>
+        <p>REST API endpoints for automation and integration.</p>
+      </a>
+      <a class="doc-card" href="/relay/v2/docs/node-capabilities">
+        <div class="icon">🧩</div>
+        <h3>Capabilities</h3>
+        <p>Define what your nodes can do with capability profiles.</p>
+      </a>
+      <a class="doc-card" href="/relay/v2/docs/node-config">
+        <div class="icon">⚙️</div>
+        <h3>Node Config</h3>
+        <p>Configure <code>node.yaml</code> — node name, status, profiles.</p>
+      </a>
+      <a class="doc-card" href="/relay/v2/docs/concepts">
+        <div class="icon">📐</div>
+        <h3>Architecture</h3>
+        <p>Understand the relay's design, status system and event model.</p>
+      </a>
+    </div>
+
+    <a class="btn" href="/relay/v2/dashboard/admin">→ Admin Dashboard</a>
   </div>
 
-  <div class="container">
-
-    <!-- Nodes -->
-    <div class="section" id="nodes">
-      <h2>🖥 Nodes</h2>
-      <a class="link" href="#nodes">View all →</a>
-    </div>
-    <div id="nodeCards" class="node-grid"></div>
-
-    <!-- Users -->
-    <div class="section" id="users">
-      <h2>👤 Human Users</h2>
-      <a class="link" href="#users">View all →</a>
-    </div>
-    <div id="userCards" class="user-grid"></div>
-
-    <!-- Activity -->
-    <div class="section" id="activity">
-      <h2>📡 Recent Activity</h2>
-      <a class="link" href="#activity">View all →</a>
-    </div>
-    <div id="events" class="activity"></div>
-
-  </div>
-
-  <!-- ===== Footer ===== -->
   <footer class="footer-mockup">
-    <p><a href="/relay/v2/dashboard/">AI Relay Service</a> · <span id="version">v2.0.0</span> · <a href="/relay/v2/docs/concepts">Docs</a></p>
+    <p><a href="/relay/v2/dashboard/">AI Relay Service</a> · <span id="version">v2.0.0</span></p>
   </footer>
 
   <script src="/relay/v2/dashboard/static/dashboard.js"></script>
