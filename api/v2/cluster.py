@@ -198,6 +198,7 @@ async def cluster_nodes():
 async def cluster_node_profile(node_id: str):
     """Public node profile: details, capability list, recent tasks, activity.
 
+    Accepts both ``node_id`` and ``node_name`` — resolves to ID first.
     Capability entries include ``name``, ``type``, ``description`` and
     ``input_schema`` (read from the normalized index) so the profile
     page can render the same detail the admin dashboard shows. No
@@ -207,6 +208,15 @@ async def cluster_node_profile(node_id: str):
     try:
         if node_id == _DASHBOARD_ADMIN_NODE:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+
+        # Resolve node_name to node_id
+        resolved = conn.execute(
+            "SELECT node_id FROM nodes WHERE node_id = ? OR node_name = ?",
+            (node_id, node_id),
+        ).fetchone()
+        if not resolved:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        node_id = resolved["node_id"]
 
         row = conn.execute(
             "SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
@@ -379,6 +389,8 @@ async def cluster_users():
 async def cluster_user_profile(user_id: str):
     """Public user profile: details, assigned nodes, recent activity.
 
+    Accepts both ``user_id`` and ``username`` — resolves to ID first.
+
     "Assigned nodes" are nodes whose ``owner_node_id``-style link is
     not tracked per user; instead we attribute tasks owned or claimed
     by nodes the user created. Because the relay does not model a
@@ -388,6 +400,15 @@ async def cluster_user_profile(user_id: str):
     """
     conn = get_conn()
     try:
+        # Resolve username to user_id
+        resolved = conn.execute(
+            "SELECT user_id FROM users WHERE user_id = ? OR username = ?",
+            (user_id, user_id),
+        ).fetchone()
+        if not resolved:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        user_id = resolved["user_id"]
+
         row = conn.execute(
             "SELECT user_id, username, is_active, status, created_at, created_by "
             "FROM users WHERE user_id = ?",

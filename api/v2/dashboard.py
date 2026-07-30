@@ -147,6 +147,38 @@ async def dashboard_index():
     return FileResponse(STATIC_DIR / "dashboard.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
+def _resolve_node_identifier(value: str) -> str | None:
+    """Resolve a node_name to node_id, or return the value if it's already an ID."""
+    conn = get_conn()
+    try:
+        # Try as node_id first
+        row = conn.execute("SELECT node_id FROM nodes WHERE node_id = ?", (value,)).fetchone()
+        if row:
+            return row["node_id"]
+        # Try as node_name
+        row = conn.execute("SELECT node_id FROM nodes WHERE node_name = ?", (value,)).fetchone()
+        if row:
+            return row["node_id"]
+        return None
+    finally:
+        conn.close()
+
+
+def _resolve_user_identifier(value: str) -> str | None:
+    """Resolve a username to user_id, or return the value if it's already an ID."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (value,)).fetchone()
+        if row:
+            return row["user_id"]
+        row = conn.execute("SELECT user_id FROM users WHERE username = ?", (value,)).fetchone()
+        if row:
+            return row["user_id"]
+        return None
+    finally:
+        conn.close()
+
+
 @router.get("/admin")
 async def dashboard_admin(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
     """Serve the admin panel (login required)."""
@@ -156,13 +188,29 @@ async def dashboard_admin(request: Request, ctx: AuthContext = Depends(require_d
 
 @router.get("/node/{node_id}")
 async def dashboard_node_profile(node_id: str):
-    """Serve the public node profile page."""
+    """Serve the public node profile page.
+
+    Accepts both ``node_id`` (e.g. ``3H69CMAD``) and ``node_name``
+    (e.g. ``felix-cyberfox``) — the server resolves the name to an ID
+    when needed.
+    """
+    # Resolve node_name to node_id if the given value is not a known ID.
+    resolved = _resolve_node_identifier(node_id)
+    if resolved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
     return FileResponse(STATIC_DIR / "node-profile.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @router.get("/user/{user_id}")
 async def dashboard_user_profile(user_id: str):
-    """Serve the public user profile page."""
+    """Serve the public user profile page.
+
+    Accepts both ``user_id`` and ``username`` — the server resolves
+    the name to an ID when needed.
+    """
+    resolved = _resolve_user_identifier(user_id)
+    if resolved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return FileResponse(STATIC_DIR / "user-profile.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
