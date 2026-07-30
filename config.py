@@ -1,7 +1,7 @@
 """Pydantic-Settings for AI-Relay-Service."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import yaml
 from pydantic_settings import BaseSettings
@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     artifacts_dir: Path = Path.home() / ".relay" / "artifacts"
     chunked_uploads_dir: Path = Path.home() / ".relay" / "chunked_uploads"
     static_dir: Optional[Path] = None
+
+    # Database backend selection (pluggable abstraction).
+    # ``sqlite`` is the default; ``postgres`` and ``mariadb`` are stubs whose
+    # full implementation is deferred. DSNs are only consulted when the
+    # matching ``db_type`` is active.
+    db_type: Literal["sqlite", "postgres", "mariadb"] = "sqlite"
+    pg_dsn: str = ""
+    mariadb_dsn: str = ""
 
     # Auth
     token_ttl_hours: int = 168

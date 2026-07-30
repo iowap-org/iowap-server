@@ -1,4 +1,17 @@
-"""Database layer — SQLite connection pool and core schema management."""
+"""Database layer — pluggable backend abstraction with SQLite default.
+
+The relay server talks to its database through a :class:`Database` protocol.
+The active backend is selected by ``settings.db_type`` and instantiated once
+via :func:`create_database`. Business logic calls ``db.get_conn()`` on the
+module-level singleton ``db`` (or, for backward compatibility, the
+module-level :func:`get_conn` / :func:`init_db` wrappers which delegate to it).
+
+Currently supported backends:
+
+* ``sqlite``  (default, fully implemented — :class:`SqliteDatabase`)
+* ``postgres`` (stub, raises ``NotImplementedError`` — :class:`PostgresDatabase`)
+* ``mariadb`` (stub, raises ``NotImplementedError`` — :class:`MariadbDatabase`)
+"""
 
 import functools
 import json
@@ -7,7 +20,7 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from relay_server.config import settings
 
@@ -54,6 +67,33 @@ def _redact_secrets(value: Optional[str]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Database protocol
+# ---------------------------------------------------------------------------
+
+
+class Database:
+    """Pluggable database backend for the relay server.
+
+    Each backend implements this interface. Business logic only ever calls
+    :meth:`get_conn` (to obtain a connection) and :meth:`init_db` (to create
+    schema + run migrations on startup). :meth:`close` releases resources
+    (pools, file handles) on shutdown.
+    """
+
+    def get_conn(self) -> Any:
+        """Return a usable database connection (sync)."""
+        raise NotImplementedError
+
+    def init_db(self) -> None:
+        """Create schema, seed defaults, and run migrations. Idempotent."""
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Release resources (pools, connections). No-op by default."""
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Retry helper for SQLite lock contention
 # ---------------------------------------------------------------------------
 
@@ -89,29 +129,57 @@ def retry_on_locked(func):
     return wrapper
 
 
-def get_conn() -> sqlite3.Connection:
-    """Create a fresh database connection with WAL mode and Row factory."""
-    db_path = settings.db_path
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+# ---------------------------------------------------------------------------
+# SQLite backend
+# ---------------------------------------------------------------------------
 
 
-def init_db() -> None:
-    """Initialize core tables for the relay server."""
-    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_conn()
-    try:
-        _schema(conn)
-    finally:
-        conn.close()
+class SqliteDatabase(Database):
+    """SQLite backend — the default.
+
+    ``get_conn()`` reads :data:`settings.db_path` live on every call so that
+    tests which reconfigure the path per-test keep working without rebuilding
+    the backend instance. Connections are short-lived (callers open and close
+    them per operation), WAL mode and Row factory are enabled on each open.
+    """
+
+    def __init__(self, db_path: Optional[Any] = None):
+        # ``db_path`` is accepted for symmetry with the other backends but
+        # unused: SqliteDatabase always reads settings.db_path live so the
+        # test harness can re-point it per test.
+        self._db_path = db_path
+
+    def get_conn(self) -> sqlite3.Connection:
+        """Create a fresh connection with WAL mode and Row factory."""
+        db_path = settings.db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def init_db(self) -> None:
+        """Initialize core tables for the relay server."""
+        settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = self.get_conn()
+        try:
+            _schema(conn)
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        """No-op — SQLite connections are short-lived and closed per call."""
+        pass
 
 
 def init_db_for_path(db_path: str) -> None:
-    """Initialize the database at an explicit path (used by CLI tools)."""
+    """Initialize the database at an explicit path (used by CLI tools).
+
+    Bypasses the active backend singleton and opens SQLite directly at the
+    given path. This is a convenience for the ``relay-recovery`` CLI which
+    operates on arbitrary database files.
+    """
     import pathlib
 
     path = pathlib.Path(str(db_path))
@@ -124,6 +192,53 @@ def init_db_for_path(db_path: str) -> None:
         _schema(conn)
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton + factory
+# ---------------------------------------------------------------------------
+#
+# ``db`` is the active backend instance shared across the process.
+# :func:`create_database` builds it from ``settings.db_type``. The module-level
+# :func:`get_conn` and :func:`init_db` delegate to ``db`` so callers that still
+# import them directly (and tests) keep working. Tests that reconfigure
+# ``settings.db_path`` per-test rely on :class:`SqliteDatabase.get_conn`
+# reading settings live.
+
+
+def create_database() -> Database:
+    """Build the active backend from ``settings.db_type``."""
+    db_type = settings.db_type
+    if db_type == "sqlite":
+        return SqliteDatabase()
+    if db_type == "postgres":
+        from relay_server.core.db_postgres import PostgresDatabase
+
+        return PostgresDatabase(settings.pg_dsn)
+    if db_type == "mariadb":
+        from relay_server.core.db_mariadb import MariadbDatabase
+
+        return MariadbDatabase(settings.mariadb_dsn)
+    raise ValueError(f"Unknown db_type: {db_type!r}")
+
+
+# Active backend singleton. Instantiated lazily on first import so that
+# ``settings`` (which is built from YAML + env at import time) is ready.
+db: Database = create_database()
+
+
+def get_conn() -> Any:
+    """Module-level accessor — delegates to the active backend ``db``.
+
+    Kept for backward compatibility. New code should use ``db.get_conn()``
+    directly via ``from relay_server.core.db import db``.
+    """
+    return db.get_conn()
+
+
+def init_db() -> None:
+    """Module-level accessor — delegates to the active backend ``db``."""
+    db.init_db()
 
 
 def _schema(conn: sqlite3.Connection) -> None:
