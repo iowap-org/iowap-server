@@ -180,9 +180,20 @@ def _resolve_user_identifier(value: str) -> str | None:
 
 
 @router.get("/admin")
-async def dashboard_admin(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
-    """Serve the admin panel (login required)."""
-    check_dashboard_permission(ctx, "dashboard:view")
+async def dashboard_admin(request: Request):
+    """Serve the admin panel (login required). Redirects to login if not authenticated."""
+    relay_user = request.cookies.get("relay_user")
+    if not relay_user:
+        return RedirectResponse(
+            url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
+        )
+    try:
+        ctx = await require_dashboard_user(relay_user=relay_user)
+        check_dashboard_permission(ctx, "dashboard:view")
+    except HTTPException:
+        return RedirectResponse(
+            url="/relay/v2/dashboard/login", status_code=status.HTTP_303_SEE_OTHER
+        )
     return FileResponse(STATIC_DIR / "admin.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
