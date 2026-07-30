@@ -14,6 +14,14 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+# uvloop: faster asyncio event loop (Linux/macOS). Falls back to stdlib on Windows.
+try:
+    import uvloop  # noqa: F811
+
+    uvloop.install()
+except ImportError:
+    pass
+
 from relay_server import __version__
 from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
