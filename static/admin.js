@@ -640,12 +640,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Node actions (approve / token / delete) inside node cards.
   document.addEventListener("click", (e) => {
-    // Click on a node card → open profile page
+    // Click on a node card → open profile page in overlay
     const card = e.target.closest(".node-card");
     if (card && !e.target.closest("button, .approve-btn, .token-btn, .delete-btn")) {
       const name = card.dataset.nodeName;
       if (name) {
-        window.open("/relay/v2/dashboard/node/" + encodeURIComponent(name), "_blank");
+        const frame = document.getElementById("ssnPageFrame");
+        frame.src = "/relay/v2/dashboard/node/" + encodeURIComponent(name);
+        document.getElementById("ssnPageTitle").textContent = name;
+        document.getElementById("ssnPageOverlay").classList.remove("hidden");
+        document.getElementById("ssnPageBox").classList.remove("hidden");
         return;
       }
     }
