@@ -222,6 +222,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 # HTML, so inline scripts/styles are permitted and frame-ancestors is relaxed
 # to 'self' so the dashboard can embed them.
 _NODE_ROUTES_PREFIX = "/relay/v2/dashboard/api/node-routes/"
+_NODE_PROFILE_PREFIX = "/relay/v2/dashboard/node/"
 _NODE_ROUTES_CSP = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline'; "
@@ -238,6 +239,9 @@ _NODE_ROUTES_CSP = (
 async def _security_headers_middleware(request, call_next):
     response = await call_next(request)
     if request.url.path.startswith(_NODE_ROUTES_PREFIX):
+        response.headers["Content-Security-Policy"] = _NODE_ROUTES_CSP
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    elif request.url.path.startswith(_NODE_PROFILE_PREFIX):
         response.headers["Content-Security-Policy"] = _NODE_ROUTES_CSP
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
     else:
