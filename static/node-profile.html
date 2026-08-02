@@ -8,21 +8,12 @@
 </head>
 <body>
 
-  <!-- ===== Nav ===== -->
-  <nav class="topnav">
-    <div class="logo">⟐ relay<span>.cluster</span></div>
-    <a class="topnav-link" href="/relay/v2/dashboard/">Overview</a>
-    <a class="topnav-link" href="/relay/v2/dashboard/#nodes">Nodes</a>
-    <a class="topnav-link" href="/relay/v2/dashboard/#users">Users</a>
-    <div class="spacer"></div>
-    <a class="btn btn-primary" href="/relay/v2/dashboard/admin">Admin</a>
-  </nav>
-
   <!-- ===== Profile hero ===== -->
   <section class="hero profile">
     <div id="nodeAvatar" class="avatar-lg">?</div>
     <div class="head-text">
       <h1 id="nodeName">loading…</h1>
+      <p id="nodeDesc" class="sub"></p>
       <p id="nodeId" class="sub mono"></p>
       <span id="statusPill" class="status-pill"><span class="status-dot"></span> loading…</span>
     </div>
@@ -61,16 +52,10 @@
     <!-- Activity for this node -->
     <div class="section">
       <h2>📡 Recent Activity</h2>
-      <a class="link" href="/relay/v2/dashboard/">Cluster feed →</a>
     </div>
     <div id="events" class="activity"></div>
 
   </div>
-
-  <!-- ===== Footer ===== -->
-  <footer class="footer-mockup">
-    <p><a href="/relay/v2/dashboard/">AI Relay Service</a> · Node Profile · <a href="/relay/v2/dashboard/">← back to portal</a></p>
-  </footer>
 
   <script src="/relay/v2/dashboard/static/node-profile.js"></script>
 </body>

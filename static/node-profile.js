@@ -108,6 +108,7 @@ function render(n, events) {
   const name = n.node_name || n.node_id;
   document.getElementById("nodeName").textContent = name;
   document.getElementById("nodeId").textContent = n.node_id;
+  document.getElementById("nodeDesc").textContent = n.description || "";
   const avatar = document.getElementById("nodeAvatar");
   avatar.textContent = nodeAvatarEmoji(n.node_name);
   // avatar gradient class lives on .avatar-lg via a modifier; we apply
