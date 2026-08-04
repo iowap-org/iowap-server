@@ -53,7 +53,7 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
         conn.execute(q("DELETE FROM node_routes WHERE node_id = ?", (node_id,)))
         for route in routes:
             conn.execute(
-                q("INSERT OR REPLACE INTO node_routes (node_id, path, method, auth, upstream, description) "
+                q("INSERT INTO node_routes (node_id, path, method, auth, upstream, description) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (
                     node_id,
                     route.get("path", ""),
