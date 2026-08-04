@@ -27,6 +27,7 @@ from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
 from relay_server.core.db import init_db
 from relay_server.core.events import event_bus
+from relay_server.core import metrics as _metrics
 from relay_server.core.maintenance import MaintenanceScheduler
 from relay_server.core.session import unsign_user_cookie
 from relay_server.core.users import list_users
@@ -127,12 +128,14 @@ async def _maintenance_loop(maintenance: MaintenanceScheduler):
     while True:
         try:
             results = await asyncio.to_thread(maintenance.run_due)
+            _metrics.mark_maintenance_run(ok=True)
             for name, result in results.items():
                 # Only log when the task actually did something. Empty
                 # dicts / all-zero counters are treated as no-ops.
                 if result and not _is_noop_result(result):
                     logger.info("Maintenance [%s]: %s", name, result)
         except Exception as e:  # noqa: BLE001 — loop must never die
+            _metrics.mark_maintenance_run(ok=False)
             logger.exception("Maintenance loop error: %s", e)
         await asyncio.sleep(settings.maintenance_interval_seconds)
 
@@ -315,6 +318,45 @@ async def health():
         "mode": "core",
         "event_subscribers": event_bus.subscriber_count(),
     }
+
+
+@app.get("/ready")
+async def ready():
+    """Liveness für die Task-Verarbeitung — prüft die Subsysteme."""
+    from relay_server.core import metrics
+    from relay_server.core.db import get_conn
+
+    db_ok = False
+    try:
+        conn = get_conn()
+        conn.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:  # noqa: BLE001
+        db_ok = False
+
+    scheduler_age = metrics.maintenance_age_seconds()
+    scheduler_ok = scheduler_age is not None and scheduler_age < 30
+    return {
+        "status": "ready" if (db_ok and scheduler_ok) else "degraded",
+        "database": "ok" if db_ok else "error",
+        "scheduler": "ok" if scheduler_ok else "unknown" if scheduler_age is None else "stale",
+        "event_bus": "ok" if event_bus.subscriber_count() >= 0 else "error",
+        "maintenance_age_seconds": scheduler_age,
+    }
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Prometheus-Exposition (offen wie /health, kein Secrets)."""
+    from relay_server.core import metrics
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(
+        metrics.render_prometheus(),
+        media_type="text/plain; version=0.0.4",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def main(argv=None):
