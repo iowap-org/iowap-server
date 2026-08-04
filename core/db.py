@@ -667,13 +667,19 @@ def _schema(conn: sqlite3.Connection) -> None:
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
-    """Run lightweight schema migrations that add columns when missing."""
+    """Run lightweight schema migrations that add columns when missing.
+
+    Backend-aware: ``PRAGMA table_info`` is used on SQLite, and
+    ``information_schema`` is used on PostgreSQL/other backends. The
+    column-name introspection is centralised in :func:`_column_names` and
+    the table listing in :func:`_table_names`.
+    """
     # Ensure force_password_change column exists in users table.
-    cols = [r[1] for r in _exec(conn, "PRAGMA table_info(users)").fetchall()]
+    cols = _column_names(conn, "users")
     if "force_password_change" not in cols:
         _exec(conn, "ALTER TABLE users ADD COLUMN force_password_change BOOLEAN DEFAULT 1")
     # Ensure registration_secret_hash column exists in nodes table.
-    cols = [r[1] for r in _exec(conn, "PRAGMA table_info(nodes)").fetchall()]
+    cols = _column_names(conn, "nodes")
     if "registration_secret_hash" not in cols:
         _exec(conn, "ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
     if "registration_secret_expires_at" not in cols:
@@ -685,19 +691,15 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
 
     # Ensure token_lookup_hash column exists in node_tokens table (C-1 fix:
     # deterministic HMAC-SHA256 lookup replaces the O(N) bcrypt scan).
-    cols = [r[1] for r in _exec(conn, "PRAGMA table_info(node_tokens)").fetchall()]
+    cols = _column_names(conn, "node_tokens")
     if "token_lookup_hash" not in cols:
         _exec(conn, "ALTER TABLE node_tokens ADD COLUMN token_lookup_hash TEXT")
-    _exec(conn, 
+    _exec(conn,
         "CREATE INDEX IF NOT EXISTS idx_node_tokens_lookup ON node_tokens(token_lookup_hash)"
     )
 
     # Ensure audit_logs table exists (migration for existing databases).
-    table_names = [
-        r[0] for r in _exec(conn, 
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    ]
+    table_names = _table_names(conn)
     if "audit_logs" not in table_names:
         _exec(conn, """
             CREATE TABLE audit_logs (
@@ -711,10 +713,10 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 created_at TEXT NOT NULL
             )
         """)
-        _exec(conn, 
+        _exec(conn,
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)"
         )
-        _exec(conn, 
+        _exec(conn,
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
         )
 
@@ -731,7 +733,7 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
             )
         """)
-        _exec(conn, 
+        _exec(conn,
             "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
         )
 
@@ -739,9 +741,9 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # existing databases). The scheduler increments this counter each
     # time a claim is released back to pending, and fails the stage once
     # it exceeds settings.max_retries.
-    ts_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(task_stages)").fetchall()]
+    ts_cols = _column_names(conn, "task_stages")
     if "retry_count" not in ts_cols:
-        _exec(conn, 
+        _exec(conn,
             "ALTER TABLE task_stages ADD COLUMN retry_count INTEGER DEFAULT 0"
         )
 
@@ -751,14 +753,14 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # status registry (core/status.py). Existing rows are backfilled from
     # ``is_active`` when that column exists so an active user maps to
     # "active" and a deactivated one to "inactive".
-    user_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(users)").fetchall()]
+    user_cols = _column_names(conn, "users")
     if "status" not in user_cols:
         _exec(conn, "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
         # Backfill from is_active for any pre-existing rows, but only
         # when the legacy column is present (some very old databases
         # predate is_active entirely).
         if "is_active" in user_cols:
-            _exec(conn, 
+            _exec(conn,
                 "UPDATE users SET status = CASE WHEN is_active = 0 THEN 'inactive' "
                 "ELSE 'active' END WHERE status IS NULL"
             )
@@ -768,28 +770,75 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # or above its load_cap for ``consecutive_high_load`` heartbeats in a
     # row is automatically transitioned to "busy"; the counter resets to
     # 0 whenever the load drops back below the cap.
-    node_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(nodes)").fetchall()]
+    node_cols = _column_names(conn, "nodes")
     if "consecutive_high_load" not in node_cols:
-        _exec(conn, 
+        _exec(conn,
             "ALTER TABLE nodes ADD COLUMN consecutive_high_load INTEGER DEFAULT 0"
         )
 
     # T-053: ensure node_capabilities has the description and input_schema
     # columns (migration for existing databases).
     if "node_capabilities" in table_names:
-        nc_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(node_capabilities)").fetchall()]
+        nc_cols = _column_names(conn, "node_capabilities")
         if "description" not in nc_cols:
-            _exec(conn, 
+            _exec(conn,
                 "ALTER TABLE node_capabilities ADD COLUMN description TEXT"
             )
         if "input_schema" not in nc_cols:
-            _exec(conn, 
+            _exec(conn,
                 "ALTER TABLE node_capabilities ADD COLUMN input_schema TEXT"
             )
 
     # T-026: backfill node_capabilities from the legacy JSON column for
     # existing databases. Runs once when the table is empty but nodes exist.
     _migrate_node_capabilities(conn)
+
+
+def _column_names(conn, table: str) -> list[str]:
+    """Return the column names of ``table`` in declaration order.
+
+    Uses ``PRAGMA table_info`` on SQLite (where it is the canonical
+    introspection) and ``information_schema.columns`` on other backends.
+    Handles raw ``sqlite3.Connection`` (used by the backcompat test fixture
+    and CLI helpers) as well as SQLAlchemy ``Connection`` objects.
+    """
+    if _is_sqlite(conn):
+        # Raw sqlite3.Connection has .execute(sql, params); SA Connection has
+        # .exec_driver_sql(sql, params). Both accept the plain PRAGMA string.
+        rows = _exec(conn, f"PRAGMA table_info({table})").fetchall()
+        return [r[1] for r in rows]
+    # Portable path: information_schema.columns (PostgreSQL, others).
+    rows = conn.exec_driver_sql(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = :t ORDER BY ordinal_position",
+        {"t": table},
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _table_names(conn) -> list[str]:
+    """Return the names of all tables in the current database.
+
+    Uses ``sqlite_master`` on SQLite and ``information_schema.tables`` on
+    other backends.
+    """
+    if _is_sqlite(conn):
+        rows = _exec(conn, "SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        return [r[0] for r in rows]
+    rows = conn.exec_driver_sql(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _is_sqlite(conn) -> bool:
+    """Heuristically detect a SQLite connection (SA or raw sqlite3)."""
+    dialect = getattr(conn, "dialect", None)
+    if dialect is not None:
+        return dialect.name == "sqlite"
+    # Raw sqlite3.Connection — check the module / type.
+    mod = type(conn).__module__
+    return "sqlite3" in mod or isinstance(conn, sqlite3.Connection)
 
 
 def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
@@ -802,11 +851,7 @@ def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
 
     # Skip if the table doesn't exist yet (shouldn't happen because
     # _schema() creates it, but guard anyway).
-    table_names = [
-        r[0] for r in _exec(conn, 
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    ]
+    table_names = _table_names(conn)
     if "node_capabilities" not in table_names:
         return
 
