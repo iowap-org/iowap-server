@@ -91,8 +91,14 @@ async def lifespan(app: FastAPI):
 
     mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
     if settings.enable_mdns:
-        # Start mDNS in the background so it cannot block server startup.
-        asyncio.get_running_loop().run_in_executor(None, mdns.start)
+        if settings.tls_certfile:
+            # T-111: TLS active = Internet/Community-Relay mode. mDNS is a
+            # LAN discovery mechanism and should not advertise on the public
+            # internet, so it is suppressed when TLS is on.
+            logger.info("mDNS disabled because TLS is active (Internet mode)")
+        else:
+            # Start mDNS in the background so it cannot block server startup.
+            asyncio.get_running_loop().run_in_executor(None, mdns.start)
 
     # T-069: start the Server-Side Node (SSN) if enabled. The SSN is a
     # normal ``node-cli`` daemon running on the same host. We start its
@@ -423,13 +429,31 @@ def main(argv=None):
         _run_admin_command(args)
         return
 
+    # TLS (T-111): if a cert is configured, require the key and serve HTTPS.
+    uvicorn_kwargs: dict = {
+        "log_level": settings.log_level,
+        "reload": settings.reload,
+        "timeout_graceful_shutdown": 5,
+    }
+    if settings.tls_certfile:
+        if not settings.tls_keyfile:
+            parser.error(
+                "tls_certfile is set but tls_keyfile is missing — both are "
+                "required to enable TLS."
+            )
+        if not settings.tls_certfile.exists() or not settings.tls_keyfile.exists():
+            parser.error(
+                "TLS cert/key file not found: "
+                f"{settings.tls_certfile} / {settings.tls_keyfile}"
+            )
+        uvicorn_kwargs["ssl_certfile"] = str(settings.tls_certfile)
+        uvicorn_kwargs["ssl_keyfile"] = str(settings.tls_keyfile)
+
     uvicorn.run(
         "relay_server.main:app",
         host=args.host,
         port=args.port,
-        log_level=settings.log_level,
-        reload=settings.reload,
-        timeout_graceful_shutdown=5,
+        **uvicorn_kwargs,
     )
 
 

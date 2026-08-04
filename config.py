@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     enable_mdns: bool = False
     mdns_hostname: str = "ai-relay"
 
+    # TLS (T-111). Server-side TLS only (no mTLS — node identity is already
+    # handled by runtime tokens). When tls_certfile is set, the relay serves
+    # HTTPS; otherwise plain HTTP. Homelab default is HTTP (Tailscale covers
+    # the transport); the Internet/Community-Relay mode sets these to the
+    # server's cert/key (e.g. from Caddy or Let's Encrypt).
+    tls_certfile: Optional[Path] = None
+    tls_keyfile: Optional[Path] = None
+
     # Paths
     db_path: Path = Path.home() / ".relay" / "server.db"
     config_path: Optional[Path] = Path.home() / ".relay" / "config.yaml"
@@ -119,6 +127,8 @@ def _apply_yaml_overrides(base: Settings, path: Optional[Path]) -> Settings:
         "static_dir",
         "capabilities_config_path",
         "ssn_pages_dir",
+        "tls_certfile",
+        "tls_keyfile",
     ]:
         if key in yaml_data:
             yaml_data[key] = _coerce_path(yaml_data[key])
