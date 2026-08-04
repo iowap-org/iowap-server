@@ -28,6 +28,7 @@ from relay_server.config import settings
 from relay_server.core.db import init_db
 from relay_server.core.events import event_bus
 from relay_server.core import metrics as _metrics
+from relay_server.core.logging_setup import JsonFormatter
 from relay_server.core.maintenance import MaintenanceScheduler
 from relay_server.core.session import unsign_user_cookie
 from relay_server.core.users import list_users
@@ -54,6 +55,14 @@ logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+
+# T-109: structured JSON logs with per-request trace_id. The basicConfig
+# above is kept as a fallback; replace the root handler with a JSON one.
+_handler = logging.StreamHandler()
+_handler.setFormatter(JsonFormatter())
+_root_logger = logging.getLogger()
+_root_logger.handlers = [_handler]
+_root_logger.setLevel(getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger("relay")
 
 # Shared IP-based rate limiter used by auth and dashboard routers.
@@ -236,6 +245,23 @@ _NODE_ROUTES_CSP = (
     "base-uri 'self'; "
     "form-action 'self'"
 )
+
+
+@app.middleware("http")
+async def _trace_id_middleware(request, call_next):
+    """Setze pro Request eine trace_id (contextvars) für strukturierte Logs (T-109).
+
+    FastAPI führt Middlewares in umgekehrter Dekorations-Reihenfolge aus;
+    weil diese Middleware als erste deklariert wird, läuft sie als äußerste
+    Schicht und die trace_id ist in allen nachfolgenden Middlewares und
+    Endpoint-Log-Aufrufen sichtbar.
+    """
+    from relay_server.core.logging_setup import current_trace_id, new_trace_id, set_trace_id
+
+    set_trace_id(new_trace_id())
+    response = await call_next(request)
+    response.headers["X-Relay-Trace-Id"] = current_trace_id()
+    return response
 
 
 @app.middleware("http")
