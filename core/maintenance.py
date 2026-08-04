@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional
 import sqlalchemy as sa
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn, q
+from relay_server.core.db import _is_sqlite, get_conn, q
 
 logger = logging.getLogger("relay.maintenance")
 
@@ -59,16 +59,30 @@ def _purge_expired_tokens() -> Dict[str, Any]:
 
 
 def _db_vacuum() -> Dict[str, Any]:
-    """Run a WAL checkpoint and VACUUM to reclaim space.
+    """Reclaim disk space — backend-aware.
 
-    Returns ``{"checkpointed": bool, "vacuumed": bool}``. Errors are
-    logged but never raised — VACUUM can legitimately fail when another
-    connection holds a write lock; the next run will retry.
+    On SQLite this runs a WAL checkpoint (``PRAGMA wal_checkpoint(TRUNCATE)``)
+    followed by ``VACUUM``. On PostgreSQL the built-in ``autovacuum`` daemon
+    handles bloat reclamation, so there is nothing to do here; we log a hint
+    and return. Errors are logged but never raised — VACUUM can legitimately
+    fail when another connection holds a write lock; the next run retries.
+
+    Returns ``{"checkpointed": bool, "vacuumed": bool}``.
     """
-    checkpointed = False
-    vacuumed = False
     conn = get_conn()
     try:
+        if not _is_sqlite(conn):
+            # PostgreSQL (and other non-SQLite backends) manage their own
+            # storage via autovacuum / ANALYZE; running a manual VACUUM from
+            # the app is neither needed nor a single SQL statement there.
+            logger.info(
+                "db_vacuum: backend is not SQLite — skipping (PostgreSQL "
+                "autovacuum manages bloat reclamation)"
+            )
+            return {"checkpointed": False, "vacuumed": False}
+
+        checkpointed = False
+        vacuumed = False
         try:
             conn.execute(q("PRAGMA wal_checkpoint(TRUNCATE)"))
             checkpointed = True
@@ -80,9 +94,9 @@ def _db_vacuum() -> Dict[str, Any]:
         except (sqlite3.OperationalError, sa.exc.OperationalError) as exc:
             logger.warning("VACUUM failed: %s", exc)
         conn.commit()
+        return {"checkpointed": checkpointed, "vacuumed": vacuumed}
     finally:
         conn.close()
-    return {"checkpointed": checkpointed, "vacuumed": vacuumed}
 
 
 def _ssn_auto_approve() -> Dict[str, Any]:
