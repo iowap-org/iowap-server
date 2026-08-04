@@ -321,27 +321,29 @@ def init_db() -> None:
 def _exec(conn, sql: str, params: Any = ()):
     """Execute a raw SQL string on either a SA Connection or sqlite3.Connection.
 
-    SQLAlchemy 2.0 ``Connection.execute`` does not accept a bare SQL string —
-    it needs ``text()`` or a Core construct. ``exec_driver_sql`` bypasses the
-    SA layer and hands the string straight to the underlying DBAPI driver,
-    which for SQLite keeps the ``?`` placeholder semantics. Raw sqlite3
-    connections expose ``execute(sql, params)`` directly. This helper lets
-    the schema/migration/seed helpers run unchanged against either backend
-    during the T-110 transition.
+    DDL statements (CREATE/ALTER/PRAGMA, no ``?`` placeholders) run through
+    ``exec_driver_sql`` on SQLAlchemy connections so they reach the DBAPI
+    driver unchanged — this is fine for SQLite and used for the schema.
 
-    .. note::
-        ``exec_driver_sql`` with ``?`` placeholders is SQLite-specific. The
-        portable replacement (SA ``text()`` with named params or Core
-        constructs) is rolled out in Task 3 / Task 5.
+    Statements **with** ``?`` placeholders (seeds, migration DML) must go
+    through :func:`q` so SQLAlchemy rewrites ``?`` to the active dialect's
+    placeholder (``$N`` on PostgreSQL). ``exec_driver_sql`` would leak the
+    raw ``?`` to Postgres and fail, so we route parameterised SQL through
+    ``q()`` regardless of connection type.
+
+    Raw sqlite3 connections expose ``execute(sql, params)`` directly.
     """
+    has_params = params not in ((), None)
+    if has_params:
+        # Parameterised SQL -> portable q() path (rewrites ? to dialect)
+        stmt = q(sql, params)
+        if hasattr(conn, "exec_driver_sql"):
+            return conn.execute(stmt)
+        return conn.execute(stmt)
+    # DDL / no params -> driver-level exec (avoids SA text() overhead)
     if hasattr(conn, "exec_driver_sql"):
-        # SQLAlchemy's ``exec_driver_sql`` treats a ``list`` as executemany
-        # (list of param rows). The legacy sqlite3 path accepted a plain
-        # list as a single row's params, so coerce lists to tuples here.
-        if isinstance(params, list):
-            params = tuple(params)
-        return conn.exec_driver_sql(sql, params)
-    return conn.execute(sql, params)
+        return conn.exec_driver_sql(sql)
+    return conn.execute(sql)
 
 
 def q(sql: str, params: Any = ()) -> "sa.TextClause":
@@ -808,9 +810,13 @@ def _column_names(conn, table: str) -> list[str]:
         rows = _exec(conn, f"PRAGMA table_info({table})").fetchall()
         return [r[1] for r in rows]
     # Portable path: information_schema.columns (PostgreSQL, others).
-    rows = conn.exec_driver_sql(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name = :t ORDER BY ordinal_position",
+    # Use sa.text() (not exec_driver_sql) so the :t bind param is rendered
+    # in the active dialect ($1 on Postgres); exec_driver_sql would leak :t.
+    rows = conn.execute(
+        sa.text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = :t ORDER BY ordinal_position"
+        ),
         {"t": table},
     ).fetchall()
     return [r[0] for r in rows]

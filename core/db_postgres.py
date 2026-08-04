@@ -19,14 +19,21 @@ from typing import Optional
 import sqlalchemy as sa
 
 from relay_server.core import tables
-from relay_server.core.db import Database, _run_migrations, _seed_default_rbac
 
 
-class PostgresDatabase(Database):
+class PostgresDatabase:
     """PostgreSQL backend — SQLAlchemy Core engine with connection pooling.
 
     The DSN format is the SQLAlchemy URL form, e.g.
     ``postgresql+psycopg://user:pass@host:5432/relay``.
+
+    NOTE: this intentionally does NOT subclass ``relay_server.core.db.Database``
+    at import time. ``db.py`` imports this module lazily inside
+    ``create_database()`` while ``db.py`` is still initialising; a module-level
+    ``from relay_server.core.db import Database`` here creates a circular
+    import. The helpers (``_seed_default_rbac``/``_run_migrations``) are
+    imported lazily in ``init_db`` for the same reason. Duck-typing keeps
+    compatibility with the ``Database`` interface used by ``create_database``.
     """
 
     def __init__(self, dsn: str):
@@ -58,6 +65,11 @@ class PostgresDatabase(Database):
         engine = self._get_engine()
         with engine.begin() as conn:
             tables.metadata.create_all(conn)
+            # Lazy import breaks the circular dependency: db.py imports this
+            # module during create_database(), which runs while db.py is still
+            # being initialised.
+            from relay_server.core.db import _run_migrations, _seed_default_rbac
+
             _seed_default_rbac(conn)
             _run_migrations(conn)
 
