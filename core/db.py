@@ -335,11 +335,11 @@ def _exec(conn, sql: str, params: Any = ()):
     """
     has_params = params not in ((), None)
     if has_params:
-        # Parameterised SQL -> portable q() path (rewrites ? to dialect)
-        stmt = q(sql, params)
         if hasattr(conn, "exec_driver_sql"):
-            return conn.execute(stmt)
-        return conn.execute(stmt)
+            # SQLAlchemy Connection -> portable q() (rewrites ? to dialect)
+            return conn.execute(q(sql, params))
+        # Raw sqlite3.Connection -> execute accepts string + ? tuple directly
+        return conn.execute(sql, params)
     # DDL / no params -> driver-level exec (avoids SA text() overhead)
     if hasattr(conn, "exec_driver_sql"):
         return conn.exec_driver_sql(sql)
