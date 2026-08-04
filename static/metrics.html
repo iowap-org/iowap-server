@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Relay Cluster — Metrics</title>
+  <link rel="stylesheet" href="/relay/v2/dashboard/static/cluster.css" />
+  <style>
+    .metrics-hero { padding: 2rem 1.5rem 1rem; max-width: 1100px; margin: 0 auto; }
+    .metrics-hero h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    .metrics-hero p { color: var(--muted); font-size: .95rem; margin: 0 0 1rem; }
+    .metrics-grid { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem 2rem; }
+    .metric-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem 1.25rem; }
+    .metric-card .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; }
+    .metric-card .value { font-size: 1.8rem; font-weight: 700; margin-top: .25rem; }
+    .metric-card .value.ok { color: var(--ok); }
+    .metric-card .value.warn { color: var(--warn); }
+    .metric-card .value.bad { color: var(--bad); }
+    .metric-section { margin-bottom: 1.75rem; }
+    .metric-section h2 { font-size: 1.05rem; margin: 0 0 .75rem; color: var(--text); }
+    .bar-row { display: grid; grid-template-columns: 120px 1fr 60px; gap: .75rem; align-items: center; margin-bottom: .4rem; }
+    .bar-row .bar-label { color: var(--muted); font-size: .85rem; }
+    .bar-row .bar-track { background: var(--panel-2); border-radius: .35rem; height: 1.25rem; overflow: hidden; }
+    .bar-row .bar-fill { height: 100%; background: var(--accent); border-radius: .35rem; }
+    .bar-row .bar-value { text-align: right; font-variant-numeric: tabular-nums; font-size: .85rem; }
+    .refresh-row { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+    .refresh-row .pill { display: inline-flex; align-items: center; gap: .35rem; }
+    .refresh-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+    .counter-list { background: var(--panel); border: 1px solid var(--border); border-radius: .5rem; padding: .75rem 1rem; }
+    .counter-list .counter-line { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: .82rem; color: var(--muted); margin: .15rem 0; }
+    .counter-list .counter-line .ck { color: var(--text); }
+    .empty-hint { color: var(--muted); font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <nav class="topnav">
+    <div class="logo">⟐ relay<span>.cluster</span></div>
+    <a class="topnav-link" href="/relay/v2/dashboard/">Portal</a>
+    <a class="topnav-link active" href="/relay/v2/dashboard/admin">Admin</a>
+    <a class="topnav-link" href="/relay/v2/dashboard/metrics">Metrics</a>
+    <div class="spacer"></div>
+    <button id="btnRefresh" class="btn btn-ghost">Refresh</button>
+    <a class="btn btn-danger" href="/relay/v2/dashboard/logout">Logout</a>
+  </nav>
+
+  <section class="metrics-hero">
+    <h1>Observability</h1>
+    <p>In-process counters + DB-derived gauges. Prometheus output available at <code>/metrics</code>.</p>
+    <div class="refresh-row">
+      <div id="statusPill" class="pill"><span class="dot"></span> loading…</div>
+      <span id="lastUpdated" class="empty-hint"></span>
+    </div>
+  </section>
+
+  <div class="metrics-grid">
+    <div id="metricCards" class="metric-cards"></div>
+
+    <div class="metric-section">
+      <h2>Tasks by status</h2>
+      <div id="tasksBars"></div>
+    </div>
+
+    <div class="metric-section">
+      <h2>Stages by status</h2>
+      <div id="stagesBars"></div>
+    </div>
+
+    <div class="metric-section">
+      <h2>In-process counters</h2>
+      <div id="counterList" class="counter-list">
+        <div class="empty-hint">No counters recorded.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer-mockup">
+    <p><a href="/relay/v2/dashboard/">AI Relay Service</a> · <a href="/metrics">Prometheus</a> · <a href="/ready">Ready</a></p>
+  </footer>
+
+  <script src="/relay/v2/dashboard/static/metrics.js"></script>
+</body>
+</html>

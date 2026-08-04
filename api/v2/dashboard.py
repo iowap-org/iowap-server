@@ -225,6 +225,13 @@ async def dashboard_user_profile(user_id: str):
     return FileResponse(STATIC_DIR / "user-profile.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
+@router.get("/metrics")
+async def dashboard_metrics_page(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
+    """Eingebautes Metrics-Dashboard (HTML, T-109)."""
+    check_dashboard_permission(ctx, "dashboard:view")
+    return FileResponse(STATIC_DIR / "metrics.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
 @router.get("/login")
 async def dashboard_login_page() -> FileResponse:
     """Serve the login page and set a CSRF cookie for form submissions."""
@@ -522,6 +529,14 @@ async def dashboard_endpoints(request: Request, ctx: AuthContext = Depends(requi
     """Return the list of exposed v2 API endpoints."""
     check_dashboard_permission(ctx, "dashboard:view")
     return {"endpoints": _ENDPOINTS}
+
+
+@router.get("/api/metrics")
+async def dashboard_metrics(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
+    """Gebündelte Metriken für das eingebaute Metrics-Dashboard (T-109)."""
+    check_dashboard_permission(ctx, "dashboard:view")
+    from relay_server.core import metrics as _metrics
+    return _metrics.collect_metrics()
 
 
 @router.get("/api/events/recent")
@@ -1039,6 +1054,18 @@ _ENDPOINTS = [
         "path": "/relay/v2/dashboard/api/overview",
         "auth": "admin",
         "description": "Dashboard overview JSON",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/api/metrics",
+        "auth": "admin",
+        "description": "Bundled metrics JSON for the built-in metrics dashboard (T-109)",
+    },
+    {
+        "method": "GET",
+        "path": "/relay/v2/dashboard/metrics",
+        "auth": "admin",
+        "description": "Built-in metrics dashboard HTML page (T-109)",
     },
     {
         "method": "GET",
