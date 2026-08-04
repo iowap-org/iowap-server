@@ -27,12 +27,17 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import sqlalchemy as sa
 from sqlalchemy.engine.row import Row
 
 from relay_server.config import settings
+
+# A DB connection can be a raw sqlite3.Connection (used by CLI helpers and
+# the backcompat test fixture) or a SQLAlchemy Connection (the normal path).
+# The schema/migration/seed helpers accept either; _exec() ducks between them.
+DBConn = Union["sqlite3.Connection", "sa.engine.Connection"]
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +51,12 @@ from relay_server.config import settings
 # that forwards string subscripts to ``row._mapping[col]``. Integer
 # subscripts keep their tuple semantics. The shim is idempotent and only
 # installed once per process.
+#
+# NOTE (Kimi-Review 2026-08-04): this monkeypatch relies on SQLAlchemy 2.0's
+# ``Row.__getitem__`` being a plain Python method descriptor. SQLAlchemy 2.1+
+# may switch it to a C-extension slot that is not monkeypatchable. When
+# upgrading, verify ``Row["col"]`` still works; if not, migrate the 373+
+# ``row["col"]`` call sites to ``row._mapping["col"]`` instead.
 
 _orig_row_getitem = Row.__getitem__
 
@@ -388,7 +399,7 @@ def q(sql: str, params: Any = ()) -> "sa.TextClause":
     return text
 
 
-def _schema(conn: sqlite3.Connection) -> None:
+def _schema(conn: DBConn) -> None:
     """Create core tables only."""
 
     # --- AUTH ---
@@ -668,7 +679,7 @@ def _schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
+def _run_migrations(conn: DBConn) -> None:
     """Run lightweight schema migrations that add columns when missing.
 
     Backend-aware: ``PRAGMA table_info`` is used on SQLite, and
@@ -847,7 +858,7 @@ def _is_sqlite(conn) -> bool:
     return "sqlite3" in mod or isinstance(conn, sqlite3.Connection)
 
 
-def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
+def _migrate_node_capabilities(conn: DBConn) -> None:
     """Populate ``node_capabilities`` from ``nodes.capabilities`` JSON.
 
     Idempotent: only inserts rows that do not already exist. Safe to run
@@ -906,7 +917,7 @@ def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
             )
 
 
-def _seed_default_rbac(conn: sqlite3.Connection) -> None:
+def _seed_default_rbac(conn: DBConn) -> None:
     """Seed default groups and permissions if none exist."""
     now = datetime.now(timezone.utc).isoformat()
 
