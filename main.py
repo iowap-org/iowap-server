@@ -283,6 +283,15 @@ async def _force_password_change_middleware(request, call_next):
     return response
 
 
+@app.middleware("http")
+async def _metrics_middleware(request, call_next):
+    """Zähle 401/403/429-Antworten global als Auth-Failure-Counter (T-109)."""
+    response = await call_next(request)
+    if response.status_code in (401, 403, 429):
+        _metrics.inc("relay_auth_failures_total", {"endpoint": request.url.path})
+    return response
+
+
 app.include_router(v2_router, prefix="/relay/v2")
 
 
