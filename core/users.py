@@ -7,9 +7,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import bcrypt
+import sqlalchemy as sa
 
 from relay_server.core.auth import login_with_master_seed
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.models import AuthContext
 
 
@@ -73,13 +74,13 @@ def has_admin_user() -> bool:
     conn = get_conn()
     try:
         row = conn.execute(
-            """
+            q("""
             SELECT 1 FROM users u
             JOIN user_groups ug ON ug.user_id = u.user_id
             JOIN groups g ON g.group_id = ug.group_id
             WHERE u.is_active = 1 AND g.group_name = 'admin'
             LIMIT 1
-            """
+            """)
         ).fetchone()
         return row is not None
     finally:
@@ -115,26 +116,24 @@ def create_user(
     conn = get_conn()
     try:
         conn.execute(
-            """
+            q("""
             INSERT INTO users (user_id, username, email, password_hash, is_active, force_password_change, created_at, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (user_id, username, email, password_hash, 1, force_password_change, now, created_by),
+            """, (user_id, username, email, password_hash, 1, force_password_change, now, created_by)),
         )
 
         for group_name in group_names:
             group_row = conn.execute(
-                "SELECT group_id FROM groups WHERE group_name = ?", (group_name,)
+                q("SELECT group_id FROM groups WHERE group_name = ?", (group_name,))
             ).fetchone()
             if not group_row:
                 raise ValueError(f"Unknown group: {group_name}")
             conn.execute(
-                "INSERT INTO user_groups (user_id, group_id, granted_at) VALUES (?, ?, ?)",
-                (user_id, group_row["group_id"], now),
+                q("INSERT INTO user_groups (user_id, group_id, granted_at) VALUES (?, ?, ?)", (user_id, group_row["group_id"], now)),
             )
 
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except (sqlite3.IntegrityError, sa.exc.IntegrityError) as e:
         raise ValueError("Username already exists") from e
     finally:
         conn.close()
@@ -147,8 +146,7 @@ def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT user_id, username, email, password_hash, is_active, force_password_change FROM users WHERE username = ?",
-            (username,),
+            q("SELECT user_id, username, email, password_hash, is_active, force_password_change FROM users WHERE username = ?", (username,)),
         ).fetchone()
         if not row or not row["is_active"]:
             return None
@@ -187,14 +185,13 @@ def get_user_permissions(user_id: str) -> List[str]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT DISTINCT p.permission_name
             FROM permissions p
             JOIN group_permissions gp ON gp.permission_id = p.permission_id
             JOIN user_groups ug ON ug.group_id = gp.group_id
             WHERE ug.user_id = ?
-            """,
-            (user_id,),
+            """, (user_id,)),
         ).fetchall()
         return [r["permission_name"] for r in rows]
     finally:
@@ -220,7 +217,7 @@ def list_users() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT u.user_id, u.username, u.email, u.is_active, u.force_password_change, u.created_at, u.created_by,
                    GROUP_CONCAT(g.group_name, ',') as groups
             FROM users u
@@ -228,7 +225,7 @@ def list_users() -> List[Dict[str, Any]]:
             LEFT JOIN groups g ON g.group_id = ug.group_id
             GROUP BY u.user_id
             ORDER BY u.created_at DESC
-            """
+            """)
         ).fetchall()
         return [
             {
@@ -251,7 +248,7 @@ def list_groups() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT g.group_id, g.group_name, g.description, g.created_at,
                    GROUP_CONCAT(p.permission_name, ',') as permissions
             FROM groups g
@@ -259,7 +256,7 @@ def list_groups() -> List[Dict[str, Any]]:
             LEFT JOIN permissions p ON p.permission_id = gp.permission_id
             GROUP BY g.group_id
             ORDER BY g.created_at DESC
-            """
+            """)
         ).fetchall()
         return [
             {
@@ -279,7 +276,7 @@ def list_permissions() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT permission_id, permission_name, description FROM permissions ORDER BY permission_name"
+            q("SELECT permission_id, permission_name, description FROM permissions ORDER BY permission_name")
         ).fetchall()
         return [
             {
@@ -303,18 +300,17 @@ def set_user_groups(user_id: str, group_names: List[str]) -> None:
         group_ids = []
         for name in group_names:
             row = conn.execute(
-                "SELECT group_id FROM groups WHERE group_name = ?", (name,)
+                q("SELECT group_id FROM groups WHERE group_name = ?", (name,))
             ).fetchone()
             if not row:
                 raise ValueError(f"Unknown group: {name}")
             group_ids.append(row["group_id"])
 
-        conn.execute("DELETE FROM user_groups WHERE user_id = ?", (user_id,))
+        conn.execute(q("DELETE FROM user_groups WHERE user_id = ?", (user_id,)))
         now = _now()
         for group_id in group_ids:
             conn.execute(
-                "INSERT INTO user_groups (user_id, group_id, granted_at) VALUES (?, ?, ?)",
-                (user_id, group_id, now),
+                q("INSERT INTO user_groups (user_id, group_id, granted_at) VALUES (?, ?, ?)", (user_id, group_id, now)),
             )
         conn.commit()
     finally:
@@ -327,18 +323,17 @@ def set_group_permissions(group_id: str, permission_names: List[str]) -> None:
         perm_ids = []
         for name in permission_names:
             row = conn.execute(
-                "SELECT permission_id FROM permissions WHERE permission_name = ?", (name,)
+                q("SELECT permission_id FROM permissions WHERE permission_name = ?", (name,))
             ).fetchone()
             if not row:
                 raise ValueError(f"Unknown permission: {name}")
             perm_ids.append(row["permission_id"])
 
-        conn.execute("DELETE FROM group_permissions WHERE group_id = ?", (group_id,))
+        conn.execute(q("DELETE FROM group_permissions WHERE group_id = ?", (group_id,)))
         now = _now()
         for perm_id in perm_ids:
             conn.execute(
-                "INSERT INTO group_permissions (group_id, permission_id, granted_at) VALUES (?, ?, ?)",
-                (group_id, perm_id, now),
+                q("INSERT INTO group_permissions (group_id, permission_id, granted_at) VALUES (?, ?, ?)", (group_id, perm_id, now)),
             )
         conn.commit()
     finally:
@@ -352,8 +347,7 @@ def set_user_password(user_id: str, password: str) -> None:
     try:
         password_hash = _hash_password(password)
         conn.execute(
-            "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE user_id = ?",
-            (password_hash, user_id),
+            q("UPDATE users SET password_hash = ?, force_password_change = 0 WHERE user_id = ?", (password_hash, user_id)),
         )
         conn.commit()
     finally:
@@ -369,7 +363,7 @@ def change_user_password(user_id: str, old_password: str, new_password: str) -> 
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT password_hash FROM users WHERE user_id = ?", (user_id,)
+            q("SELECT password_hash FROM users WHERE user_id = ?", (user_id,))
         ).fetchone()
         if not row:
             raise ValueError("User not found")
@@ -384,7 +378,7 @@ def set_user_active(user_id: str, is_active: bool) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE users SET is_active = ? WHERE user_id = ?", (1 if is_active else 0, user_id)
+            q("UPDATE users SET is_active = ? WHERE user_id = ?", (1 if is_active else 0, user_id))
         )
         conn.commit()
     finally:
@@ -394,7 +388,7 @@ def set_user_active(user_id: str, is_active: bool) -> None:
 def delete_user(user_id: str) -> None:
     conn = get_conn()
     try:
-        conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        conn.execute(q("DELETE FROM users WHERE user_id = ?", (user_id,)))
         conn.commit()
     finally:
         conn.close()

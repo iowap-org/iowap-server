@@ -8,8 +8,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import sqlalchemy as sa
+
 from relay_server.config import settings
-from relay_server.core.db import get_capability_details, get_conn, get_node_capability_names
+from relay_server.core.db import get_capability_details, get_conn, get_node_capability_names, q
 from relay_server.core.events import event_bus
 from relay_server.core.status import node_can_claim, node_claim_statuses
 
@@ -31,7 +33,7 @@ def _retry_db_write(func):
         for attempt in range(_LOCKED_RETRIES):
             try:
                 return func(*args, **kwargs)
-            except sqlite3.OperationalError as exc:
+            except (sqlite3.OperationalError, sa.exc.OperationalError) as exc:
                 if "database is locked" not in str(exc) and "locked" not in str(exc):
                     raise
                 last_error = exc
@@ -88,12 +90,11 @@ class Scheduler:
         conn = get_conn()
         try:
             conn.execute(
-                """
+                q("""
                 INSERT INTO tasks (task_id, task_name, status, priority, owner_node_id,
                                    timeout_seconds, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (task_id, task_name, "pending", priority, owner_node_id, default_timeout, now, now),
+                """, (task_id, task_name, "pending", priority, owner_node_id, default_timeout, now, now)),
             )
 
             # Build stage records.
@@ -121,13 +122,12 @@ class Scheduler:
 
             for rec in stage_records:
                 conn.execute(
-                    """
+                    q("""
                     INSERT INTO task_stages
                     (stage_id, task_id, stage_name, capability, depends_on, status,
                      sequence, timeout_seconds, payload, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
+                    """, (
                         rec["stage_id"],
                         task_id,
                         rec["stage_name"],
@@ -139,7 +139,7 @@ class Scheduler:
                         rec["payload"],
                         now,
                         now,
-                    ),
+                    )),
                 )
 
             conn.commit()
@@ -163,12 +163,11 @@ class Scheduler:
         try:
             if status:
                 rows = conn.execute(
-                    "SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC",
-                    (status,),
+                    q("SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC", (status,)),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM tasks ORDER BY priority DESC, created_at ASC"
+                    q("SELECT * FROM tasks ORDER BY priority DESC, created_at ASC")
                 ).fetchall()
             return [_task_row_to_dict(r) for r in rows]
         finally:
@@ -178,13 +177,12 @@ class Scheduler:
     def get_task(task_id: str) -> Optional[Dict[str, Any]]:
         conn = get_conn()
         try:
-            row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            row = conn.execute(q("SELECT * FROM tasks WHERE task_id = ?", (task_id,))).fetchone()
             if not row:
                 return None
             task = _task_row_to_dict(row)
             stage_rows = conn.execute(
-                "SELECT * FROM task_stages WHERE task_id = ? ORDER BY sequence ASC",
-                (task_id,),
+                q("SELECT * FROM task_stages WHERE task_id = ? ORDER BY sequence ASC", (task_id,)),
             ).fetchall()
             task["stages"] = []
             for r in stage_rows:
@@ -201,8 +199,7 @@ class Scheduler:
                 task["stages"].append(stage)
 
             artifact_rows = conn.execute(
-                "SELECT artifact_id, name, mime_type, size_bytes, created_by FROM artifacts WHERE task_id = ?",
-                (task_id,),
+                q("SELECT artifact_id, name, mime_type, size_bytes, created_by FROM artifacts WHERE task_id = ?", (task_id,)),
             ).fetchall()
             task["artifacts"] = [
                 {
@@ -217,9 +214,8 @@ class Scheduler:
 
             # T-052: load notes attached to the task (mini-chat).
             note_rows = conn.execute(
-                "SELECT id, node_id, message, created_at FROM task_notes "
-                "WHERE task_id = ? ORDER BY created_at ASC",
-                (task_id,),
+                q("SELECT id, node_id, message, created_at FROM task_notes "
+                "WHERE task_id = ? ORDER BY created_at ASC", (task_id,)),
             ).fetchall()
             task["notes"] = [
                 {
@@ -257,8 +253,7 @@ class Scheduler:
                 # node_capabilities index (T-026) instead of json.loads
                 # on the nodes.capabilities TEXT column.
                 node_row = conn.execute(
-                    "SELECT capabilities, status FROM nodes WHERE node_id = ?",
-                    (node_id,),
+                    q("SELECT capabilities, status FROM nodes WHERE node_id = ?", (node_id,)),
                 ).fetchone()
                 if not node_row or not node_can_claim(node_row["status"]):
                     return None
@@ -282,9 +277,8 @@ class Scheduler:
                     # Filter the normalized index by type via a direct
                     # query — avoids loading the full JSON payload.
                     rows = conn.execute(
-                        "SELECT capability_name FROM node_capabilities "
-                        "WHERE node_id = ? AND LOWER(capability_type) = LOWER(?)",
-                        (node_id, capability_type),
+                        q("SELECT capability_name FROM node_capabilities "
+                        "WHERE node_id = ? AND LOWER(capability_type) = LOWER(?)", (node_id, capability_type)),
                     ).fetchall()
                     cap_names = [r["capability_name"] for r in rows]
                     if not cap_names:
@@ -294,10 +288,12 @@ class Scheduler:
 
             # Find pending stages whose capability matches and dependencies are completed.
             rows = conn.execute(
-                "SELECT * FROM task_stages WHERE status = 'pending' AND capability IN ({}) ORDER BY sequence ASC".format(
-                    ",".join("?" for _ in cap_names)
-                ),
-                cap_names,
+                q(
+                    "SELECT * FROM task_stages WHERE status = 'pending' AND capability IN ({}) ORDER BY sequence ASC".format(
+                        ",".join("?" for _ in cap_names)
+                    ),
+                    cap_names,
+                )
             ).fetchall()
 
             now = _format_time(_now())
@@ -309,10 +305,12 @@ class Scheduler:
                 deps = _parse(row["depends_on"]) or []
                 if deps:
                     completed = conn.execute(
-                        "SELECT COUNT(*) FROM task_stages WHERE stage_id IN ({}) AND status = 'completed'".format(
-                            ",".join("?" for _ in deps)
-                        ),
-                        deps,
+                        q(
+                            "SELECT COUNT(*) FROM task_stages WHERE stage_id IN ({}) AND status = 'completed'".format(
+                                ",".join("?" for _ in deps)
+                            ),
+                            deps,
+                        )
                     ).fetchone()[0]
                     if completed != len(deps):
                         continue
@@ -323,46 +321,45 @@ class Scheduler:
                 # (gelöscht), wird die Stage als failed markiert statt
                 # ewig auf pending zu bleiben.
                 task_owner = conn.execute(
-                    "SELECT owner_node_id FROM tasks WHERE task_id = ?",
-                    (row["task_id"],),
+                    q("SELECT owner_node_id FROM tasks WHERE task_id = ?", (row["task_id"],)),
                 ).fetchone()[0]
                 if task_owner:
                     if task_owner != node_id:
                         # Prüfen ob der adressierte Node überhaupt noch existiert.
                         owner_exists = conn.execute(
-                            "SELECT 1 FROM nodes WHERE node_id = ?", (task_owner,)
+                            q("SELECT 1 FROM nodes WHERE node_id = ?", (task_owner,))
                         ).fetchone()
                         if not owner_exists:
                             # Owner gelöscht → Stage failen.
                             conn.execute(
-                                "UPDATE task_stages SET status = 'failed', updated_at = ? "
-                                "WHERE stage_id = ? AND status = 'pending'",
-                                (now, row["stage_id"]),
+                                q("UPDATE task_stages SET status = 'failed', updated_at = ? "
+                                "WHERE stage_id = ? AND status = 'pending'", (now, row["stage_id"])),
                             )
                             conn.commit()
                         continue
 
                 # Claim this stage atomically.
                 stage_id = row["stage_id"]
-                conn.execute(
-                    """
+                result = conn.execute(
+                    q("""
                     UPDATE task_stages
                     SET status = 'claimed', claimed_by = ?, claimed_at = ?, claim_expires_at = ?, updated_at = ?
                     WHERE stage_id = ? AND status = 'pending'
-                    """,
-                    (node_id, now, claim_ttl, now, stage_id),
+                    """, (node_id, now, claim_ttl, now, stage_id)),
                 )
-                if conn.total_changes == 0:
+                # ``conn.total_changes`` is sqlite3-specific; SQLAlchemy's
+                # ``CursorResult.rowcount`` is the portable equivalent and
+                # reports how many rows the UPDATE actually matched.
+                if result.rowcount == 0:
                     continue
 
                 # Update task status to running if first claim.
                 task_before = conn.execute(
-                    "SELECT status FROM tasks WHERE task_id = ?", (row["task_id"],)
+                    q("SELECT status FROM tasks WHERE task_id = ?", (row["task_id"],))
                 ).fetchone()
                 task_old_status = task_before["status"] if task_before else None
                 conn.execute(
-                    "UPDATE tasks SET status = 'running', updated_at = ? WHERE task_id = ? AND status = 'pending'",
-                    (now, row["task_id"]),
+                    q("UPDATE tasks SET status = 'running', updated_at = ? WHERE task_id = ? AND status = 'pending'", (now, row["task_id"])),
                 )
                 task_new_status = "running" if task_old_status == "pending" else task_old_status
                 conn.commit()
@@ -392,7 +389,7 @@ class Scheduler:
                     )
                 stage_dict = _stage_row_to_dict(
                     conn.execute(
-                        "SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,)
+                        q("SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,))
                     ).fetchone()
                 )
                 # T-053: attach resolved capability_details so the
@@ -419,15 +416,14 @@ class Scheduler:
         conn = get_conn()
         try:
             row = conn.execute(
-                "SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)
+                q("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,))
             ).fetchone()
             if not row:
                 return None
             now = _format_time(_now())
             cur = conn.execute(
-                "INSERT INTO task_notes (task_id, node_id, message, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (task_id, node_id, message, now),
+                q("INSERT INTO task_notes (task_id, node_id, message, created_at) "
+                "VALUES (?, ?, ?, ?)", (task_id, node_id, message, now)),
             )
             conn.commit()
             note_id = cur.lastrowid
@@ -450,31 +446,27 @@ class Scheduler:
         conn = get_conn()
         try:
             row = conn.execute(
-                "SELECT * FROM task_stages WHERE stage_id = ? AND claimed_by = ? AND status = 'claimed'",
-                (stage_id, node_id),
+                q("SELECT * FROM task_stages WHERE stage_id = ? AND claimed_by = ? AND status = 'claimed'", (stage_id, node_id)),
             ).fetchone()
             if not row:
                 return None
 
             now = _format_time(_now())
             conn.execute(
-                """
+                q("""
                 UPDATE task_stages
                 SET status = 'completed', completed_at = ?, result = ?, updated_at = ?
                 WHERE stage_id = ?
-                """,
-                (now, _serialize(result), now, stage_id),
+                """, (now, _serialize(result), now, stage_id)),
             )
 
             # Check if all stages completed.
             pending_count = conn.execute(
-                "SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status IN ('pending', 'claimed')",
-                (row["task_id"],),
+                q("SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status IN ('pending', 'claimed')", (row["task_id"],)),
             ).fetchone()[0]
             if pending_count == 0:
                 conn.execute(
-                    "UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE task_id = ?",
-                    (now, now, row["task_id"]),
+                    q("UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE task_id = ?", (now, now, row["task_id"])),
                 )
                 event_bus.publish_sync(
                     "task_completed",
@@ -505,7 +497,7 @@ class Scheduler:
                 },
             )
             return _stage_row_to_dict(
-                conn.execute("SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,)).fetchone()
+                conn.execute(q("SELECT * FROM task_stages WHERE stage_id = ?", (stage_id,))).fetchone()
             )
         finally:
             conn.close()
@@ -530,9 +522,8 @@ class Scheduler:
         conn = get_conn()
         try:
             rows = conn.execute(
-                "SELECT stage_id, task_id, retry_count FROM task_stages "
-                "WHERE status = 'claimed' AND claim_expires_at < ?",
-                (now,),
+                q("SELECT stage_id, task_id, retry_count FROM task_stages "
+                "WHERE status = 'claimed' AND claim_expires_at < ?", (now,)),
             ).fetchall()
             if not rows:
                 return {"released": [], "failed": [], "tasks_failed": []}
@@ -548,26 +539,24 @@ class Scheduler:
                 if retry_count > settings.max_retries:
                     # Retry budget exhausted → fail the stage permanently.
                     conn.execute(
-                        """
+                        q("""
                         UPDATE task_stages
                         SET status = 'failed', retry_count = ?, claimed_by = NULL,
                             claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
                         WHERE stage_id = ?
-                        """,
-                        (retry_count, now, stage_id),
+                        """, (retry_count, now, stage_id)),
                     )
                     failed_stage_ids.append(stage_id)
                     affected_tasks.add(task_id)
                 else:
                     # Still within the retry budget → put back to pending.
                     conn.execute(
-                        """
+                        q("""
                         UPDATE task_stages
                         SET status = 'pending', retry_count = ?, claimed_by = NULL,
                             claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
                         WHERE stage_id = ?
-                        """,
-                        (retry_count, now, stage_id),
+                        """, (retry_count, now, stage_id)),
                     )
                     released.append(stage_id)
 
@@ -633,12 +622,11 @@ class Scheduler:
         try:
             # Find overdue claimed stages.
             overdue = conn.execute(
-                """
+                q("""
                 SELECT stage_id, task_id FROM task_stages
                 WHERE status = 'claimed'
                   AND datetime(claimed_at, '+' || timeout_seconds || ' seconds') < ?
-                """,
-                (now,),
+                """, (now,)),
             ).fetchall()
 
             timed_out_stages = [r["stage_id"] for r in overdue]
@@ -648,12 +636,14 @@ class Scheduler:
             if timed_out_stages:
                 # Mark stages as timed_out.
                 conn.execute(
-                    """
-                    UPDATE task_stages
-                    SET status = 'timed_out', updated_at = ?
-                    WHERE stage_id IN ({})
-                    """.format(",".join("?" for _ in timed_out_stages)),
-                    [now] + timed_out_stages,
+                    q(
+                        """
+                        UPDATE task_stages
+                        SET status = 'timed_out', updated_at = ?
+                        WHERE stage_id IN ({})
+                        """.format(",".join("?" for _ in timed_out_stages)),
+                        [now] + timed_out_stages,
+                    )
                 )
 
                 # Collect affected task IDs.
@@ -663,13 +653,11 @@ class Scheduler:
                 # For each affected task, check if all stages are done/timed_out.
                 for task_id in affected_tasks:
                     remaining = conn.execute(
-                        "SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status NOT IN ('completed', 'timed_out')",
-                        (task_id,),
+                        q("SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status NOT IN ('completed', 'timed_out')", (task_id,)),
                     ).fetchone()[0]
                     if remaining == 0:
                         conn.execute(
-                            "UPDATE tasks SET status = 'timed_out', updated_at = ?, completed_at = ? WHERE task_id = ?",
-                            (now, now, task_id),
+                            q("UPDATE tasks SET status = 'timed_out', updated_at = ?, completed_at = ? WHERE task_id = ?", (now, now, task_id)),
                         )
                         tasks_timed_out.append(task_id)
 
@@ -741,7 +729,7 @@ class Scheduler:
             claim_statuses = node_claim_statuses()
             placeholders = ",".join("?" for _ in claim_statuses) or "''"
             rows = conn.execute(
-                f"""
+                q(f"""
                 SELECT ts.stage_id, ts.task_id
                 FROM task_stages ts
                 WHERE ts.status = 'pending'
@@ -751,8 +739,7 @@ class Scheduler:
                       WHERE nc.capability_name = ts.capability
                         AND n.status IN ({placeholders})
                   )
-                """,
-                claim_statuses,
+                """, claim_statuses),
             ).fetchall()
             if not rows:
                 return {"stages_failed": [], "tasks_failed": []}
@@ -763,12 +750,11 @@ class Scheduler:
                 stage_id = row["stage_id"]
                 task_id = row["task_id"]
                 conn.execute(
-                    """
+                    q("""
                     UPDATE task_stages
                     SET status = 'failed', updated_at = ?
                     WHERE stage_id = ? AND status = 'pending'
-                    """,
-                    (now, stage_id),
+                    """, (now, stage_id)),
                 )
                 failed_stage_ids.append(stage_id)
                 affected_tasks.add(task_id)
@@ -840,15 +826,13 @@ def _fail_tasks_if_all_stages_done(
     for task_id in task_ids:
         placeholders = ",".join("?" for _ in terminal_stage_status)
         remaining = conn.execute(
-            f"SELECT COUNT(*) FROM task_stages "
-            f"WHERE task_id = ? AND status NOT IN ({placeholders})",
-            (task_id, *terminal_stage_status),
+            q(f"SELECT COUNT(*) FROM task_stages "
+            f"WHERE task_id = ? AND status NOT IN ({placeholders})", (task_id, *terminal_stage_status)),
         ).fetchone()[0]
         if remaining == 0:
             conn.execute(
-                "UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
-                "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')",
-                (now, now, task_id),
+                q("UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
+                "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
             )
             tasks_failed.append(task_id)
     return tasks_failed

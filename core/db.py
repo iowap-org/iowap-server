@@ -11,6 +11,13 @@ Currently supported backends:
 * ``sqlite``  (default, fully implemented — :class:`SqliteDatabase`)
 * ``postgres`` (stub, raises ``NotImplementedError`` — :class:`PostgresDatabase`)
 * ``mariadb`` (stub, raises ``NotImplementedError`` — :class:`MariadbDatabase`)
+
+T-110: ``SqliteDatabase`` is now backed by a SQLAlchemy Core engine. The
+on-disk SQLite database is the same file; SQLAlchemy simply opens it through
+its sqlite3 DBAPI driver. A small compatibility shim is installed so the
+existing 373 ``row["col"]`` access sites keep working unchanged (SQLAlchemy
+2.0 ``Row`` supports ``row._mapping["col"]`` / ``row.col`` / ``row[0]`` but
+not ``row["col"]`` directly).
 """
 
 import functools
@@ -22,7 +29,48 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import sqlalchemy as sa
+from sqlalchemy.engine.row import Row
+
 from relay_server.config import settings
+
+
+# ---------------------------------------------------------------------------
+# Row["col"] compatibility shim (T-110)
+# ---------------------------------------------------------------------------
+#
+# SQLAlchemy 2.0 ``Row`` exposes columns via ``row.col``, ``row._mapping[col]``
+# and ``row[index]`` but NOT via ``row["col"]`` (string subscript). The legacy
+# sqlite3.Row interface does. Hundreds of call sites in the relay use
+# ``row["col"]``; rather than rewriting all of them we install a tiny shim
+# that forwards string subscripts to ``row._mapping[col]``. Integer
+# subscripts keep their tuple semantics. The shim is idempotent and only
+# installed once per process.
+
+_orig_row_getitem = Row.__getitem__
+
+
+def _compat_row_getitem(self, key):
+    if isinstance(key, str):
+        return self._mapping[key]
+    return _orig_row_getitem(self, key)
+
+
+if not getattr(Row.__getitem__, "_relay_compat", False):
+    Row.__getitem__ = _compat_row_getitem
+    _compat_row_getitem._relay_compat = True  # type: ignore[attr-defined]
+
+
+# sqlite3.Row exposes a ``keys()`` method returning the column names of the
+# current row. SQLAlchemy 2.0 ``Row`` does not — callers must use
+# ``row._mapping.keys()``. The legacy ``description in row.keys()`` pattern in
+# discovery.py relies on this, so we install a small compatibility method.
+if "keys" not in Row.__dict__ or not getattr(Row.__dict__.get("keys"), "_relay_compat", False):
+    def _compat_row_keys(self):
+        return self._mapping.keys()
+
+    Row.keys = _compat_row_keys  # type: ignore[method-assign]
+    _compat_row_keys._relay_compat = True  # type: ignore[attr-defined]
 
 # ---------------------------------------------------------------------------
 # Secret redaction for audit logs (T-024)
@@ -116,7 +164,7 @@ def retry_on_locked(func):
         for attempt in range(LOCKED_RETRIES):
             try:
                 return func(*args, **kwargs)
-            except sqlite3.OperationalError as exc:
+            except (sqlite3.OperationalError, sa.exc.OperationalError) as exc:
                 msg = str(exc)
                 if "database is locked" not in msg and "locked" not in msg:
                     raise
@@ -137,10 +185,12 @@ def retry_on_locked(func):
 class SqliteDatabase(Database):
     """SQLite backend — the default.
 
-    ``get_conn()`` reads :data:`settings.db_path` live on every call so that
-    tests which reconfigure the path per-test keep working without rebuilding
-    the backend instance. Connections are short-lived (callers open and close
-    them per operation), WAL mode and Row factory are enabled on each open.
+    Backed by a SQLAlchemy Core engine (T-110) pointing at the on-disk
+    SQLite file. The engine is built lazily on first use and rebuilt when
+    ``settings.db_path`` changes, so tests that reconfigure the path per
+    test keep working. Connections are short-lived (callers open and close
+    them per operation); WAL mode and foreign keys are enabled on each
+    open via the engine's connect event.
     """
 
     def __init__(self, db_path: Optional[Any] = None):
@@ -148,16 +198,40 @@ class SqliteDatabase(Database):
         # unused: SqliteDatabase always reads settings.db_path live so the
         # test harness can re-point it per test.
         self._db_path = db_path
+        self._engine: Optional[sa.Engine] = None
+        self._engine_path: Optional[str] = None
 
-    def get_conn(self) -> sqlite3.Connection:
-        """Create a fresh connection with WAL mode and Row factory."""
-        db_path = settings.db_path
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+    def _get_engine(self) -> sa.Engine:
+        """Return an engine bound to the current ``settings.db_path``.
+
+        The engine is cached by path; when the path changes (e.g. a test
+        reconfigures it) a fresh engine is built and the old one disposed.
+        """
+        path = str(settings.db_path)
+        if self._engine is None or self._engine_path != path:
+            if self._engine is not None:
+                self._engine.dispose()
+            settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+            engine = sa.create_engine(
+                f"sqlite:///{path}",
+                connect_args={"check_same_thread": False},
+                future=True,
+            )
+
+            @sa.event.listens_for(engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, _record):
+                cur = dbapi_conn.cursor()
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA foreign_keys=ON")
+                cur.close()
+
+            self._engine = engine
+            self._engine_path = path
+        return self._engine
+
+    def get_conn(self) -> sa.engine.Connection:
+        """Open a fresh SQLAlchemy connection to the SQLite file."""
+        return self._get_engine().connect()
 
     def init_db(self) -> None:
         """Initialize core tables for the relay server."""
@@ -169,8 +243,11 @@ class SqliteDatabase(Database):
             conn.close()
 
     def close(self) -> None:
-        """No-op — SQLite connections are short-lived and closed per call."""
-        pass
+        """Dispose the engine and release any pooled connections."""
+        if self._engine is not None:
+            self._engine.dispose()
+            self._engine = None
+            self._engine_path = None
 
 
 def init_db_for_path(db_path: str) -> None:
@@ -241,11 +318,79 @@ def init_db() -> None:
     db.init_db()
 
 
+def _exec(conn, sql: str, params: Any = ()):
+    """Execute a raw SQL string on either a SA Connection or sqlite3.Connection.
+
+    SQLAlchemy 2.0 ``Connection.execute`` does not accept a bare SQL string —
+    it needs ``text()`` or a Core construct. ``exec_driver_sql`` bypasses the
+    SA layer and hands the string straight to the underlying DBAPI driver,
+    which for SQLite keeps the ``?`` placeholder semantics. Raw sqlite3
+    connections expose ``execute(sql, params)`` directly. This helper lets
+    the schema/migration/seed helpers run unchanged against either backend
+    during the T-110 transition.
+
+    .. note::
+        ``exec_driver_sql`` with ``?`` placeholders is SQLite-specific. The
+        portable replacement (SA ``text()`` with named params or Core
+        constructs) is rolled out in Task 3 / Task 5.
+    """
+    if hasattr(conn, "exec_driver_sql"):
+        # SQLAlchemy's ``exec_driver_sql`` treats a ``list`` as executemany
+        # (list of param rows). The legacy sqlite3 path accepted a plain
+        # list as a single row's params, so coerce lists to tuples here.
+        if isinstance(params, list):
+            params = tuple(params)
+        return conn.exec_driver_sql(sql, params)
+    return conn.execute(sql, params)
+
+
+def q(sql: str, params: Any = ()) -> "sa.TextClause":
+    """Build a database-independent SQLAlchemy ``text()`` from ``?``-SQL.
+
+    The legacy call sites use SQLite's ``?`` positional placeholders with a
+    tuple of parameters: ``conn.execute("SELECT ... WHERE id = ?", (id,))``.
+    SQLAlchemy 2.0 ``Connection.execute`` only accepts ``text()`` or Core
+    constructs, and the placeholders must be dialect-portable. This helper
+    rewrites ``?`` to named bind parameters (``:p0``, ``:p1`` …) and binds
+    the tuple values in order. SQLAlchemy then renders the correct
+    placeholder for the active dialect — ``?`` on SQLite, ``$N`` on
+    PostgreSQL, ``%s`` on MySQL/MariaDB — so the same call site works
+    against every backend.
+
+    Usage::
+
+        # before (SQLite-only):
+        conn.execute("SELECT a FROM t WHERE id = ?", (id,))
+        # after (portable):
+        conn.execute(q("SELECT a FROM t WHERE id = ?", (id,)))
+
+    For statements with no parameters the tuple may be omitted::
+
+        conn.execute(q("SELECT 1"))
+    """
+    names: list[str] = []
+    out: list[str] = []
+    i = 0
+    for ch in sql:
+        if ch == "?":
+            name = f"p{i}"
+            names.append(name)
+            out.append(f":{name}")
+            i += 1
+        else:
+            out.append(ch)
+    text = sa.text("".join(out))
+    if params:
+        mapping = dict(zip(names, params))
+        text = text.bindparams(**mapping)
+    return text
+
+
 def _schema(conn: sqlite3.Connection) -> None:
     """Create core tables only."""
 
     # --- AUTH ---
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS admin_seeds (
             seed_id TEXT PRIMARY KEY DEFAULT 'master',
             seed_hash TEXT NOT NULL,
@@ -253,7 +398,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS node_seeds (
             node_name TEXT PRIMARY KEY,
             seed_hash TEXT NOT NULL,
@@ -261,7 +406,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS node_tokens (
             token_id TEXT PRIMARY KEY,
             node_id TEXT NOT NULL,
@@ -276,7 +421,7 @@ def _schema(conn: sqlite3.Connection) -> None:
     """)
 
     # --- HUMAN USERS & RBAC ---
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
@@ -289,7 +434,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             status TEXT DEFAULT 'active'
         )
     """)
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS groups (
             group_id TEXT PRIMARY KEY,
             group_name TEXT UNIQUE NOT NULL,
@@ -297,7 +442,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS user_groups (
             user_id TEXT NOT NULL,
             group_id TEXT NOT NULL,
@@ -307,7 +452,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
         )
     """)
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS permissions (
             permission_id TEXT PRIMARY KEY,
             permission_name TEXT UNIQUE NOT NULL,
@@ -315,7 +460,7 @@ def _schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS group_permissions (
             group_id TEXT NOT NULL,
             permission_id TEXT NOT NULL,
@@ -327,7 +472,7 @@ def _schema(conn: sqlite3.Connection) -> None:
     """)
 
     # --- DISCOVERY ---
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS nodes (
             node_id TEXT PRIMARY KEY,
             node_name TEXT UNIQUE NOT NULL,
@@ -353,7 +498,7 @@ def _schema(conn: sqlite3.Connection) -> None:
     # input_schema, …) for the discovery API. This table stores only the
     # high-cardinality fields needed for efficient capability matching so
     # the scheduler can claim stages without ``json.loads`` on every node.
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS node_capabilities (
             node_id TEXT NOT NULL,
             capability_name TEXT NOT NULL,
@@ -367,18 +512,18 @@ def _schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
         )
     """)
-    conn.execute(
+    _exec(conn, 
         "CREATE INDEX IF NOT EXISTS idx_node_capabilities_name "
         "ON node_capabilities(capability_name)"
     )
-    conn.execute(
+    _exec(conn, 
         "CREATE INDEX IF NOT EXISTS idx_node_capabilities_name_type "
         "ON node_capabilities(capability_name, capability_type)"
     )
 
     # T-075: dynamic node routes — API endpoints declared by nodes in their
     # capability YAML and registered via heartbeat.
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS node_routes (
             node_id TEXT NOT NULL,
             path TEXT NOT NULL,
@@ -393,7 +538,7 @@ def _schema(conn: sqlite3.Connection) -> None:
 
 
     # --- PRESENCE ---
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS presence (
             node_id TEXT PRIMARY KEY,
             status TEXT DEFAULT 'online',
@@ -408,7 +553,7 @@ def _schema(conn: sqlite3.Connection) -> None:
     """)
 
     # --- TASKS ---
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS tasks (
             task_id TEXT PRIMARY KEY,
             task_name TEXT NOT NULL,
@@ -423,7 +568,7 @@ def _schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS task_stages (
             stage_id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
@@ -447,7 +592,7 @@ def _schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS artifacts (
             artifact_id TEXT PRIMARY KEY,
             task_id TEXT,
@@ -467,7 +612,7 @@ def _schema(conn: sqlite3.Connection) -> None:
     # Nodes can leave free-form text notes on a task while it is being
     # worked on (mini-chat between collaborating nodes). Notes are
     # ordered by created_at; deleting a task cascades to its notes.
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS task_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL,
@@ -477,12 +622,12 @@ def _schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
         )
     """)
-    conn.execute(
+    _exec(conn, 
         "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
     )
 
     # --- AUDIT LOGGING ---
-    conn.execute("""
+    _exec(conn, """
         CREATE TABLE IF NOT EXISTS audit_logs (
             log_id TEXT PRIMARY KEY,
             actor_id TEXT NOT NULL,
@@ -494,23 +639,23 @@ def _schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         )
     """)
-    conn.execute(
+    _exec(conn, 
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)"
     )
-    conn.execute(
+    _exec(conn, 
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
     )
 
     # --- INDEXES ---
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_capabilities ON nodes(capabilities)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_stages_task ON task_stages(task_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_stages_status ON task_stages(status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_stages_capability ON task_stages(capability)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(task_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_presence_status ON presence(status)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_capabilities ON nodes(capabilities)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_task_stages_task ON task_stages(task_id)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_task_stages_status ON task_stages(status)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_task_stages_capability ON task_stages(capability)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(task_id)")
+    _exec(conn, "CREATE INDEX IF NOT EXISTS idx_presence_status ON presence(status)")
 
     # --- RBAC DEFAULTS ---
     _seed_default_rbac(conn)
@@ -524,37 +669,37 @@ def _schema(conn: sqlite3.Connection) -> None:
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """Run lightweight schema migrations that add columns when missing."""
     # Ensure force_password_change column exists in users table.
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    cols = [r[1] for r in _exec(conn, "PRAGMA table_info(users)").fetchall()]
     if "force_password_change" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN force_password_change BOOLEAN DEFAULT 1")
+        _exec(conn, "ALTER TABLE users ADD COLUMN force_password_change BOOLEAN DEFAULT 1")
     # Ensure registration_secret_hash column exists in nodes table.
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()]
+    cols = [r[1] for r in _exec(conn, "PRAGMA table_info(nodes)").fetchall()]
     if "registration_secret_hash" not in cols:
-        conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
+        _exec(conn, "ALTER TABLE nodes ADD COLUMN registration_secret_hash TEXT")
     if "registration_secret_expires_at" not in cols:
-        conn.execute("ALTER TABLE nodes ADD COLUMN registration_secret_expires_at TEXT")
+        _exec(conn, "ALTER TABLE nodes ADD COLUMN registration_secret_expires_at TEXT")
     # T-072: ensure nodes has the description column (node-level prose,
     # set per heartbeat by the node itself).
     if "description" not in cols:
-        conn.execute("ALTER TABLE nodes ADD COLUMN description TEXT")
+        _exec(conn, "ALTER TABLE nodes ADD COLUMN description TEXT")
 
     # Ensure token_lookup_hash column exists in node_tokens table (C-1 fix:
     # deterministic HMAC-SHA256 lookup replaces the O(N) bcrypt scan).
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(node_tokens)").fetchall()]
+    cols = [r[1] for r in _exec(conn, "PRAGMA table_info(node_tokens)").fetchall()]
     if "token_lookup_hash" not in cols:
-        conn.execute("ALTER TABLE node_tokens ADD COLUMN token_lookup_hash TEXT")
-    conn.execute(
+        _exec(conn, "ALTER TABLE node_tokens ADD COLUMN token_lookup_hash TEXT")
+    _exec(conn, 
         "CREATE INDEX IF NOT EXISTS idx_node_tokens_lookup ON node_tokens(token_lookup_hash)"
     )
 
     # Ensure audit_logs table exists (migration for existing databases).
     table_names = [
-        r[0] for r in conn.execute(
+        r[0] for r in _exec(conn, 
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     ]
     if "audit_logs" not in table_names:
-        conn.execute("""
+        _exec(conn, """
             CREATE TABLE audit_logs (
                 log_id TEXT PRIMARY KEY,
                 actor_id TEXT NOT NULL,
@@ -566,17 +711,17 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 created_at TEXT NOT NULL
             )
         """)
-        conn.execute(
+        _exec(conn, 
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)"
         )
-        conn.execute(
+        _exec(conn, 
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
         )
 
     # T-052: ensure task_notes table exists (migration for existing
     # databases created before this table was added).
     if "task_notes" not in table_names:
-        conn.execute("""
+        _exec(conn, """
             CREATE TABLE task_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
@@ -586,7 +731,7 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
             )
         """)
-        conn.execute(
+        _exec(conn, 
             "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
         )
 
@@ -594,9 +739,9 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # existing databases). The scheduler increments this counter each
     # time a claim is released back to pending, and fails the stage once
     # it exceeds settings.max_retries.
-    ts_cols = [r[1] for r in conn.execute("PRAGMA table_info(task_stages)").fetchall()]
+    ts_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(task_stages)").fetchall()]
     if "retry_count" not in ts_cols:
-        conn.execute(
+        _exec(conn, 
             "ALTER TABLE task_stages ADD COLUMN retry_count INTEGER DEFAULT 0"
         )
 
@@ -606,14 +751,14 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # status registry (core/status.py). Existing rows are backfilled from
     # ``is_active`` when that column exists so an active user maps to
     # "active" and a deactivated one to "inactive".
-    user_cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    user_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(users)").fetchall()]
     if "status" not in user_cols:
-        conn.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
+        _exec(conn, "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
         # Backfill from is_active for any pre-existing rows, but only
         # when the legacy column is present (some very old databases
         # predate is_active entirely).
         if "is_active" in user_cols:
-            conn.execute(
+            _exec(conn, 
                 "UPDATE users SET status = CASE WHEN is_active = 0 THEN 'inactive' "
                 "ELSE 'active' END WHERE status IS NULL"
             )
@@ -623,22 +768,22 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     # or above its load_cap for ``consecutive_high_load`` heartbeats in a
     # row is automatically transitioned to "busy"; the counter resets to
     # 0 whenever the load drops back below the cap.
-    node_cols = [r[1] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()]
+    node_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(nodes)").fetchall()]
     if "consecutive_high_load" not in node_cols:
-        conn.execute(
+        _exec(conn, 
             "ALTER TABLE nodes ADD COLUMN consecutive_high_load INTEGER DEFAULT 0"
         )
 
     # T-053: ensure node_capabilities has the description and input_schema
     # columns (migration for existing databases).
     if "node_capabilities" in table_names:
-        nc_cols = [r[1] for r in conn.execute("PRAGMA table_info(node_capabilities)").fetchall()]
+        nc_cols = [r[1] for r in _exec(conn, "PRAGMA table_info(node_capabilities)").fetchall()]
         if "description" not in nc_cols:
-            conn.execute(
+            _exec(conn, 
                 "ALTER TABLE node_capabilities ADD COLUMN description TEXT"
             )
         if "input_schema" not in nc_cols:
-            conn.execute(
+            _exec(conn, 
                 "ALTER TABLE node_capabilities ADD COLUMN input_schema TEXT"
             )
 
@@ -658,14 +803,14 @@ def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
     # Skip if the table doesn't exist yet (shouldn't happen because
     # _schema() creates it, but guard anyway).
     table_names = [
-        r[0] for r in conn.execute(
+        r[0] for r in _exec(conn, 
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     ]
     if "node_capabilities" not in table_names:
         return
 
-    rows = conn.execute("SELECT node_id, capabilities FROM nodes").fetchall()
+    rows = _exec(conn, "SELECT node_id, capabilities FROM nodes").fetchall()
     now = datetime.now(timezone.utc).isoformat()
     for row in rows:
         node_id = row["node_id"]
@@ -692,7 +837,7 @@ def _migrate_node_capabilities(conn: sqlite3.Connection) -> None:
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
-            conn.execute(
+            _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
@@ -721,7 +866,7 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
         ("grp_viewer", "viewer", "Read-only access", now),
     ]
     for group_id, group_name, description, created_at in default_groups:
-        conn.execute(
+        _exec(conn, 
             """
             INSERT INTO groups (group_id, group_name, description, created_at)
             VALUES (?, ?, ?, ?)
@@ -745,7 +890,7 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
         ("perm_system_config", "system:config", "Change system configuration", now),
     ]
     for perm_id, perm_name, description, created_at in default_permissions:
-        conn.execute(
+        _exec(conn, 
             """
             INSERT INTO permissions (permission_id, permission_name, description, created_at)
             VALUES (?, ?, ?, ?)
@@ -757,7 +902,7 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
     # Admin group gets all permissions.
     admin_group_id = "grp_admin"
     for perm_id, _, _, _ in default_permissions:
-        conn.execute(
+        _exec(conn, 
             """
             INSERT INTO group_permissions (group_id, permission_id, granted_at)
             VALUES (?, ?, ?)
@@ -770,7 +915,7 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
     user_group_id = "grp_user"
     user_permissions = ["perm_dashboard", "perm_nodes_view", "perm_tasks_view", "perm_tasks_create"]
     for perm_id in user_permissions:
-        conn.execute(
+        _exec(conn, 
             """
             INSERT INTO group_permissions (group_id, permission_id, granted_at)
             VALUES (?, ?, ?)
@@ -783,7 +928,7 @@ def _seed_default_rbac(conn: sqlite3.Connection) -> None:
     viewer_group_id = "grp_viewer"
     viewer_permissions = ["perm_dashboard", "perm_nodes_view", "perm_tasks_view"]
     for perm_id in viewer_permissions:
-        conn.execute(
+        _exec(conn, 
             """
             INSERT INTO group_permissions (group_id, permission_id, granted_at)
             VALUES (?, ?, ?)
@@ -815,7 +960,7 @@ def log_audit_event(
         log_id = f"aud_{secrets.token_urlsafe(12)}"
         now = datetime.now(timezone.utc).isoformat()
         safe_details = _redact_secrets(details)
-        conn.execute(
+        _exec(conn, 
             """
             INSERT INTO audit_logs (log_id, actor_id, actor_name, action,
                                     resource_type, resource_id, details, created_at)
@@ -847,7 +992,7 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
     conn = get_conn()
     try:
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
+        _exec(conn, 
             "DELETE FROM node_capabilities WHERE node_id = ?", (node_id,)
         )
         for cap in capabilities:
@@ -871,7 +1016,7 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 available = 1
                 description = None
                 input_schema = None
-            conn.execute(
+            _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
@@ -894,7 +1039,7 @@ def get_node_capability_names(node_id: str) -> list[str]:
     """
     conn = get_conn()
     try:
-        rows = conn.execute(
+        rows = _exec(conn, 
             "SELECT capability_name FROM node_capabilities WHERE node_id = ?",
             (node_id,),
         ).fetchall()
@@ -929,7 +1074,7 @@ def nodes_with_capability(
     params.extend(statuses)
     conn = get_conn()
     try:
-        rows = conn.execute(sql, params).fetchall()
+        rows = _exec(conn, sql, tuple(params)).fetchall()
         return [r["node_id"] for r in rows]
     finally:
         conn.close()
@@ -966,7 +1111,7 @@ def get_capability_details(
         params = (capability_name,)
     conn = get_conn()
     try:
-        row = conn.execute(sql, params).fetchone()
+        row = _exec(conn, sql, params).fetchone()
         if not row:
             return None
         schema_raw = row["input_schema"]

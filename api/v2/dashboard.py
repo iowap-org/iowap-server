@@ -19,7 +19,7 @@ from relay_server.api.v2.security import (
     require_dashboard_user,
 )
 from relay_server.config import settings
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.core.route_registry import router as node_routes_router
 from relay_server.core.session import (
     CSRF_MAX_AGE_SECONDS,
@@ -152,11 +152,11 @@ def _resolve_node_identifier(value: str) -> str | None:
     conn = get_conn()
     try:
         # Try as node_id first
-        row = conn.execute("SELECT node_id FROM nodes WHERE node_id = ?", (value,)).fetchone()
+        row = conn.execute(q("SELECT node_id FROM nodes WHERE node_id = ?", (value,))).fetchone()
         if row:
             return row["node_id"]
         # Try as node_name
-        row = conn.execute("SELECT node_id FROM nodes WHERE node_name = ?", (value,)).fetchone()
+        row = conn.execute(q("SELECT node_id FROM nodes WHERE node_name = ?", (value,))).fetchone()
         if row:
             return row["node_id"]
         return None
@@ -168,10 +168,10 @@ def _resolve_user_identifier(value: str) -> str | None:
     """Resolve a username to user_id, or return the value if it's already an ID."""
     conn = get_conn()
     try:
-        row = conn.execute("SELECT user_id FROM users WHERE user_id = ?", (value,)).fetchone()
+        row = conn.execute(q("SELECT user_id FROM users WHERE user_id = ?", (value,))).fetchone()
         if row:
             return row["user_id"]
-        row = conn.execute("SELECT user_id FROM users WHERE username = ?", (value,)).fetchone()
+        row = conn.execute(q("SELECT user_id FROM users WHERE username = ?", (value,))).fetchone()
         if row:
             return row["user_id"]
         return None
@@ -411,8 +411,8 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
         now = datetime.now(timezone.utc)
         DASHBOARD_ADMIN_NODE = "__dashboard_admin__"
         node_rows = conn.execute(
-            "SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen, first_heartbeat_seen, load, queue_depth "
-            "FROM nodes ORDER BY registered_at DESC"
+            q("SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen, first_heartbeat_seen, load, queue_depth "
+            "FROM nodes ORDER BY registered_at DESC")
         ).fetchall()
         nodes = []
         online_count = 0
@@ -443,8 +443,8 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
                 online_count += 1
 
         task_rows = conn.execute(
-            "SELECT task_id, task_name, status, priority, created_at, completed_at "
-            "FROM tasks ORDER BY created_at DESC LIMIT 50"
+            q("SELECT task_id, task_name, status, priority, created_at, completed_at "
+            "FROM tasks ORDER BY created_at DESC LIMIT 50")
         ).fetchall()
         tasks = []
         for r in task_rows:
@@ -463,13 +463,13 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
             )
 
         status_counts = conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status"
+            q("SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status")
         ).fetchall()
         task_stats = {r["status"]: r["cnt"] for r in status_counts}
 
         stage_rows = conn.execute(
-            "SELECT stage_id, task_id, stage_name, capability, status, claimed_by, claimed_at "
-            "FROM task_stages WHERE status IN ('pending','claimed') ORDER BY created_at DESC LIMIT 50"
+            q("SELECT stage_id, task_id, stage_name, capability, status, claimed_by, claimed_at "
+            "FROM task_stages WHERE status IN ('pending','claimed') ORDER BY created_at DESC LIMIT 50")
         ).fetchall()
         active_stages = []
         for r in stage_rows:
@@ -489,8 +489,8 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
             )
 
         artifact_rows = conn.execute(
-            "SELECT artifact_id, task_id, stage_id, name, mime_type, size_bytes, created_at "
-            "FROM artifacts ORDER BY created_at DESC LIMIT 50"
+            q("SELECT artifact_id, task_id, stage_id, name, mime_type, size_bytes, created_at "
+            "FROM artifacts ORDER BY created_at DESC LIMIT 50")
         ).fetchall()
         artifacts = [
             {

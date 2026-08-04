@@ -8,7 +8,7 @@ from relay_server.api.v2.security import (
     require_dashboard_user,
 )
 from relay_server.core.auth import approve_node
-from relay_server.core.db import log_audit_event
+from relay_server.core.db import log_audit_event, q
 from relay_server.models import AuthContext, NodeApproval, TokenResponse
 
 router = APIRouter()
@@ -22,9 +22,8 @@ async def admin_list_nodes(ctx: AuthContext = Depends(require_admin_or_dashboard
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen "
-            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC",
-            ("__dashboard_admin__",),
+            q("SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen "
+            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC", ("__dashboard_admin__",)),
         ).fetchall()
         return {
             "nodes": [
@@ -88,8 +87,7 @@ async def admin_issue_node_token(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id, node_name, role FROM nodes WHERE node_id = ? AND status IN (?, ?)",
-            (node_id, "approved", "offline"),
+            q("SELECT node_id, node_name, role FROM nodes WHERE node_id = ? AND status IN (?, ?)", (node_id, "approved", "offline")),
         ).fetchone()
         if not row:
             raise HTTPException(
@@ -98,8 +96,7 @@ async def admin_issue_node_token(
             )
         # Invalidate old runtime tokens for this node to avoid ambiguity.
         conn.execute(
-            "DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?",
-            (node_id, "runtime"),
+            q("DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?", (node_id, "runtime")),
         )
         conn.commit()
         token = _create_token(
@@ -135,8 +132,7 @@ async def admin_delete_node(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id FROM nodes WHERE node_id = ?",
-            (node_id,),
+            q("SELECT node_id FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         if not row:
             raise HTTPException(
@@ -146,22 +142,19 @@ async def admin_delete_node(
 
         # Clean up dependent records before removing the node itself
         # (foreign keys are enabled, so deleting in the right order is required).
-        conn.execute("DELETE FROM node_tokens WHERE node_id = ?", (node_id,))
-        conn.execute("DELETE FROM presence WHERE node_id = ?", (node_id,))
+        conn.execute(q("DELETE FROM node_tokens WHERE node_id = ?", (node_id,)))
+        conn.execute(q("DELETE FROM presence WHERE node_id = ?", (node_id,)))
         conn.execute(
-            "UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?",
-            (node_id,),
+            q("UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?", (node_id,)),
         )
         conn.execute(
-            "UPDATE task_stages SET claimed_by = NULL, claimed_at = NULL, "
-            "claim_expires_at = NULL WHERE claimed_by = ?",
-            (node_id,),
+            q("UPDATE task_stages SET claimed_by = NULL, claimed_at = NULL, "
+            "claim_expires_at = NULL WHERE claimed_by = ?", (node_id,)),
         )
         conn.execute(
-            "UPDATE artifacts SET created_by = NULL WHERE created_by = ?",
-            (node_id,),
+            q("UPDATE artifacts SET created_by = NULL WHERE created_by = ?", (node_id,)),
         )
-        conn.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
+        conn.execute(q("DELETE FROM nodes WHERE node_id = ?", (node_id,)))
         conn.commit()
     finally:
         conn.close()

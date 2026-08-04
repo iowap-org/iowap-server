@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.core.events import event_bus
 
 logger = logging.getLogger("relay.artifacts")
@@ -60,12 +60,11 @@ def store_artifact(
     conn = get_conn()
     try:
         conn.execute(
-            """
+            q("""
             INSERT INTO artifacts
             (artifact_id, task_id, stage_id, name, mime_type, size_bytes, checksum, storage_path, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+            """, (
                 artifact_id,
                 task_id,
                 stage_id,
@@ -76,7 +75,7 @@ def store_artifact(
                 str(path),
                 created_by,
                 now,
-            ),
+            )),
         )
         conn.commit()
         event_bus.publish_sync(
@@ -128,12 +127,11 @@ def store_artifact_from_file(
     conn = get_conn()
     try:
         conn.execute(
-            """
+            q("""
             INSERT INTO artifacts
             (artifact_id, task_id, stage_id, name, mime_type, size_bytes, checksum, storage_path, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+            """, (
                 artifact_id,
                 task_id,
                 stage_id,
@@ -144,7 +142,7 @@ def store_artifact_from_file(
                 str(target_path),
                 created_by,
                 now,
-            ),
+            )),
         )
         conn.commit()
         event_bus.publish_sync(
@@ -167,7 +165,7 @@ def get_artifact_metadata(artifact_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT * FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+            q("SELECT * FROM artifacts WHERE artifact_id = ?", (artifact_id,))
         ).fetchone()
         if not row:
             return None
@@ -183,16 +181,14 @@ def list_artifacts(
     try:
         if task_id and stage_id:
             rows = conn.execute(
-                "SELECT * FROM artifacts WHERE task_id = ? AND stage_id = ? ORDER BY created_at DESC",
-                (task_id, stage_id),
+                q("SELECT * FROM artifacts WHERE task_id = ? AND stage_id = ? ORDER BY created_at DESC", (task_id, stage_id)),
             ).fetchall()
         elif task_id:
             rows = conn.execute(
-                "SELECT * FROM artifacts WHERE task_id = ? ORDER BY created_at DESC",
-                (task_id,),
+                q("SELECT * FROM artifacts WHERE task_id = ? ORDER BY created_at DESC", (task_id,)),
             ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM artifacts ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(q("SELECT * FROM artifacts ORDER BY created_at DESC")).fetchall()
         return [_artifact_row_to_dict(r) for r in rows]
     finally:
         conn.close()
@@ -202,14 +198,14 @@ def delete_artifact(artifact_id: str) -> bool:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT storage_path FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+            q("SELECT storage_path FROM artifacts WHERE artifact_id = ?", (artifact_id,))
         ).fetchone()
         if not row:
             return False
         path = Path(row["storage_path"])
         if path.exists():
             path.unlink()
-        conn.execute("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,))
+        conn.execute(q("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,)))
         conn.commit()
         return True
     finally:
@@ -236,14 +232,13 @@ def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT artifact_id, storage_path, size_bytes
             FROM artifacts
             WHERE task_id IS NOT NULL
               AND task_id NOT IN (SELECT task_id FROM tasks)
               AND created_at < ?
-            """,
-            (cutoff,),
+            """, (cutoff,)),
         ).fetchall()
         if not rows:
             return {"deleted": 0, "freed_bytes": 0}
@@ -260,7 +255,7 @@ def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
             except OSError as exc:
                 logger.warning("Could not delete artifact file %s: %s", path_str, exc)
             conn.execute(
-                "DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+                q("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,))
             )
             deleted += 1
             freed_bytes += size

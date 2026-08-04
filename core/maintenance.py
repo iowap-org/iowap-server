@@ -26,8 +26,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+import sqlalchemy as sa
+
 from relay_server.config import settings
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 
 logger = logging.getLogger("relay.maintenance")
 
@@ -43,7 +45,7 @@ def _purge_expired_tokens() -> Dict[str, Any]:
     conn = get_conn()
     try:
         deleted = conn.execute(
-            "DELETE FROM node_tokens WHERE expires_at < ?", (now,)
+            q("DELETE FROM node_tokens WHERE expires_at < ?", (now,))
         ).rowcount
         conn.commit()
         return {"deleted": deleted}
@@ -68,14 +70,14 @@ def _db_vacuum() -> Dict[str, Any]:
     conn = get_conn()
     try:
         try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute(q("PRAGMA wal_checkpoint(TRUNCATE)"))
             checkpointed = True
-        except sqlite3.OperationalError as exc:
+        except (sqlite3.OperationalError, sa.exc.OperationalError) as exc:
             logger.warning("WAL checkpoint failed: %s", exc)
         try:
-            conn.execute("VACUUM")
+            conn.execute(q("VACUUM"))
             vacuumed = True
-        except sqlite3.OperationalError as exc:
+        except (sqlite3.OperationalError, sa.exc.OperationalError) as exc:
             logger.warning("VACUUM failed: %s", exc)
         conn.commit()
     finally:
@@ -98,7 +100,7 @@ def _ssn_auto_approve() -> Dict[str, Any]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT node_id FROM nodes WHERE status = 'pending' AND role = 'worker'"
+            q("SELECT node_id FROM nodes WHERE status = 'pending' AND role = 'worker'")
         ).fetchall()
         node_ids = [r["node_id"] for r in rows]
     finally:

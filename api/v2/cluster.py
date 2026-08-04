@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.core.events import event_bus
 from relay_server.core.status import get_category, status_color
 
@@ -72,10 +72,9 @@ async def cluster_overview():
         now = datetime.now(timezone.utc).isoformat()
 
         node_rows = conn.execute(
-            "SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
+            q("SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
             "load, queue_depth, last_seen, registered_at "
-            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC",
-            (_DASHBOARD_ADMIN_NODE,),
+            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC", (_DASHBOARD_ADMIN_NODE,)),
         ).fetchall()
         nodes: list[dict] = []
         online_count = 0
@@ -105,24 +104,24 @@ async def cluster_overview():
                 online_count += 1
 
         task_stat_rows = conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status"
+            q("SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status")
         ).fetchall()
         task_stats = {r["status"]: r["cnt"] for r in task_stat_rows}
         total_tasks = sum(task_stats.values())
 
         active_stages_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM task_stages WHERE status IN ('pending','claimed')"
+            q("SELECT COUNT(*) as cnt FROM task_stages WHERE status IN ('pending','claimed')")
         ).fetchone()["cnt"]
 
         artifacts_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM artifacts"
+            q("SELECT COUNT(*) as cnt FROM artifacts")
         ).fetchone()["cnt"]
 
         # Distinct advertised capability names across all non-pending nodes.
         cap_count_row = conn.execute(
-            "SELECT COUNT(DISTINCT capability_name) as cnt FROM node_capabilities nc "
+            q("SELECT COUNT(DISTINCT capability_name) as cnt FROM node_capabilities nc "
             "JOIN nodes n ON n.node_id = nc.node_id "
-            "WHERE n.status IN ('approved','online','idle','busy','maintenance','offline')"
+            "WHERE n.status IN ('approved','online','idle','busy','maintenance','offline')")
         ).fetchone()
         capability_count = cap_count_row["cnt"] if cap_count_row else 0
 
@@ -184,10 +183,9 @@ async def cluster_nodes():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
+            q("SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
             "load, queue_depth, last_seen, registered_at "
-            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC",
-            (_DASHBOARD_ADMIN_NODE,),
+            "FROM nodes WHERE node_id != ? ORDER BY registered_at DESC", (_DASHBOARD_ADMIN_NODE,)),
         ).fetchall()
         return {"nodes": [_public_node_row(r) for r in rows]}
     finally:
@@ -211,28 +209,25 @@ async def cluster_node_profile(node_id: str):
 
         # Resolve node_name to node_id
         resolved = conn.execute(
-            "SELECT node_id FROM nodes WHERE node_id = ? OR node_name = ?",
-            (node_id, node_id),
+            q("SELECT node_id FROM nodes WHERE node_id = ? OR node_name = ?", (node_id, node_id)),
         ).fetchone()
         if not resolved:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
         node_id = resolved["node_id"]
 
         row = conn.execute(
-            "SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
+            q("SELECT node_id, node_name, description, endpoint, capabilities, status, role, "
             "load, queue_depth, available, last_seen, registered_at, first_heartbeat_seen "
-            "FROM nodes WHERE node_id = ?",
-            (node_id,),
+            "FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
 
         # Capability details from the normalized index.
         nc_rows = conn.execute(
-            "SELECT capability_name, capability_type, capability_version, description, "
+            q("SELECT capability_name, capability_type, capability_version, description, "
             "input_schema, available "
-            "FROM node_capabilities WHERE node_id = ? ORDER BY capability_name",
-            (node_id,),
+            "FROM node_capabilities WHERE node_id = ? ORDER BY capability_name", (node_id,)),
         ).fetchall()
         capabilities: list[dict] = []
         for nc in nc_rows:
@@ -256,12 +251,11 @@ async def cluster_node_profile(node_id: str):
 
         # Last 20 tasks that touched this node (as owner or claimer).
         task_rows = conn.execute(
-            "SELECT t.task_id, t.task_name, t.status, t.priority, t.created_at, t.completed_at "
+            q("SELECT t.task_id, t.task_name, t.status, t.priority, t.created_at, t.completed_at "
             "FROM tasks t "
             "LEFT JOIN task_stages s ON s.task_id = t.task_id "
             "WHERE t.owner_node_id = ? OR s.claimed_by = ? "
-            "GROUP BY t.task_id ORDER BY t.created_at DESC LIMIT 20",
-            (node_id, node_id),
+            "GROUP BY t.task_id ORDER BY t.created_at DESC LIMIT 20", (node_id, node_id)),
         ).fetchall()
         recent_tasks = []
         for r in task_rows:
@@ -325,10 +319,9 @@ def _node_load_history(conn, node_id: str) -> list[dict]:
     not load samples. The shape is enough for a CSS-only sparkline.
     """
     rows = conn.execute(
-        "SELECT created_at, details FROM audit_logs "
+        q("SELECT created_at, details FROM audit_logs "
         "WHERE actor_id = ? OR resource_id = ? "
-        "ORDER BY created_at DESC LIMIT 20",
-        (node_id, node_id),
+        "ORDER BY created_at DESC LIMIT 20", (node_id, node_id)),
     ).fetchall()
     history: list[dict] = []
     for r in rows:
@@ -354,7 +347,7 @@ async def cluster_users():
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT u.user_id, u.username, u.is_active, u.status, u.created_at,
                    GROUP_CONCAT(g.group_name, ',') as groups
             FROM users u
@@ -362,7 +355,7 @@ async def cluster_users():
             LEFT JOIN groups g ON g.group_id = ug.group_id
             GROUP BY u.user_id
             ORDER BY u.created_at DESC
-            """
+            """)
         ).fetchall()
         users = []
         for r in rows:
@@ -402,38 +395,34 @@ async def cluster_user_profile(user_id: str):
     try:
         # Resolve username to user_id
         resolved = conn.execute(
-            "SELECT user_id FROM users WHERE user_id = ? OR username = ?",
-            (user_id, user_id),
+            q("SELECT user_id FROM users WHERE user_id = ? OR username = ?", (user_id, user_id)),
         ).fetchone()
         if not resolved:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
         user_id = resolved["user_id"]
 
         row = conn.execute(
-            "SELECT user_id, username, is_active, status, created_at, created_by "
-            "FROM users WHERE user_id = ?",
-            (user_id,),
+            q("SELECT user_id, username, is_active, status, created_at, created_by "
+            "FROM users WHERE user_id = ?", (user_id,)),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
         groups_rows = conn.execute(
-            """
+            q("""
             SELECT g.group_name FROM groups g
             JOIN user_groups ug ON ug.group_id = g.group_id
             WHERE ug.user_id = ?
-            """,
-            (user_id,),
+            """, (user_id,)),
         ).fetchall()
         groups = [r["group_name"] for r in groups_rows]
         role = "admin" if "admin" in groups else (groups[0] if groups else "user")
 
         # Recent audit-log activity for this user (creator or actor).
         activity_rows = conn.execute(
-            "SELECT log_id, actor_id, actor_name, action, resource_type, resource_id, details, created_at "
+            q("SELECT log_id, actor_id, actor_name, action, resource_type, resource_id, details, created_at "
             "FROM audit_logs WHERE actor_id = ? OR details LIKE ? "
-            "ORDER BY created_at DESC LIMIT 20",
-            (user_id, f"%{user_id}%"),
+            "ORDER BY created_at DESC LIMIT 20", (user_id, f"%{user_id}%")),
         ).fetchall()
         activity = [
             {

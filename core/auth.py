@@ -7,8 +7,10 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import sqlalchemy as sa
+
 from relay_server.config import settings
-from relay_server.core.db import get_conn, sync_node_capabilities
+from relay_server.core.db import get_conn, sync_node_capabilities, q
 from relay_server.core.node_registry import NodeRegistry
 
 class NodeExistsError(Exception):
@@ -179,7 +181,7 @@ def init_master_seed() -> Optional[str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT seed_id FROM admin_seeds WHERE seed_id = ?", ("master",)
+            q("SELECT seed_id FROM admin_seeds WHERE seed_id = ?", ("master",))
         ).fetchone()
         if row:
             return None
@@ -188,8 +190,7 @@ def init_master_seed() -> Optional[str]:
         secret_hash = hash_secret(secret)
         now = _format_time(_now())
         conn.execute(
-            "INSERT INTO admin_seeds (seed_id, seed_hash, role, created_at) VALUES (?, ?, ?, ?)",
-            ("master", secret_hash, "admin", now),
+            q("INSERT INTO admin_seeds (seed_id, seed_hash, role, created_at) VALUES (?, ?, ?, ?)", ("master", secret_hash, "admin", now)),
         )
         conn.commit()
         return secret
@@ -217,12 +218,11 @@ def _create_token(
         expires = now + timedelta(hours=ttl_hours)
 
         conn.execute(
-            """
+            q("""
             INSERT INTO node_tokens
             (token_id, node_id, node_name, token_hash, token_lookup_hash, token_type, pending, role, expires_at, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+            """, (
                 token_id,
                 node_id,
                 node_name,
@@ -233,7 +233,7 @@ def _create_token(
                 role,
                 _format_time(expires),
                 _format_time(now),
-            ),
+            )),
         )
         conn.commit()
         return token
@@ -244,7 +244,7 @@ def _create_token(
 def _node_exists(node_id: str) -> bool:
     conn = get_conn()
     try:
-        row = conn.execute("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+        row = conn.execute(q("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,))).fetchone()
         return row is not None
     finally:
         conn.close()
@@ -273,7 +273,7 @@ def register_admin_node(
             return result
 
         row = conn.execute(
-            "SELECT seed_hash FROM admin_seeds WHERE seed_id = ?", ("master",)
+            q("SELECT seed_hash FROM admin_seeds WHERE seed_id = ?", ("master",))
         ).fetchone()
         if not row:
             return result
@@ -284,12 +284,11 @@ def register_admin_node(
         now = _format_time(_now())
         caps_json = _serialize_capabilities(capabilities)
         conn.execute(
-            """
+            q("""
             INSERT INTO nodes
             (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (node_id, node_name, endpoint, caps_json, now, now, "approved", "admin"),
+            """, (node_id, node_name, endpoint, caps_json, now, now, "approved", "admin")),
         )
         conn.commit()
         token = _create_token(
@@ -333,13 +332,12 @@ def register_pending_node(
         registration_secret = generate_secret("rs_")
         rs_expires = now + timedelta(hours=settings.registration_secret_ttl_hours)
         conn.execute(
-            """
+            q("""
             INSERT INTO nodes
             (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role,
              registration_secret_hash, registration_secret_expires_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+            """, (
                 node_id,
                 node_name,
                 endpoint,
@@ -350,7 +348,7 @@ def register_pending_node(
                 role,
                 hash_secret(registration_secret),
                 _format_time(rs_expires),
-            ),
+            )),
         )
         conn.commit()
         created = True
@@ -365,9 +363,11 @@ def register_pending_node(
             ttl_hours=temporary_ttl,
         )
         return node_id, token, registration_secret
-    except sqlite3.IntegrityError as exc:
+    except (sqlite3.IntegrityError, sa.exc.IntegrityError) as exc:
         conn.rollback()
-        detail = str(exc)
+        # Use the concise DBAPI message (``exc.orig``) — the full SA
+        # exception text embeds the SQL and mentions every column.
+        detail = str(getattr(exc, "orig", exc)).lower() or str(exc).lower()
         if "node_id" in detail:
             raise NodeExistsError("node_id", node_id)
         if "node_name" in detail:
@@ -396,9 +396,8 @@ def approve_node(
     final_caps_list: list = []
     try:
         row = conn.execute(
-            "SELECT node_name, role AS current_role, capabilities AS current_caps, endpoint AS current_endpoint, status "
-            "FROM nodes WHERE node_id = ?",
-            (node_id,),
+            q("SELECT node_name, role AS current_role, capabilities AS current_caps, endpoint AS current_endpoint, status "
+            "FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         if not row:
             return None
@@ -416,17 +415,15 @@ def approve_node(
 
         now = _format_time(_now())
         conn.execute(
-            """
+            q("""
             UPDATE nodes
             SET status = ?, role = ?, capabilities = ?, endpoint = ?, last_seen = ?
             WHERE node_id = ?
-            """,
-            ("approved", final_role, final_caps, final_endpoint, now, node_id),
+            """, ("approved", final_role, final_caps, final_endpoint, now, node_id)),
         )
         # Invalidate any existing temporary tokens for this node.
         conn.execute(
-            "DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?",
-            (node_id, "temporary"),
+            q("DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?", (node_id, "temporary")),
         )
         conn.commit()
         approved = True
@@ -459,14 +456,13 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
         token_lookup_hash = compute_token_lookup(token)
         now = _format_time(_now())
         token_row = conn.execute(
-            """
+            q("""
             SELECT token_id, node_id, node_name, token_type, pending, role, expires_at, token_hash
             FROM node_tokens
             WHERE token_lookup_hash = ?
               AND (expires_at > ? OR expires_at IS NULL)
             LIMIT 1
-            """,
-            (token_lookup_hash, now),
+            """, (token_lookup_hash, now)),
         ).fetchone()
 
         if not token_row:
@@ -483,8 +479,7 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
             return None
 
         node_row = conn.execute(
-            "SELECT node_id, node_name, endpoint, capabilities, status, role FROM nodes WHERE node_id = ?",
-            (token_row["node_id"],),
+            q("SELECT node_id, node_name, endpoint, capabilities, status, role FROM nodes WHERE node_id = ?", (token_row["node_id"],)),
         ).fetchone()
         if not node_row:
             return None
@@ -529,8 +524,7 @@ def _replace_runtime_token(node_id: str, node_name: str, role: str) -> str:
     conn = get_conn()
     try:
         conn.execute(
-            "DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?",
-            (node_id, "runtime"),
+            q("DELETE FROM node_tokens WHERE node_id = ? AND token_type = ?", (node_id, "runtime")),
         )
         conn.commit()
         return _create_token(
@@ -550,7 +544,7 @@ def rotate_registration_secret(node_id: str) -> Optional[str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT status FROM nodes WHERE node_id = ?", (node_id,)
+            q("SELECT status FROM nodes WHERE node_id = ?", (node_id,))
         ).fetchone()
         if not row or row["status"] != "approved":
             return None
@@ -558,8 +552,7 @@ def rotate_registration_secret(node_id: str) -> Optional[str]:
         new_secret = generate_secret("rs_")
         expires = _now() + timedelta(hours=settings.registration_secret_ttl_hours)
         conn.execute(
-            "UPDATE nodes SET registration_secret_hash = ?, registration_secret_expires_at = ? WHERE node_id = ?",
-            (hash_secret(new_secret), _format_time(expires), node_id),
+            q("UPDATE nodes SET registration_secret_hash = ?, registration_secret_expires_at = ? WHERE node_id = ?", (hash_secret(new_secret), _format_time(expires), node_id)),
         )
         conn.commit()
         return new_secret
@@ -571,8 +564,7 @@ def get_registration_secret_expiry(node_id: str) -> Optional[datetime]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT registration_secret_expires_at FROM nodes WHERE node_id = ?",
-            (node_id,),
+            q("SELECT registration_secret_expires_at FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         if not row or not row["registration_secret_expires_at"]:
             return None
@@ -612,7 +604,7 @@ def login_with_master_seed(seed: str) -> Optional[str]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT seed_hash, role FROM admin_seeds WHERE seed_id = ?", ("master",)
+            q("SELECT seed_hash, role FROM admin_seeds WHERE seed_id = ?", ("master",))
         ).fetchone()
         if not row:
             return None
@@ -622,17 +614,16 @@ def login_with_master_seed(seed: str) -> Optional[str]:
         # Use a deterministic synthetic admin node for dashboard sessions.
         dashboard_node_id = "__dashboard_admin__"
         node_row = conn.execute(
-            "SELECT node_id, node_name FROM nodes WHERE node_id = ?", (dashboard_node_id,)
+            q("SELECT node_id, node_name FROM nodes WHERE node_id = ?", (dashboard_node_id,))
         ).fetchone()
         if not node_row:
             now = _format_time(_now())
             conn.execute(
-                """
+                q("""
                 INSERT INTO nodes
                 (node_id, node_name, endpoint, capabilities, last_seen, registered_at, status, role)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (dashboard_node_id, "Dashboard Admin", None, "[]", now, now, "approved", "admin"),
+                """, (dashboard_node_id, "Dashboard Admin", None, "[]", now, now, "approved", "admin")),
             )
             conn.commit()
             node_name = "Dashboard Admin"

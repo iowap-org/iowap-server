@@ -162,7 +162,7 @@ async def auth_refresh(
     """
     from relay_server.config import settings
     from relay_server.core.auth import verify_secret
-    from relay_server.core.db import get_conn
+    from relay_server.core.db import get_conn, q
 
     requested = body.requested_credential
     bearer = _extract_bearer(authorization)
@@ -217,9 +217,8 @@ async def auth_refresh(
                     detail="node_id required when authenticating with registration_secret",
                 )
             row = conn.execute(
-                "SELECT node_id, node_name, status, role, registration_secret_hash, registration_secret_expires_at "
-                "FROM nodes WHERE node_id = ?",
-                (body.node_id,),
+                q("SELECT node_id, node_name, status, role, registration_secret_hash, registration_secret_expires_at "
+                "FROM nodes WHERE node_id = ?", (body.node_id,)),
             ).fetchone()
             if not row:
                 raise HTTPException(
@@ -296,7 +295,7 @@ async def auth_status(
     the registration secret before they expire.
     """
     from relay_server.core.auth import verify_secret
-    from relay_server.core.db import get_conn
+    from relay_server.core.db import get_conn, q
 
     # Mode 1: pending node polling via registration secret.
     if body.registration_secret:
@@ -308,9 +307,8 @@ async def auth_status(
         conn = get_conn()
         try:
             row = conn.execute(
-                "SELECT node_id, node_name, status, registration_secret_hash, registration_secret_expires_at "
-                "FROM nodes WHERE node_id = ?",
-                (body.node_id,),
+                q("SELECT node_id, node_name, status, registration_secret_hash, registration_secret_expires_at "
+                "FROM nodes WHERE node_id = ?", (body.node_id,)),
             ).fetchone()
         finally:
             conn.close()
@@ -362,8 +360,7 @@ async def auth_status(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT registration_secret_expires_at FROM nodes WHERE node_id = ?",
-            (node_id,),
+            q("SELECT registration_secret_expires_at FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         if row:
             rs_expires_str = row["registration_secret_expires_at"]

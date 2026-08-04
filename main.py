@@ -25,7 +25,7 @@ except ImportError:
 from relay_server import __version__
 from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
-from relay_server.core.db import init_db
+from relay_server.core.db import init_db, q
 from relay_server.core.events import event_bus
 from relay_server.core import metrics as _metrics
 from relay_server.core.logging_setup import JsonFormatter
@@ -364,7 +364,7 @@ async def ready():
     db_ok = False
     try:
         conn = get_conn()
-        conn.execute("SELECT 1")
+        conn.execute(q("SELECT 1"))
         conn.close()
         db_ok = True
     except Exception:  # noqa: BLE001

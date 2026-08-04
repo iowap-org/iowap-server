@@ -12,7 +12,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 
 # In-Process-Counter: name -> {(label_dict) -> count}
 _counters: dict[str, dict[tuple[tuple[str, str], ...], int]] = defaultdict(dict)
@@ -56,7 +56,7 @@ def maintenance_age_seconds() -> float | None:
 def _count_groups(query: str, col: str) -> dict[str, int]:
     conn = get_conn()
     try:
-        rows = conn.execute(query).fetchall()
+        rows = conn.execute(q(query)).fetchall()
         return {r[col]: r["cnt"] for r in rows}
     finally:
         conn.close()

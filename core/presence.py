@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.core.events import event_bus
 
 
@@ -38,19 +38,18 @@ def update_presence(
     conn = get_conn()
     try:
         # Ensure the node exists and fetch current presence.
-        node = conn.execute("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+        node = conn.execute(q("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,))).fetchone()
         if not node:
             return False
 
         old = conn.execute(
-            "SELECT status, mood, activity_json, progress, eta_seconds, next_available "
-            "FROM presence WHERE node_id = ?",
-            (node_id,),
+            q("SELECT status, mood, activity_json, progress, eta_seconds, next_available "
+            "FROM presence WHERE node_id = ?", (node_id,)),
         ).fetchone()
 
         now = _format_time(_now())
         conn.execute(
-            """
+            q("""
             INSERT INTO presence (node_id, status, mood, activity_json, progress,
                                   eta_seconds, next_available, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -62,8 +61,7 @@ def update_presence(
                 eta_seconds = COALESCE(?, eta_seconds),
                 next_available = COALESCE(?, next_available),
                 updated_at = ?
-            """,
-            (
+            """, (
                 node_id,
                 status,
                 mood,
@@ -79,14 +77,13 @@ def update_presence(
                 eta_seconds,
                 next_available,
                 now,
-            ),
+            )),
         )
         conn.commit()
 
         new = conn.execute(
-            "SELECT status, mood, activity_json, progress, eta_seconds, next_available "
-            "FROM presence WHERE node_id = ?",
-            (node_id,),
+            q("SELECT status, mood, activity_json, progress, eta_seconds, next_available "
+            "FROM presence WHERE node_id = ?", (node_id,)),
         ).fetchone()
 
         changed = (
@@ -112,15 +109,14 @@ def get_presence(node_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         row = conn.execute(
-            """
+            q("""
             SELECT p.node_id, p.status, p.mood, p.activity_json, p.progress,
                    p.eta_seconds, p.next_available, p.updated_at,
                    n.node_name, n.endpoint, n.capabilities
             FROM presence p
             JOIN nodes n ON n.node_id = p.node_id
             WHERE p.node_id = ?
-            """,
-            (node_id,),
+            """, (node_id,)),
         ).fetchone()
         return _presence_row_to_dict(row) if row else None
     finally:
@@ -133,7 +129,7 @@ def list_presence(status: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if status:
             rows = conn.execute(
-                """
+                q("""
                 SELECT p.node_id, p.status, p.mood, p.activity_json, p.progress,
                        p.eta_seconds, p.next_available, p.updated_at,
                        n.node_name, n.endpoint, n.capabilities
@@ -141,19 +137,18 @@ def list_presence(status: Optional[str] = None) -> List[Dict[str, Any]]:
                 JOIN nodes n ON n.node_id = p.node_id
                 WHERE p.status = ?
                 ORDER BY p.updated_at DESC
-                """,
-                (status,),
+                """, (status,)),
             ).fetchall()
         else:
             rows = conn.execute(
-                """
+                q("""
                 SELECT p.node_id, p.status, p.mood, p.activity_json, p.progress,
                        p.eta_seconds, p.next_available, p.updated_at,
                        n.node_name, n.endpoint, n.capabilities
                 FROM presence p
                 JOIN nodes n ON n.node_id = p.node_id
                 ORDER BY p.updated_at DESC
-                """,
+                """),
             ).fetchall()
         return [_presence_row_to_dict(r) for r in rows]
     finally:

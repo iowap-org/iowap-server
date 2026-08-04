@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 
 from relay_server.api.v2.security import get_approved_context
 from relay_server.core.artifacts import delete_artifact, list_artifacts, store_artifact
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.core.scheduler import Scheduler
 from relay_server.models import (
     ArtifactUploadResponse,
@@ -128,7 +128,7 @@ async def scheduler_upload_artifact(
     """Upload an artifact attached to a task (and optionally a stage)."""
     conn = get_conn()
     try:
-        row = conn.execute("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        row = conn.execute(q("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,))).fetchone()
     finally:
         conn.close()
     if not row:

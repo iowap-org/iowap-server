@@ -25,7 +25,7 @@ from relay_server.api.v2.security import (
     get_auth_context,
     require_dashboard_user,
 )
-from relay_server.core.db import get_conn
+from relay_server.core.db import get_conn, q
 from relay_server.models import AuthContext
 
 logger = logging.getLogger(__name__)
@@ -94,9 +94,8 @@ def _lookup_route(node_id: str, path: str, method: str) -> dict[str, Any] | None
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id, path, method, auth, upstream, description "
-            "FROM node_routes WHERE node_id = ? AND path = ? AND method = ?",
-            (node_id, path, method.upper()),
+            q("SELECT node_id, path, method, auth, upstream, description "
+            "FROM node_routes WHERE node_id = ? AND path = ? AND method = ?", (node_id, path, method.upper())),
         ).fetchone()
         if row is None:
             return None

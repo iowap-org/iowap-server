@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn, sync_node_capabilities
+from relay_server.core.db import get_conn, sync_node_capabilities, q
 from relay_server.core.events import event_bus
 from relay_server.core.status import (
     StatusCategory,
@@ -50,19 +50,18 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
     """Replace all routes for a node (T-075). Called on each heartbeat."""
     conn = get_conn()
     try:
-        conn.execute("DELETE FROM node_routes WHERE node_id = ?", (node_id,))
+        conn.execute(q("DELETE FROM node_routes WHERE node_id = ?", (node_id,)))
         for route in routes:
             conn.execute(
-                "INSERT OR REPLACE INTO node_routes (node_id, path, method, auth, upstream, description) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
+                q("INSERT OR REPLACE INTO node_routes (node_id, path, method, auth, upstream, description) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (
                     node_id,
                     route.get("path", ""),
                     route.get("method", "GET").upper(),
                     route.get("auth", "session"),
                     route.get("upstream", ""),
                     route.get("description", ""),
-                ),
+                )),
             )
         conn.commit()
     finally:
@@ -111,9 +110,8 @@ def heartbeat(
     status_changed_to: Optional[str] = None
     try:
         row = conn.execute(
-            "SELECT node_id, status, available, capabilities, first_heartbeat_seen, "
-            "consecutive_high_load FROM nodes WHERE node_id = ?",
-            (node_id,),
+            q("SELECT node_id, status, available, capabilities, first_heartbeat_seen, "
+            "consecutive_high_load FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         if not row:
             return False
@@ -230,7 +228,7 @@ def heartbeat(
 
         params.append(node_id)
         sql = f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?"
-        conn.execute(sql, params)
+        conn.execute(q(sql, params))
         conn.commit()
     finally:
         conn.close()
@@ -286,16 +284,15 @@ def list_nodes(status: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if status and status.lower() != "all":
             rows = conn.execute(
-                "SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
+                q("SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
                 "available, last_seen, registered_at, status, role "
-                "FROM nodes WHERE status = ? ORDER BY registered_at DESC",
-                (status,),
+                "FROM nodes WHERE status = ? ORDER BY registered_at DESC", (status,)),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
+                q("SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
                 "available, last_seen, registered_at, status, role "
-                "FROM nodes ORDER BY registered_at DESC"
+                "FROM nodes ORDER BY registered_at DESC")
             ).fetchall()
 
         return [_node_row_to_dict(r) for r in rows]
@@ -308,10 +305,9 @@ def get_node(node_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
+            q("SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
             "available, last_seen, registered_at, status, role "
-            "FROM nodes WHERE node_id = ?",
-            (node_id,),
+            "FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         return _node_row_to_dict(row) if row else None
     finally:
@@ -324,15 +320,14 @@ def query_nodes_by_capability(capability: str) -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth,
                    available, last_seen, registered_at, status, role
             FROM nodes
             WHERE status IN ('approved', 'online')
               AND last_seen > ?
             ORDER BY load ASC, queue_depth ASC
-            """,
-            (threshold,),
+            """, (threshold,)),
         ).fetchall()
 
         matching = []
@@ -374,15 +369,14 @@ def get_capabilities(
     conn = get_conn()
     try:
         rows = conn.execute(
-            """
+            q("""
             SELECT node_id, node_name, description, endpoint, capabilities, load,
                    queue_depth, available, last_seen, status, role
             FROM nodes
             WHERE status IN ('approved', 'online')
               AND (last_seen > ? OR available = 0)
             ORDER BY load ASC
-            """,
-            (threshold,),
+            """, (threshold,)),
         ).fetchall()
 
         # Capabilities sammeln: name -> {type, description, version, nodes}
@@ -395,10 +389,9 @@ def get_capabilities(
             # which only contains capabilities confirmed by a heartbeat
             # (sync_node_capabilities does DELETE+INSERT on every replace).
             nc_rows = conn.execute(
-                "SELECT capability_name, capability_type, capability_version, "
+                q("SELECT capability_name, capability_type, capability_version, "
                 "description, input_schema, available "
-                "FROM node_capabilities WHERE node_id = ?",
-                (row["node_id"],),
+                "FROM node_capabilities WHERE node_id = ?", (row["node_id"],)),
             ).fetchall()
 
             if nc_rows:
@@ -546,11 +539,10 @@ def mark_offline_nodes() -> List[str]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            f"""
+            q(f"""
             SELECT node_id FROM nodes
             WHERE status IN ({placeholders}) AND last_seen < ? AND role != 'admin'
-            """,
-            [*live_statuses, threshold],
+            """, [*live_statuses, threshold]),
         ).fetchall()
         candidate_ids = [r["node_id"] for r in rows]
         if not candidate_ids:
@@ -560,19 +552,21 @@ def mark_offline_nodes() -> List[str]:
         # accurate status_changed events after the UPDATE.
         old_status_map: dict[str, str] = {
             nid: conn.execute(
-                "SELECT status FROM nodes WHERE node_id = ?", (nid,)
+                q("SELECT status FROM nodes WHERE node_id = ?", (nid,))
             ).fetchone()["status"]
             for nid in candidate_ids
         }
 
         # Re-check last_seen in the UPDATE to avoid TOCTOU:
         # only mark offline if last_seen is STILL below threshold.
-        conn.executemany(
-            """
+        # SQLAlchemy 2.0: pass a list of param dicts to a single execute()
+        # for executemany semantics (Connection.executemany was removed).
+        conn.execute(
+            q("""
             UPDATE nodes SET status = 'offline', available = 0
             WHERE node_id = ? AND last_seen < ?
-            """,
-            [(nid, threshold) for nid in candidate_ids],
+            """),
+            [{"p0": nid, "p1": threshold} for nid in candidate_ids],
         )
 
         # Determine which nodes were actually updated (the UPDATE may have
@@ -580,7 +574,7 @@ def mark_offline_nodes() -> List[str]:
         offline_ids = [
             nid for nid in candidate_ids
             if conn.execute(
-                "SELECT status FROM nodes WHERE node_id = ?", (nid,)
+                q("SELECT status FROM nodes WHERE node_id = ?", (nid,))
             ).fetchone()["status"] == "offline"
         ]
 
@@ -590,20 +584,18 @@ def mark_offline_nodes() -> List[str]:
         if offline_ids:
             placeholders = ",".join("?" for _ in offline_ids)
             stage_rows = conn.execute(
-                f"SELECT stage_id, task_id FROM task_stages "
-                f"WHERE status = 'claimed' AND claimed_by IN ({placeholders})",
-                offline_ids,
+                q(f"SELECT stage_id, task_id FROM task_stages "
+                f"WHERE status = 'claimed' AND claimed_by IN ({placeholders})", offline_ids),
             ).fetchall()
             now = _format_time(_now())
             for r in stage_rows:
                 conn.execute(
-                    """
+                    q("""
                     UPDATE task_stages
                     SET status = 'failed', claimed_by = NULL, claimed_at = NULL,
                         claim_expires_at = NULL, updated_at = ?
                     WHERE stage_id = ?
-                    """,
-                    (now, r["stage_id"]),
+                    """, (now, r["stage_id"])),
                 )
                 failed_stages.append({"stage_id": r["stage_id"], "task_id": r["task_id"]})
                 affected_tasks.add(r["task_id"])
@@ -612,15 +604,13 @@ def mark_offline_nodes() -> List[str]:
             tasks_failed: list[str] = []
             for task_id in affected_tasks:
                 remaining = conn.execute(
-                    "SELECT COUNT(*) FROM task_stages "
-                    "WHERE task_id = ? AND status NOT IN ('completed', 'failed', 'timed_out')",
-                    (task_id,),
+                    q("SELECT COUNT(*) FROM task_stages "
+                    "WHERE task_id = ? AND status NOT IN ('completed', 'failed', 'timed_out')", (task_id,)),
                 ).fetchone()[0]
                 if remaining == 0:
                     conn.execute(
-                        "UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
-                        "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')",
-                        (now, now, task_id),
+                        q("UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
+                        "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
                     )
                     tasks_failed.append(task_id)
 
@@ -628,7 +618,7 @@ def mark_offline_nodes() -> List[str]:
 
         # T-075: clear routes for offline nodes.
         for nid in offline_ids:
-            conn.execute("DELETE FROM node_routes WHERE node_id = ?", (nid,))
+            conn.execute(q("DELETE FROM node_routes WHERE node_id = ?", (nid,)))
         conn.commit()
 
         for nid in offline_ids:

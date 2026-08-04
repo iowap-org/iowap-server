@@ -13,7 +13,9 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from relay_server.core.db import get_conn, sync_node_capabilities
+import sqlalchemy as sa
+
+from relay_server.core.db import get_conn, sync_node_capabilities, q
 
 NODE_ID_ALPHABET = "ABCDEFGHJKMNPQRTUVWXY346789"
 NODE_ID_LENGTH = 8
@@ -68,7 +70,7 @@ class NodeRegistry:
         conn = get_conn()
         try:
             row = conn.execute(
-                "SELECT 1 FROM nodes WHERE node_id = ?", (normalized,)
+                q("SELECT 1 FROM nodes WHERE node_id = ?", (normalized,))
             ).fetchone()
             return row is not None
         finally:
@@ -131,17 +133,20 @@ class NodeRegistry:
 
                 try:
                     conn.execute(
-                        "INSERT INTO nodes ("
+                        q("INSERT INTO nodes ("
                         "node_id, node_name, endpoint, capabilities, "
                         "last_seen, registered_at, status, role"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (candidate, node_name, endpoint, caps_json, now, now, status, role),
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (candidate, node_name, endpoint, caps_json, now, now, status, role)),
                     )
                     conn.commit()
                     assigned_node_id = candidate
                     return candidate
-                except sqlite3.IntegrityError as exc:
-                    msg = str(exc).lower()
+                except (sqlite3.IntegrityError, sa.exc.IntegrityError) as exc:
+                    # With SQLAlchemy the wrapped DBAPI message is in
+                    # ``exc.orig``; the full ``str(exc)`` also embeds the SQL
+                    # text (which mentions every column), so check the
+                    # concise DBAPI message first.
+                    msg = str(getattr(exc, "orig", exc)).lower() or str(exc).lower()
                     if "node_id" in msg:
                         continue
                     if "node_name" in msg:
@@ -168,10 +173,9 @@ class NodeRegistry:
         conn = get_conn()
         try:
             row = conn.execute(
-                "SELECT node_id, node_name, endpoint, capabilities, "
+                q("SELECT node_id, node_name, endpoint, capabilities, "
                 "status, role, last_seen, registered_at "
-                "FROM nodes WHERE node_id = ?",
-                (normalized,),
+                "FROM nodes WHERE node_id = ?", (normalized,)),
             ).fetchone()
             if row is None:
                 return None
@@ -213,7 +217,7 @@ class NodeRegistry:
 
         conn = get_conn()
         try:
-            rows = conn.execute(query, params).fetchall()
+            rows = conn.execute(q(query, params)).fetchall()
             return [
                 {
                     "node_id": row["node_id"],
