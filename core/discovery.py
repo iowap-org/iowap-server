@@ -208,6 +208,40 @@ def heartbeat(
                     params.append(new_status)
                     status_changed_to = new_status
 
+        # T-113: auto-busy based on queue_depth (GPU-agnostic). A node
+        # with queue_depth >= 1 already has a task in flight (e.g. a GPU
+        # job saturating the GPU while CPU load stays low), so it is busy
+        # regardless of load. This is a stronger, immediate signal than
+        # the load-based counter — an AI/ML node running one FLUX job
+        # must not be handed a second job just because its CPU is idle.
+        if queue_depth is not None:
+            busy_from_queue = queue_depth >= 1
+            if (
+                busy_from_queue
+                and new_status in ("online", "idle", "approved")
+                and status is None
+            ):
+                new_status = "busy"
+                updates.append("status = ?")
+                params.append(new_status)
+                status_changed_to = new_status
+            elif (
+                not busy_from_queue
+                and new_status == "busy"
+                and status is None
+                and queue_depth == 0
+                and consecutive_high_load == 0
+            ):
+                # Queue drained AND load is low (no load-based busy
+                # pending) and the node did not explicitly request busy
+                # → revert to idle. The load-based revert above already
+                # handles the CPU-only case; this covers a node that was
+                # marked busy solely by queue_depth.
+                new_status = "idle"
+                updates.append("status = ?")
+                params.append(new_status)
+                status_changed_to = new_status
+
         # If the node was marked offline, bring it back online.
         # Also transition from approved → online on any heartbeat so a
         # freshly approved node doesn't stay approved forever.
