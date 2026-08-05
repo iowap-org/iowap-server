@@ -9,7 +9,10 @@ module-level :func:`get_conn` / :func:`init_db` wrappers which delegate to it).
 Currently supported backends:
 
 * ``sqlite``  (default, fully implemented — :class:`SqliteDatabase`)
-* ``postgres`` (stub, raises ``NotImplementedError`` — :class:`PostgresDatabase`)
+* ``postgres`` (implemented + live-tested — :class:`PostgresDatabase` in
+  ``db_postgres.py``, SQLAlchemy Core engine with connection pooling; DSN
+  ``postgresql+psycopg://user:pass@host:5432/relay`` via ``settings.pg_dsn``,
+  T-110)
 * ``mariadb`` (stub, raises ``NotImplementedError`` — :class:`MariadbDatabase`)
 
 T-110: ``SqliteDatabase`` is now backed by a SQLAlchemy Core engine. The
