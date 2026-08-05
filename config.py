@@ -50,6 +50,11 @@ class Settings(BaseSettings):
 
     # Dashboard session cookie
     session_secret: Optional[str] = None
+    # T-116: optional deterministic master admin seed (RELAY_MASTER_SEED).
+    # When set and no master seed exists yet, init_master_seed() uses it as-is
+    # instead of generating a random secret — lets Docker/NAS setups pin the
+    # seed in .env rather than fishing it from container logs.
+    master_seed: Optional[str] = None
     enable_master_seed_login: bool = False
     session_cookie_secure: bool = True
 

@@ -186,7 +186,7 @@ def init_master_seed() -> Optional[str]:
         if row:
             return None
 
-        secret = generate_secret(ADMIN_SEED_PREFIX)
+        secret = settings.master_seed or generate_secret(ADMIN_SEED_PREFIX)
         secret_hash = hash_secret(secret)
         now = _format_time(_now())
         conn.execute(
