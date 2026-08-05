@@ -89,6 +89,82 @@
     host.innerHTML = lines.join("");
   }
 
+  function fmtDuration(seconds) {
+    if (seconds === null || seconds === undefined) return "—";
+    if (seconds < 1) return Math.round(seconds * 1000) + "ms";
+    if (seconds < 60) return Math.round(seconds) + "s";
+    var m = Math.floor(seconds / 60);
+    var s = Math.round(seconds % 60);
+    return m + "m " + s + "s";
+  }
+
+  function renderLatency(latency) {
+    var host = document.getElementById("latencyCards");
+    if (!host) return;
+    // latency: { relay_stage_duration_seconds: {buckets, sum, count}, ... }
+    var names = ["relay_stage_duration_seconds", "relay_claim_duration_seconds", "relay_task_duration_seconds"];
+    var cards = [];
+    names.forEach(function (name) {
+      var h = latency && latency[name];
+      if (!h) return;
+      // Approximate p50 from buckets: find the bucket where cumulative count >= half.
+      var half = h.count / 2;
+      var p50 = null;
+      var ordered = Object.keys(h.buckets).map(Number).sort(function (a, b) { return a - b; });
+      for (var i = 0; i < ordered.length; i++) {
+        if (h.buckets[String(ordered[i])] >= half) { p50 = ordered[i]; break; }
+      }
+      var label = name.replace("relay_", "").replace("_seconds", "").replace(/_/g, " ");
+      cards.push({
+        label: label,
+        value: fmtDuration(p50),
+        sub: h.count + " obs",
+      });
+    });
+    if (cards.length === 0) {
+      host.innerHTML = '<div class="empty-hint">No completed tasks yet.</div>';
+      return;
+    }
+    host.innerHTML = cards.map(function (c) {
+      return '<div class="metric-card"><div class="label">' + c.label + '</div>'
+        + '<div class="value">' + c.value + '</div>'
+        + '<div class="empty-hint">' + c.sub + '</div></div>';
+    }).join("");
+  }
+
+  function renderRetry(retry) {
+    var host = document.getElementById("retryBars");
+    if (!host) return;
+    if (!retry || !retry.total) {
+      host.innerHTML = '<div class="empty-hint">No completed stages yet.</div>';
+      return;
+    }
+    var pct = Math.round((retry.retried / retry.total) * 100);
+    host.innerHTML = '<div class="bar-row">'
+      + '<div class="bar-label">Retried</div>'
+      + '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>'
+      + '<div class="bar-value">' + retry.retried + ' / ' + retry.total + ' (' + pct + '%)</div>'
+      + '</div>';
+  }
+
+  function renderNodes(nodes) {
+    var host = document.getElementById("nodeList");
+    if (!host) return;
+    if (!nodes || nodes.length === 0) {
+      host.innerHTML = '<div class="empty-hint">No nodes registered.</div>';
+      return;
+    }
+    var rows = nodes.map(function (n) {
+      var color = n.online ? "var(--ok)" : "var(--muted)";
+      return '<div class="bar-row">'
+        + '<div class="bar-label" style="color:' + color + '">' + n.node_name + '</div>'
+        + '<div class="bar-track"><div class="bar-fill" style="width:' + Math.min(100, n.load) + '%;background:var(--ok)"></div></div>'
+        + '<div class="bar-value">' + n.load + '% · q' + n.queue_depth + '</div>'
+        + '</div>';
+    }).join("");
+    host.innerHTML = rows;
+  }
+
   function updateLastUpdated(ts) {
     var el = document.getElementById("lastUpdated");
     if (!el) return;
@@ -106,6 +182,9 @@
       })
       .then(function (data) {
         renderCards(data);
+        renderLatency(data.latency);
+        renderRetry(data.retry);
+        renderNodes(data.nodes);
         renderBars("tasksBars", data.tasks_by_status);
         renderBars("stagesBars", data.stages_by_status);
         renderCounters(data.counters);
