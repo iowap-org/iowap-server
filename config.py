@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     class Config:
         env_prefix = "RELAY_"
         env_file = ".env"
+        # Ignore unknown env vars (e.g. POSTGRES_USER/POSTGRES_DB from the
+        # docker .env) instead of failing validation. The relay only reads
+        # RELAY_-prefixed vars; unrelated vars must not crash startup.
+        extra = "ignore"
 
 
 def _load_yaml_config(path: Optional[Path]) -> dict:
