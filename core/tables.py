@@ -160,6 +160,13 @@ node_capabilities = sa.Table(
 )
 
 # T-075: dynamic node routes — API endpoints declared by nodes.
+# T-123: ``expires_at`` + ``channel_id`` carry temporary bridge routes.
+# ``expires_at IS NULL``  → a permanent heartbeat route (replaced on every
+# heartbeat via ``_sync_node_routes``). ``expires_at`` non-null → a
+# temporary bridge route registered via ``POST /node-routes/register`` (T-124)
+# with a TTL; it is reaped by ``temp_route_cleanup`` (T-125) once it expires.
+# ``channel_id`` ties a temp route to the upload/download channel that
+# created it and is required for temp routes (NULL for heartbeat routes).
 node_routes = sa.Table(
     "node_routes", metadata,
     sa.Column("node_id", sa.String(64), nullable=False),
@@ -168,6 +175,8 @@ node_routes = sa.Table(
     sa.Column("auth", sa.String(32), nullable=False, default="session"),
     sa.Column("upstream", sa.String(512), nullable=False),
     sa.Column("description", sa.Text, default=""),
+    sa.Column("expires_at", sa.String(64), nullable=True),
+    sa.Column("channel_id", sa.String(64), nullable=True),
     sa.PrimaryKeyConstraint("node_id", "path", "method"),
     sa.ForeignKeyConstraint(["node_id"], ["nodes.node_id"], ondelete="CASCADE"),
 )

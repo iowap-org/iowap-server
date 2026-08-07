@@ -16,6 +16,7 @@ Registrierte Tasks (Default-Intervalle siehe :meth:`register_defaults`):
 * ``chunked_upload_cleanup``    — :meth:`ChunkedUploadManager.prune_stale`
 * ``orphaned_stage_cleanup``    — :meth:`relay_server.core.scheduler.Scheduler.fail_orphaned_stages` (T-063)
 * ``db_vacuum``                 — WAL-Checkpoint + ``VACUUM`` (1x täglich)
+* ``temp_route_cleanup``        — reap expired temp bridge routes (T-125)
 """
 
 from __future__ import annotations
@@ -123,6 +124,33 @@ def _ssn_auto_approve() -> Dict[str, Any]:
         if approve_node(node_id) is not None:
             approved += 1
     return {"approved": approved}
+
+
+def _temp_route_cleanup() -> Dict[str, Any]:
+    """Reap expired temporary bridge routes (T-125).
+
+    A temp route carries an ``expires_at`` ISO-8601 timestamp and a
+    non-null ``channel_id``. Permanent heartbeat routes have
+    ``expires_at IS NULL`` and are never touched here. We delete every
+    row whose ``expires_at`` is in the past so a dead upload/download
+    channel is cleaned up shortly after its TTL lapses (the proxy also
+    treats expired rows as 404 on lookup via :func:`_expired`).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_conn()
+    try:
+        deleted = conn.execute(
+            q(
+                "DELETE FROM node_routes "
+                "WHERE expires_at IS NOT NULL AND channel_id IS NOT NULL "
+                "AND expires_at < ?",
+                (now,),
+            )
+        ).rowcount
+        conn.commit()
+        return {"deleted": deleted}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +322,15 @@ class MaintenanceScheduler:
 
         # DB VACUUM — einmal pro Tag.
         self.register("db_vacuum", _db_vacuum, settings.db_vacuum_interval_seconds)
+
+        # T-125: temp bridge route cleanup — reaps expired rows in
+        # ``node_routes`` (expires_at < now AND channel_id IS NOT NULL).
+        # Permanent heartbeat routes (expires_at IS NULL) are left alone.
+        self.register(
+            "temp_route_cleanup",
+            _temp_route_cleanup,
+            settings.temp_route_cleanup_interval_seconds,
+        )
 
         # SSN auto-approve (T-069) — only registered when ssn_enabled and
         # ssn_auto_approve are both on. Approves pending SSN registrations

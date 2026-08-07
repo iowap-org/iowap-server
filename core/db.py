@@ -805,6 +805,27 @@ def _run_migrations(conn: DBConn) -> None:
                 "ALTER TABLE node_capabilities ADD COLUMN input_schema TEXT"
             )
 
+    # T-123: ensure node_routes has the expires_at + channel_id columns
+    # (migration for existing databases). Both are nullable so existing
+    # permanent heartbeat routes (expires_at IS NULL) keep working
+    # unchanged. New temp bridge routes register with a TTL via T-124.
+    if "node_routes" in table_names:
+        nr_cols = _column_names(conn, "node_routes")
+        if "expires_at" not in nr_cols:
+            _exec(conn,
+                "ALTER TABLE node_routes ADD COLUMN expires_at TEXT"
+            )
+        if "channel_id" not in nr_cols:
+            _exec(conn,
+                "ALTER TABLE node_routes ADD COLUMN channel_id TEXT"
+            )
+        # Index the channel_id for the temp-route lookup path so a node
+        # can resolve a route by channel without a full scan.
+        _exec(conn,
+            "CREATE INDEX IF NOT EXISTS idx_node_routes_channel "
+            "ON node_routes(channel_id) WHERE channel_id IS NOT NULL"
+        )
+
     # T-026: backfill node_capabilities from the legacy JSON column for
     # existing databases. Runs once when the table is empty but nodes exist.
     _migrate_node_capabilities(conn)

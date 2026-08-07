@@ -47,10 +47,20 @@ def _node_timeout_threshold() -> datetime:
 
 
 def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
-    """Replace all routes for a node (T-075). Called on each heartbeat."""
+    """Replace all *permanent* routes for a node (T-075). Called on each heartbeat.
+
+    T-123: only permanent heartbeat routes (``expires_at IS NULL``) are
+    replaced here. Temporary bridge routes registered via T-124 carry
+    an ``expires_at`` TTL and a ``channel_id``; they must survive the
+    node's next heartbeat so an in-flight upload/download channel keeps
+    working while the node is busy. We delete only the permanent rows
+    (``expires_at IS NULL``) before re-inserting the declared set.
+    """
     conn = get_conn()
     try:
-        conn.execute(q("DELETE FROM node_routes WHERE node_id = ?", (node_id,)))
+        conn.execute(
+            q("DELETE FROM node_routes WHERE node_id = ? AND expires_at IS NULL", (node_id,))
+        )
         for route in routes:
             conn.execute(
                 q("INSERT INTO node_routes (node_id, path, method, auth, upstream, description) "

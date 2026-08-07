@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     artifact_cleanup_max_age_days: float = 7.0
     orphaned_stage_interval_seconds: int = 300
     db_vacuum_interval_seconds: int = 86400
+    # T-125: how often ``temp_route_cleanup`` sweeps expired temp bridge
+    # routes from ``node_routes``. Permanent heartbeat routes
+    # (``expires_at IS NULL``) are never touched by the sweep.
+    temp_route_cleanup_interval_seconds: int = 300
+    # T-124: maximum TTL a node may request when registering a temporary
+    # bridge route via ``POST /node-routes/register``. 24h keeps a long
+    # upload/download channel alive without letting stale routes
+    # accumulate indefinitely.
+    temp_route_max_ttl_seconds: int = 86400
 
     # Capabilities
     capabilities_config_path: Path = Path.home() / ".relay" / "capabilities.yaml"
