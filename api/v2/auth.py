@@ -246,7 +246,11 @@ async def auth_refresh(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid registration secret",
                 )
-            if row["status"] != "approved":
+            # T-137: An offline node with a valid fresh registration secret may
+            # recover its runtime token. "offline" is not a security reduction —
+            # the node cannot claim until it heartbeats back online. Only
+            # "pending" (not yet admin-approved) stays blocked.
+            if row["status"] == "pending":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Node not approved",
