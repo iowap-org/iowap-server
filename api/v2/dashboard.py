@@ -585,6 +585,7 @@ async def dashboard_task_submit(
     Returns the same response as ``POST /relay/v2/scheduler/task-simple``.
     """
     check_dashboard_permission(ctx, "dashboard:view")
+    _verify_csrf(request)
     body = await request.json()
     capability = body.get("capability")
     payload = body.get("payload", {})

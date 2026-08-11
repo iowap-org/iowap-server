@@ -282,6 +282,12 @@ async def _security_headers_middleware(request, call_next):
     else:
         for name, value in _SECURITY_HEADERS.items():
             response.headers[name] = value
+        # HSTS only makes sense when the relay terminates TLS itself; in the
+        # Homelab default (plain HTTP over Tailscale/WireGuard) it would
+        # break the connection. Emit it only when TLS is active (S4, Claude
+        # review 2026-08-11).
+        if settings.tls_certfile:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 

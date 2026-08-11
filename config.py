@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     static_dir: Optional[Path] = None
 
     # Database backend selection (pluggable abstraction).
-    # ``sqlite`` is the default; ``postgres`` and ``mariadb`` are stubs whose
-    # full implementation is deferred. DSNs are only consulted when the
+    # ``sqlite`` is the default; ``postgres`` is fully implemented
+    # (SQLAlchemy engine + migrations); ``mariadb`` is a stub whose
+    # implementation is deferred. DSNs are only consulted when the
     # matching ``db_type`` is active.
     db_type: Literal["sqlite", "postgres", "mariadb"] = "sqlite"
     pg_dsn: str = ""

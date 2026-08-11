@@ -341,8 +341,13 @@ def set_group_permissions(group_id: str, permission_names: List[str]) -> None:
 
 
 def set_user_password(user_id: str, password: str) -> None:
-    if len(password) < 8:
-        raise ValueError("Password must be at least 8 characters")
+    # Same policy as create_user / change_user_password: an admin reset
+    # must not be able to assign a password the user could not set
+    # themselves (S3, Claude review 2026-08-11).
+    if len(password) < 12:
+        raise ValueError("Password must be at least 12 characters")
+    if _is_common_password(password):
+        raise ValueError("Password is too common")
     conn = get_conn()
     try:
         password_hash = _hash_password(password)
