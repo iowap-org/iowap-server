@@ -99,51 +99,67 @@ async def proxy_node_route(
 
     # Proxy the request to the upstream.
     upstream = route["upstream"]
+    client: httpx.AsyncClient | None = None
     try:
         # T-129: stream the request body and the upstream response chunkwise
         # so large files (bridge upload/download) never sit fully in RAM.
         # ``request.stream()`` yields the body in chunks; ``client.send``
         # with ``stream=True`` keeps the upstream response lazy so we can
         # forward it via ``StreamingResponse`` instead of ``resp.content``.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None)) as client:
-            # T-157: only stream a request body for methods that carry one.
-            # `request.stream()` on a GET/HEAD yields an empty ASGI receive
-            # generator that httpx cannot iterate — it aborts the upstream
-            # response read with httpx.ReadError, so the caller sees a
-            # Content-Length header but an empty body ("Response content
-            # shorter than Content-Length"). Pass content only for
-            # body-capable methods; GET/HEAD get none.
-            kwargs = {}
-            if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-                kwargs["content"] = request.stream()
-            req = client.build_request(
-                method=request.method,
-                url=upstream,
-                headers=_forward_headers(request),
-                **kwargs,
-            )
-            resp = await client.send(req, stream=True)
+        #
+        # T-157: the AsyncClient must NOT live in an `async with` around this
+        # whole function. A `return` inside an `async with` triggers `__aexit__`
+        # immediately, closing the client (and the TCP connection to the
+        # upstream) *before* Starlette has iterated the StreamingResponse
+        # generator. For a chunked file stream that aborts mid-read →
+        # httpx.ReadError / empty body despite a correct Content-Length.
+        # So we keep the client open, hand it to the response generator, and
+        # close it there (response first, then client) only after streaming.
+        client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
+        # T-157b: only stream a request body for methods that carry one.
+        # `request.stream()` on a GET/HEAD yields an empty ASGI receive
+        # generator that httpx cannot iterate — it aborts the upstream
+        # response read. Pass content only for body-capable methods.
+        kwargs = {}
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            kwargs["content"] = request.stream()
+        req = client.build_request(
+            method=request.method,
+            url=upstream,
+            headers=_forward_headers(request),
+            **kwargs,
+        )
+        resp = await client.send(req, stream=True)
 
-            # Consume the upstream response lazily: forward status, headers
-            # and the chunked body to the caller without buffering it.
-            async def _upstream_bytes():
-                try:
-                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
-                        yield chunk
-                finally:
-                    await resp.aclose()
+        # Consume the upstream response lazily: forward status, headers
+        # and the chunked body to the caller without buffering it.
+        async def _upstream_bytes():
+            try:
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+            finally:
+                # T-157: close response first, then client — AFTER the whole
+                # stream has been delivered to the caller. Closing the client
+                # here (not at `return`) keeps the upstream connection alive
+                # for the full duration of the stream.
+                await resp.aclose()
+                await client.aclose()
 
-            return StreamingResponse(
-                _upstream_bytes(),
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type"),
-                headers={
-                    k: v
-                    for k, v in resp.headers.items()
-                    if k.lower() not in ("content-encoding", "transfer-encoding", "connection")
-                },
-            )
+        return StreamingResponse(
+            _upstream_bytes(),
+            status_code=resp.status_code,
+            media_type=resp.headers.get("content-type"),
+            headers={
+                k: v
+                for k, v in resp.headers.items()
+                if k.lower() not in ("content-encoding", "transfer-encoding", "connection")
+            },
+        )
     except httpx.RequestError as e:
+        # T-157: if the client was created but send() raised (connection
+        # error), close it so we don't leak a connection per failed request.
+        if client is not None:
+            await client.aclose()
         logger.warning(
             "Node route proxy error: %s %s -> %s: %s", request.method, request.url.path, upstream, e
         )
