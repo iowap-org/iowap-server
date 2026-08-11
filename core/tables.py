@@ -235,6 +235,8 @@ task_stages = sa.Table(
     sa.Column("created_at", sa.String(64), nullable=False),
     sa.Column("updated_at", sa.String(64), nullable=False),
     sa.Column("retry_count", sa.Integer, default=0),
+    sa.Column("last_note_at", sa.String(64), nullable=True),
+    sa.Column("longrun_ttl_expires_at", sa.String(64), nullable=True),
     sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"]),
     sa.ForeignKeyConstraint(["claimed_by"], ["nodes.node_id"]),
 )
@@ -263,6 +265,7 @@ task_notes = sa.Table(
     sa.Column("task_id", sa.String(64), nullable=False),
     sa.Column("node_id", sa.String(64), nullable=False),
     sa.Column("message", sa.Text, nullable=False),
+    sa.Column("kind", sa.String(32), default="info"),
     sa.Column("created_at", sa.String(64), nullable=True),
     sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"], ondelete="CASCADE"),
 )

@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # Scheduler
     default_timeout_seconds: int = 300
     max_retries: int = 2
+    # T-154: Long-Run lease. A `longrun`-note switches the stage to
+    # accepted and starts this TTL; every note (any kind) resets it.
+    # When it expires the stage becomes orphaned. After orphaned_ttl_seconds
+    # as orphaned, the stage fails (24h Failsafe).
+    longrun_ttl_seconds: int = 2 * 3600  # 2h
+    orphaned_ttl_seconds: int = 24 * 3600  # 24h
+    node_offline_grace_seconds: int = 600  # 10 min offline → fail
 
     # T-081: auto-busy — number of consecutive heartbeats a node's load
     # must stay at or above its load_cap before the server transitions

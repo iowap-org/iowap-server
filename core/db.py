@@ -753,6 +753,27 @@ def _run_migrations(conn: DBConn) -> None:
             "CREATE INDEX IF NOT EXISTS idx_task_notes_task_id ON task_notes(task_id)"
         )
 
+    # T-154: task_notes kind column (longrun/progress/info). Additive;
+    # existing notes default to 'info' (no semantic meaning for the relay).
+    notes_cols = _column_names(conn, "task_notes")
+    if "kind" not in notes_cols:
+        _exec(conn,
+            "ALTER TABLE task_notes ADD COLUMN kind TEXT DEFAULT 'info'"
+        )
+
+    # T-154: task_stages last_note_at + longrun_ttl_expires_at for the
+    # Long-Run lease. claimed_by stays the owner; these track the note-based
+    # heartbeat TTL instead of the static claimed_at+timeout_seconds.
+    ts_cols2 = _column_names(conn, "task_stages")
+    if "last_note_at" not in ts_cols2:
+        _exec(conn,
+            "ALTER TABLE task_stages ADD COLUMN last_note_at TEXT"
+        )
+    if "longrun_ttl_expires_at" not in ts_cols2:
+        _exec(conn,
+            "ALTER TABLE task_stages ADD COLUMN longrun_ttl_expires_at TEXT"
+        )
+
     # T-060: ensure task_stages has the retry_count column (migration for
     # existing databases). The scheduler increments this counter each
     # time a claim is released back to pending, and fails the stage once

@@ -81,7 +81,7 @@ async def scheduler_add_note(
     that subsequently queries the task via ``GET /tasks/{task_id}``.
     Returns ``404`` when the task does not exist.
     """
-    result = Scheduler.add_note(task_id=task_id, node_id=ctx.node_id, message=body.message)
+    result = Scheduler.add_note(task_id=task_id, node_id=ctx.node_id, message=body.message, kind=body.kind)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return result

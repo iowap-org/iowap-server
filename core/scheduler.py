@@ -5,7 +5,7 @@ import json
 import secrets
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import sqlalchemy as sa
@@ -214,7 +214,7 @@ class Scheduler:
 
             # T-052: load notes attached to the task (mini-chat).
             note_rows = conn.execute(
-                q("SELECT id, node_id, message, created_at FROM task_notes "
+                q("SELECT id, node_id, message, kind, created_at FROM task_notes "
                 "WHERE task_id = ? ORDER BY created_at ASC", (task_id,)),
             ).fetchall()
             task["notes"] = [
@@ -222,6 +222,7 @@ class Scheduler:
                     "id": r["id"],
                     "node_id": r["node_id"],
                     "message": r["message"],
+                    "kind": r["kind"] or "info",
                     "created_at": r["created_at"],
                 }
                 for r in note_rows
@@ -407,10 +408,16 @@ class Scheduler:
 
     @staticmethod
     @_retry_db_write
-    def add_note(task_id: str, node_id: str, message: str) -> Optional[Dict[str, Any]]:
+    def add_note(task_id: str, node_id: str, message: str, kind: str = "info") -> Optional[Dict[str, Any]]:
         """Append a task note (T-052 mini-chat between nodes).
 
-        Returns ``{"id", "task_id", "node_id", "message", "created_at"}``
+        T-154: ``kind`` drives the Long-Run lease. Every note updates the
+        stage's ``last_note_at`` (note-based heartbeat). A ``kind=longrun``
+        note additionally switches the stage from ``claimed`` to ``accepted``
+        and starts a 2h TTL — the worker signals it will take longer than
+        the normal 300s claim timeout.
+
+        Returns ``{"id", "task_id", "node_id", "message", "kind", "created_at"}``
         on success, or ``None`` when the task does not exist.
         """
         conn = get_conn()
@@ -422,16 +429,50 @@ class Scheduler:
                 return None
             now = _format_time(_now())
             cur = conn.execute(
-                q("INSERT INTO task_notes (task_id, node_id, message, created_at) "
-                "VALUES (?, ?, ?, ?)", (task_id, node_id, message, now)),
+                q("INSERT INTO task_notes (task_id, node_id, message, kind, created_at) "
+                "VALUES (?, ?, ?, ?, ?)", (task_id, node_id, message, kind, now)),
             )
-            conn.commit()
             note_id = cur.lastrowid
+
+            # T-154: update the owning stage's note-based heartbeat TTL.
+            # The task's stage is the one currently claimed by this node.
+            ttl_expires = _format_time(_now() + timedelta(seconds=settings.longrun_ttl_seconds))
+            conn.execute(
+                q(
+                    "UPDATE task_stages SET last_note_at = ?, longrun_ttl_expires_at = ? "
+                    "WHERE task_id = ? AND claimed_by = ?",
+                    (now, ttl_expires, task_id, node_id),
+                ),
+            )
+
+            # kind=longrun: switch the claimed stage to accepted (worker took
+            # over, not re-claimable) so enforce_timeouts does not kill it.
+            if kind == "longrun":
+                conn.execute(
+                    q(
+                        "UPDATE task_stages SET status = 'accepted', updated_at = ? "
+                        "WHERE task_id = ? AND claimed_by = ? AND status = 'claimed'",
+                        (now, task_id, node_id),
+                    ),
+                )
+
+            # T-154: any note from the worker on an orphaned stage signals
+            # the worker is alive again → back to accepted (2h lease restarts).
+            conn.execute(
+                q(
+                    "UPDATE task_stages SET status = 'accepted', updated_at = ? "
+                    "WHERE task_id = ? AND claimed_by = ? AND status = 'orphaned'",
+                    (now, task_id, node_id),
+                ),
+            )
+
+            conn.commit()
             return {
                 "id": note_id,
                 "task_id": task_id,
                 "node_id": node_id,
                 "message": message,
+                "kind": kind,
                 "created_at": now,
             }
         finally:
@@ -446,7 +487,7 @@ class Scheduler:
         conn = get_conn()
         try:
             row = conn.execute(
-                q("SELECT * FROM task_stages WHERE stage_id = ? AND claimed_by = ? AND status = 'claimed'", (stage_id, node_id)),
+                q("SELECT * FROM task_stages WHERE stage_id = ? AND claimed_by = ? AND status IN ('claimed', 'accepted', 'orphaned')", (stage_id, node_id)),
             ).fetchone()
             if not row:
                 return None
@@ -798,6 +839,116 @@ class Scheduler:
 
             return {
                 "stages_failed": failed_stage_ids,
+                "tasks_failed": tasks_failed,
+            }
+        finally:
+            conn.close()
+
+    @staticmethod
+    @_retry_db_write
+    def enforce_longrun_leases() -> Dict[str, Any]:
+        """Enforce the T-154 Long-Run lease on accepted/orphaned stages.
+
+        Rules:
+        * ``accepted`` whose ``longrun_ttl_expires_at < now`` (2h without a
+          note) → ``orphaned`` (not re-claimable, not failed).
+        * ``orphaned`` whose ``last_note_at`` (or claim) is older than
+          ``orphaned_ttl_seconds`` (24h) → ``failed``.
+        * ``accepted``/``orphaned`` whose owning node has been offline
+          longer than ``node_offline_grace_seconds`` (10 min) → ``failed``
+          (a dead node's worker is presumed dead too).
+
+        Returns ``{"accepted_orphaned": [...], "orphaned_failed": [...], "node_failed": [...], "tasks_failed": [...]}``.
+        """
+        now = _format_time(_now())
+        conn = get_conn()
+        try:
+            accepted_orphaned: List[str] = []
+            orphaned_failed: List[str] = []
+            node_failed: List[str] = []
+            affected_tasks: set[str] = set()
+
+            # 1. accepted → orphaned when the 2h lease expired.
+            overdue = conn.execute(
+                q("""
+                SELECT stage_id, task_id FROM task_stages
+                WHERE status = 'accepted'
+                  AND longrun_ttl_expires_at IS NOT NULL
+                  AND longrun_ttl_expires_at < ?
+                """, (now,)),
+            ).fetchall()
+            for r in overdue:
+                conn.execute(
+                    q("UPDATE task_stages SET status = 'orphaned', updated_at = ? WHERE stage_id = ?", (now, r["stage_id"])),
+                )
+                accepted_orphaned.append(r["stage_id"])
+                affected_tasks.add(r["task_id"])
+                event_bus.publish_sync("status_changed", {
+                    "entity_type": "stage", "entity_id": r["stage_id"],
+                    "old_status": "accepted", "new_status": "orphaned",
+                })
+
+            # 2. orphaned → failed when it has been orphaned > 24h.
+            orphan_deadline = _format_time(_now() - timedelta(seconds=settings.orphaned_ttl_seconds))
+            orphan_dead = conn.execute(
+                q("""
+                SELECT stage_id, task_id FROM task_stages
+                WHERE status = 'orphaned'
+                  AND (last_note_at IS NULL OR last_note_at < ?)
+                """, (orphan_deadline,)),
+            ).fetchall()
+            for r in orphan_dead:
+                conn.execute(
+                    q("UPDATE task_stages SET status = 'failed', updated_at = ? WHERE stage_id = ?", (now, r["stage_id"])),
+                )
+                orphaned_failed.append(r["stage_id"])
+                affected_tasks.add(r["task_id"])
+                event_bus.publish_sync("status_changed", {
+                    "entity_type": "stage", "entity_id": r["stage_id"],
+                    "old_status": "orphaned", "new_status": "failed",
+                })
+
+            # 3. accepted/orphaned whose owner node is offline > grace → failed.
+            offline_deadline = _format_time(_now() - timedelta(seconds=settings.node_offline_grace_seconds))
+            claim_statuses = node_claim_statuses()
+            placeholders = ",".join("?" for _ in claim_statuses) or "''"
+            node_dead = conn.execute(
+                q(f"""
+                SELECT ts.stage_id, ts.task_id FROM task_stages ts
+                WHERE ts.status IN ('accepted', 'orphaned')
+                  AND ts.claimed_by IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM nodes n
+                      WHERE n.node_id = ts.claimed_by
+                        AND n.status IN ({placeholders})
+                        AND (n.last_seen IS NULL OR n.last_seen >= ?)
+                  )
+                """, [offline_deadline] + list(claim_statuses)),
+            ).fetchall()
+            for r in node_dead:
+                conn.execute(
+                    q("UPDATE task_stages SET status = 'failed', updated_at = ? WHERE stage_id = ?", (now, r["stage_id"])),
+                )
+                node_failed.append(r["stage_id"])
+                affected_tasks.add(r["task_id"])
+                event_bus.publish_sync("status_changed", {
+                    "entity_type": "stage", "entity_id": r["stage_id"],
+                    "old_status": "accepted_or_orphaned", "new_status": "failed",
+                })
+
+            tasks_failed = []
+            if affected_tasks:
+                tasks_failed = _fail_tasks_if_all_stages_done(
+                    conn, affected_tasks, now, terminal_stage_status=("failed", "timed_out", "cancelled"),
+                )
+                for task_id in tasks_failed:
+                    event_bus.publish_sync("task_failed", {"task_id": task_id, "reason": "longrun"})
+
+            conn.commit()
+            return {
+                "accepted_orphaned": accepted_orphaned,
+                "orphaned_failed": orphaned_failed,
+                "node_failed": node_failed,
                 "tasks_failed": tasks_failed,
             }
         finally:

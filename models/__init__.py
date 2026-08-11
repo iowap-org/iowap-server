@@ -202,6 +202,7 @@ class NoteResponse(BaseModel):
     id: int
     node_id: str
     message: str
+    kind: str = "info"
     created_at: str
 
 
@@ -231,6 +232,7 @@ class NoteRequest(BaseModel):
     """Body for POST /relay/v2/scheduler/tasks/{task_id}/notes (T-052)."""
 
     message: str = Field(..., min_length=1, max_length=2000)
+    kind: str = Field(default="info", description="Note kind: info|progress|longrun (T-154)")
 
 
 class ArtifactUploadResponse(BaseModel):

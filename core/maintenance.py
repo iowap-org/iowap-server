@@ -320,6 +320,14 @@ class MaintenanceScheduler:
             settings.orphaned_stage_interval_seconds,
         )
 
+        # T-154: Long-Run lease watchdog — accepted→orphaned nach 2h ohne Note,
+        # orphaned→failed nach 24h, Node offline 10min → failed.
+        self.register(
+            "longrun_lease_cleanup",
+            Scheduler.enforce_longrun_leases,
+            settings.orphaned_stage_interval_seconds,
+        )
+
         # DB VACUUM — einmal pro Tag.
         self.register("db_vacuum", _db_vacuum, settings.db_vacuum_interval_seconds)
 
