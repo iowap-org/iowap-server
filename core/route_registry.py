@@ -106,11 +106,21 @@ async def proxy_node_route(
         # with ``stream=True`` keeps the upstream response lazy so we can
         # forward it via ``StreamingResponse`` instead of ``resp.content``.
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None)) as client:
+            # T-157: only stream a request body for methods that carry one.
+            # `request.stream()` on a GET/HEAD yields an empty ASGI receive
+            # generator that httpx cannot iterate — it aborts the upstream
+            # response read with httpx.ReadError, so the caller sees a
+            # Content-Length header but an empty body ("Response content
+            # shorter than Content-Length"). Pass content only for
+            # body-capable methods; GET/HEAD get none.
+            kwargs = {}
+            if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+                kwargs["content"] = request.stream()
             req = client.build_request(
                 method=request.method,
                 url=upstream,
                 headers=_forward_headers(request),
-                content=request.stream(),
+                **kwargs,
             )
             resp = await client.send(req, stream=True)
 
