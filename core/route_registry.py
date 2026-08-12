@@ -243,9 +243,10 @@ def _forward_headers(request: Request) -> dict[str, str]:
 
 # Path prefixes under which a node may register a temp bridge route. The
 # storage node uses ``/upload/`` and ``/download/`` channels for large
-# file handoff; we keep the allowlist small so a compromised node cannot
-# shadow arbitrary dashboard routes with temp routes.
-_TEMP_ROUTE_PREFIXES = ("/upload/", "/download/")
+# file handoff, and ``/backup/`` for backup bridge routes (T-158). We keep
+# the allowlist small so a compromised node cannot shadow arbitrary
+# dashboard routes with temp routes.
+_TEMP_ROUTE_PREFIXES = ("/upload/", "/download/", "/backup/")
 
 
 def _normalize_path(path: str) -> str:
