@@ -127,6 +127,36 @@
           <tbody></tbody>
         </table>
       </div>
+
+      <div class="section">
+        <h2>📦 Datei-Übertragung</h2>
+      </div>
+      <div id="transferSection" class="panel">
+        <div id="transferStatus" class="transfer-status"></div>
+        <div class="transfer-sliders">
+          <div class="slider-row">
+            <label for="sliderInline">Inline (base64)</label>
+            <input type="range" id="sliderInline" min="1" max="50" step="1" value="5" />
+            <span id="inlineVal" class="slider-val">5 MB</span>
+            <span class="slider-hint">Datei direkt im Task-Payload (base64). Kleinste Dateien, kein Storage nötig. RAM-lastig beim Handler.</span>
+          </div>
+          <div class="slider-row">
+            <label for="sliderArtifact">Artifact</label>
+            <input type="range" id="sliderArtifact" min="10" max="2048" step="1" value="50" />
+            <span id="artifactVal" class="slider-val">50 MB</span>
+            <span class="slider-hint">Datei in den Relay-Store hochladen, dann Task mit Verweis. Mittlere Dateien. Store ist transient (TTL).</span>
+          </div>
+          <div class="slider-row">
+            <label for="sliderTtl">Artifact-TTL</label>
+            <input type="range" id="sliderTtl" min="1" max="90" step="1" value="7" />
+            <span id="ttlVal" class="slider-val">7 Tage</span>
+            <span class="slider-hint">Wie lange Dateien im Relay-Store bleiben, bevor der Watchdog sie löscht. Der Store ist ein Übertragungs-Puffer, kein Archiv — die dauerhafte Kopie lebt auf dem Storage-Node.</span>
+          </div>
+        </div>
+        <div class="transfer-actions">
+          <button id="btnSaveTransfer" class="btn btn-primary">Speichern</button>
+        </div>
+      </div>
     </div>
   </div>
 

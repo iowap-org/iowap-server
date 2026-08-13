@@ -380,6 +380,8 @@ async function loadAdmin() {
     groupsData = groupsDataRaw.groups || [];
     renderUsers(usersData.users || []);
     renderGroups(groupsData);
+    // T-164/T-165: Datei-Übertragung (Schieberegler + Bridge-Ampel).
+    loadTransferConfig();
   } catch (err) {
     adminMsg("Admin load failed: " + err.message, true);
     console.error(err);
@@ -519,6 +521,78 @@ async function saveGroupPerms() {
     loadAdmin();
   } catch (err) {
     adminMsg("Save permissions failed: " + err.message, true);
+  }
+}
+
+// ===== Datei-Übertragung (T-164/T-165) =================================
+
+function fmtMB(bytes) {
+  if (bytes == null) return "-";
+  if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(1) + " GB";
+  return Math.round(bytes / 1024 / 1024) + " MB";
+}
+
+async function loadTransferConfig() {
+  try {
+    const data = await fetchJson("/relay/v2/dashboard/api/transfer-status");
+    const inlineMB = Math.round((data.max_inline_bytes || 0) / 1024 / 1024);
+    const artifactMB = Math.round((data.max_artifact_bytes || 0) / 1024 / 1024);
+    const ttl = data.artifact_ttl_days || 7;
+
+    document.getElementById("sliderInline").value = inlineMB;
+    document.getElementById("inlineVal").textContent = inlineMB + " MB";
+    document.getElementById("sliderArtifact").value = artifactMB;
+    document.getElementById("artifactVal").textContent = fmtMB(data.max_artifact_bytes);
+    document.getElementById("sliderTtl").value = ttl;
+    document.getElementById("ttlVal").textContent = ttl + " Tage";
+
+    // Bridge-Availability-Ampel
+    const ampel = document.getElementById("transferStatus");
+    const bridgeOk = data.bridge_available;
+    const nodes = (data.bridge_nodes || []).join(", ");
+    ampel.innerHTML = `
+      <div class="ampel ${bridgeOk ? "ampel-ok" : "ampel-bad"}">
+        <span class="ampel-dot"></span>
+        <span class="ampel-text">${bridgeOk ? "Bridge verfügbar" : "Bridge nicht verfügbar"}</span>
+        ${nodes ? `<span class="ampel-nodes">(${escHtml(nodes)})</span>` : ""}
+      </div>
+      <div class="ampel-hint">Bridge verfügbar, wenn ein Storage-Node online ist. Ohne Bridge sind Dateien über artifact-max nicht übertragbar.</div>`;
+  } catch (err) {
+    document.getElementById("transferStatus").innerHTML =
+      `<div class="ampel ampel-bad"><span class="ampel-dot"></span><span class="ampel-text">Transfer-Konfig nicht ladbar: ${escHtml(err.message)}</span></div>`;
+  }
+}
+
+function bindTransferSliders() {
+  const inline = document.getElementById("sliderInline");
+  const artifact = document.getElementById("sliderArtifact");
+  const ttl = document.getElementById("sliderTtl");
+  inline.addEventListener("input", () => {
+    document.getElementById("inlineVal").textContent = inline.value + " MB";
+  });
+  artifact.addEventListener("input", () => {
+    document.getElementById("artifactVal").textContent = fmtMB(artifact.value * 1024 * 1024);
+  });
+  ttl.addEventListener("input", () => {
+    document.getElementById("ttlVal").textContent = ttl.value + " Tage";
+  });
+  document.getElementById("btnSaveTransfer").addEventListener("click", saveTransferConfig);
+}
+
+async function saveTransferConfig() {
+  const inline = document.getElementById("sliderInline").value;
+  const artifact = document.getElementById("sliderArtifact").value;
+  const ttl = document.getElementById("sliderTtl").value;
+  try {
+    await postForm("/relay/v2/dashboard/api/transfer-config", new URLSearchParams({
+      max_inline_bytes: inline,
+      max_artifact_bytes: artifact,
+      artifact_ttl_days: ttl,
+    }));
+    adminMsg("Transfer-Konfig gespeichert.");
+    loadTransferConfig();
+  } catch (err) {
+    adminMsg("Speichern fehlgeschlagen: " + err.message, true);
   }
 }
 
@@ -714,6 +788,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("ssnPageOverlay")?.addEventListener("click", hideSsnPageModal);
   document.querySelector(".close-ssn-page-btn")?.addEventListener("click", hideSsnPageModal);
+
+  // T-164/T-165: Datei-Übertragung — Schieberegler + Bridge-Ampel.
+  bindTransferSliders();
 
   loadMe().then(() => {
     loadAll();
