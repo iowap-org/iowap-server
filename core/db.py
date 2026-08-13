@@ -662,6 +662,20 @@ def _schema(conn: DBConn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
     )
 
+    # T-164/T-165: settings_override — DB-persisted overrides for
+    # transfer-ladder + artifact-TTL config. The YAML/env values remain
+    # the defaults; rows here override them at runtime so the dashboard
+    # can edit them without rewriting config.yaml. (key, value) with key
+    # in {max_inline_bytes, max_artifact_bytes, artifact_ttl_days}.
+    _exec(conn, """
+        CREATE TABLE IF NOT EXISTS settings_override (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT
+        )
+    """)
+
     # --- INDEXES ---
     _exec(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status)")
     _exec(conn, "CREATE INDEX IF NOT EXISTS idx_nodes_capabilities ON nodes(capabilities)")
@@ -825,6 +839,13 @@ def _run_migrations(conn: DBConn) -> None:
             _exec(conn,
                 "ALTER TABLE node_capabilities ADD COLUMN input_schema TEXT"
             )
+        # T-164: upload_modes — JSON-Array der unterstützten Übertragungsmodi
+        # (inline / artifact / bridge). Nullable; Default beim Lesen ist die
+        # volle Treppe [inline, artifact, bridge].
+        if "upload_modes" not in nc_cols:
+            _exec(conn,
+                "ALTER TABLE node_capabilities ADD COLUMN upload_modes TEXT"
+            )
 
     # T-123: ensure node_routes has the expires_at + channel_id columns
     # (migration for existing databases). Both are nullable so existing
@@ -944,21 +965,25 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
+                modes = cap.get("upload_modes")
+                upload_modes = json.dumps(modes) if modes is not None else None
             _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 description, input_schema, available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 description, input_schema, upload_modes, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(node_id, capability_name) DO UPDATE SET
                     capability_type = excluded.capability_type,
                     capability_version = excluded.capability_version,
                     description = excluded.description,
                     input_schema = excluded.input_schema,
+                    upload_modes = excluded.upload_modes,
                     available = excluded.available,
                     updated_at = excluded.updated_at
                 """,
-                (node_id, name, cap_type, version, description, input_schema, available, now),
+                (node_id, name, cap_type, version, description, input_schema,
+                 upload_modes, available, now),
             )
 
 
@@ -1116,6 +1141,9 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
+                # T-164: upload_modes — JSON-Array der Übertragungsmodi.
+                modes = cap.get("upload_modes")
+                upload_modes = json.dumps(modes) if modes is not None else None
             else:
                 name = str(cap)
                 cap_type = None
@@ -1123,14 +1151,16 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 available = 1
                 description = None
                 input_schema = None
+                upload_modes = None
             _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 description, input_schema, available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 description, input_schema, upload_modes, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (node_id, name, cap_type, version, description, input_schema, available, now),
+                (node_id, name, cap_type, version, description, input_schema,
+                 upload_modes, available, now),
             )
         conn.commit()
     finally:
@@ -1200,18 +1230,23 @@ def get_capability_details(
 
     Returns ``None`` when the capability is unknown. ``input_schema`` is
     parsed from JSON; if parsing fails it is returned as ``None``.
+
+    T-164: ``upload_modes`` (inline / artifact / bridge) wird mitgeliefert,
+    damit die node-cli bei ``file send``/``file get`` den passenden
+    Übertragungsmodus wählen kann. Default ist die volle Treppe, wenn die
+    Spalte null ist.
     """
     import json as _json
 
     if node_id is not None:
         sql = (
-            "SELECT capability_name, capability_type, description, input_schema "
+            "SELECT capability_name, capability_type, description, input_schema, upload_modes "
             "FROM node_capabilities WHERE node_id = ? AND capability_name = ?"
         )
         params: tuple = (node_id, capability_name)
     else:
         sql = (
-            "SELECT capability_name, capability_type, description, input_schema "
+            "SELECT capability_name, capability_type, description, input_schema, upload_modes "
             "FROM node_capabilities WHERE capability_name = ? "
             "ORDER BY description DESC, input_schema DESC LIMIT 1"
         )
@@ -1226,11 +1261,128 @@ def get_capability_details(
             schema = _json.loads(schema_raw) if schema_raw else None
         except Exception:
             schema = None
+        # T-164: upload_modes — Default volle Treppe.
+        upload_modes = ["inline", "artifact", "bridge"]
+        modes_raw = row["upload_modes"] if "upload_modes" in row.keys() else None
+        if modes_raw:
+            try:
+                parsed = _json.loads(modes_raw)
+                if isinstance(parsed, list):
+                    upload_modes = parsed
+            except Exception:
+                pass
         return {
             "name": row["capability_name"],
             "type": row["capability_type"],
             "description": row["description"] or "",
             "input_schema": schema,
+            "upload_modes": upload_modes,
         }
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# settings_override — DB-persisted config overrides (T-164/T-165)
+# ---------------------------------------------------------------------------
+
+# Keys that the dashboard is allowed to override. The ladder constraints
+# (inline < artifact, inline × 1.4 < payload, ttl ≥ 1) are validated by
+# the setter, not by the schema.
+_OVERRIDABLE_KEYS = {"max_inline_bytes", "max_artifact_bytes", "artifact_ttl_days"}
+
+
+def get_settings_overrides() -> dict[str, str]:
+    """Return all ``settings_override`` rows as a ``{key: value}`` dict."""
+    conn = get_conn()
+    try:
+        rows = _exec(conn, "SELECT key, value FROM settings_override").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+    finally:
+        conn.close()
+
+
+def set_settings_override(key: str, value: str, updated_by: Optional[str] = None) -> None:
+    """Insert or update a single ``settings_override`` row.
+
+    Only keys in :data:`_OVERRIDABLE_KEYS` are accepted; unknown keys
+    raise ``ValueError``. The caller is responsible for type-coercing
+    ``value`` before passing it in (we store the canonical string form).
+    """
+    if key not in _OVERRIDABLE_KEYS:
+        raise ValueError(f"setting {key!r} is not overridable")
+    conn = get_conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        _exec(conn,
+            """
+            INSERT INTO settings_override (key, value, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """,
+            (key, str(value), now, updated_by),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_settings_override(key: str) -> bool:
+    """Delete a single ``settings_override`` row. Returns True if a row was removed."""
+    if key not in _OVERRIDABLE_KEYS:
+        raise ValueError(f"setting {key!r} is not overridable")
+    conn = get_conn()
+    try:
+        deleted = _exec(conn, "DELETE FROM settings_override WHERE key = ?", (key,)).rowcount
+        conn.commit()
+        return bool(deleted)
+    finally:
+        conn.close()
+
+
+def apply_settings_overrides() -> None:
+    """Apply DB overrides onto the live ``settings`` object.
+
+    Called at startup (after ``init_db``) and after each dashboard edit.
+    Coerces the stored string back to the field's declared type and
+    re-validates the ladder constraints via the Pydantic validators.
+    """
+    overrides = get_settings_overrides()
+    if not overrides:
+        return
+
+    # Build a merged model_dump from the current settings, apply overrides,
+    # then re-construct Settings so the field_validators run again.
+    current = settings.model_dump()
+    for key, raw in overrides.items():
+        if key not in current:
+            continue
+        # Coerce based on the declared type of the default value.
+        default = current[key]
+        if isinstance(default, bool):
+            current[key] = str(raw).lower() in ("1", "true", "yes")
+        elif isinstance(default, int):
+            try:
+                current[key] = int(raw)
+            except ValueError:
+                continue
+        elif isinstance(default, float):
+            try:
+                current[key] = float(raw)
+            except ValueError:
+                continue
+        else:
+            current[key] = raw
+    # Re-validate through the model so the ladder validators fire.
+    from relay_server.config import Settings
+
+    try:
+        merged = Settings(**current)
+    except Exception:  # noqa: BLE001 — invalid override skipped, keep old
+        return
+    # Mutate the live singleton in place.
+    for key, val in merged.model_dump().items():
+        setattr(settings, key, val)

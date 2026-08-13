@@ -25,7 +25,7 @@ except ImportError:
 from relay_server import __version__
 from relay_server.api.v2 import router as v2_router
 from relay_server.config import settings
-from relay_server.core.db import init_db, q
+from relay_server.core.db import apply_settings_overrides, init_db, q
 from relay_server.core.events import event_bus
 from relay_server.core import metrics as _metrics
 from relay_server.core.logging_setup import JsonFormatter
@@ -74,6 +74,9 @@ async def lifespan(app: FastAPI):
     """Startup / Shutdown hook."""
     logger.info("Initializing database at %s", settings.db_path)
     init_db()
+    # T-164/T-165: apply DB-persisted config overrides (transfer ladder +
+    # artifact TTL) on top of the YAML/env defaults.
+    apply_settings_overrides()
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
     logger.info("AI-Relay-Service v%s starting on %s:%s", __version__, settings.host, settings.port)
 

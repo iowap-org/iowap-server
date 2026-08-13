@@ -350,6 +350,10 @@ class CapabilityStatus(BaseModel):
     type: Optional[str] = None
     description: Optional[str] = None
     input_schema: Optional[dict[str, Any]] = None
+    # T-164: supported file-transfer modes (inline/artifact/bridge). Stored
+    # in node_capabilities.upload_modes so file send/file get can pick the
+    # right rung without an extra discovery round-trip.
+    upload_modes: Optional[list[str]] = None
 
     @model_validator(mode="before")
     @classmethod

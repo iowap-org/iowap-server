@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -63,6 +64,54 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 100 * 1024 * 1024  # 100 MiB
     max_payload_bytes: int = 10 * 1024 * 1024   # 10 MiB — task payload limit
     max_chunk_size: int = 10 * 1024 * 1024  # 10 MiB — per-chunk limit for chunked uploads
+
+    # T-164: Datei-Übertragungs-Treppe (Server-Konfig, node-cli liest sie).
+    # Bis max_inline_bytes wird eine Datei inline (base64) im Task-Payload
+    # übertragen; bis max_artifact_bytes über den transienten Artifact-Store,
+    # darüber per Bridge (Storage-Node). Die node-cli wählt den kleinsten
+    # passenden Modus, den die Capability unterstützt (upload_modes).
+    max_inline_bytes: int = 5 * 1024 * 1024     # 5 MB — bis hier inline (base64)
+    max_artifact_bytes: int = 50 * 1024 * 1024  # 50 MB — bis hier artifact, darüber bridge
+    # T-165: Artifact-Store transient — alle Dateien älter als artifact_ttl_days
+    # werden per Watchdog gelöscht. Der Store ist ein Übertragungs-Puffer,
+    # kein Archiv (die dauerhafte Kopie lebt auf dem Storage-Node).
+    artifact_ttl_days: float = 7.0
+
+    @field_validator("max_inline_bytes", "max_artifact_bytes")
+    @classmethod
+    def _positive_bytes(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be > 0")
+        return v
+
+    @field_validator("max_artifact_bytes")
+    @classmethod
+    def _artifact_gt_inline(cls, v: int, info) -> int:
+        inline = info.data.get("max_inline_bytes")
+        if inline is not None and v <= inline:
+            raise ValueError(
+                f"max_artifact_bytes ({v}) must be > max_inline_bytes ({inline})"
+            )
+        return v
+
+    @field_validator("max_inline_bytes")
+    @classmethod
+    def _inline_fits_payload(cls, v: int, info) -> int:
+        # base64-Overhead ×1.4 — inline muss im Task-Payload Platz haben.
+        payload = info.data.get("max_payload_bytes")
+        if payload is not None and v * 1.4 >= payload:
+            raise ValueError(
+                f"max_inline_bytes ({v}) × 1.4 (base64-Overhead) muss < "
+                f"max_payload_bytes ({payload}) sein"
+            )
+        return v
+
+    @field_validator("artifact_ttl_days")
+    @classmethod
+    def _ttl_positive(cls, v: float) -> float:
+        if v < 1:
+            raise ValueError("artifact_ttl_days must be >= 1")
+        return v
 
     # Scheduler
     default_timeout_seconds: int = 300

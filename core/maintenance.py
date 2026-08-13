@@ -25,7 +25,7 @@ import logging
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 import sqlalchemy as sa
 
@@ -272,10 +272,10 @@ class MaintenanceScheduler:
         ``init_db`` gelaufen ist — und damit Test-Code gezielt einzelne
         Tasks durch Mocks ersetzen kann.
         """
+        from relay_server.core.artifacts import cleanup_expired_artifacts
+        from relay_server.core.chunked_upload import chunked_manager
         from relay_server.core.discovery import mark_offline_nodes
         from relay_server.core.scheduler import Scheduler
-        from relay_server.core.artifacts import cleanup_orphaned_artifacts
-        from relay_server.core.chunked_upload import chunked_manager
 
         # Heartbeat / offline watchdog — kurzes Intervall, da direkt vom
         # heartbeat_timeout_multiplier abgeleitet.
@@ -296,12 +296,13 @@ class MaintenanceScheduler:
         # Token cleanup — einmal pro Stunde.
         self.register("token_cleanup", _purge_expired_tokens, 3600)
 
-        # Artifact cleanup (T-049) — einmal pro Stunde, nur Artifakte
-        # älter als artifact_cleanup_max_age_days.
+        # Artifact cleanup (T-049/T-165) — einmal pro Stunde. T-165 löscht
+        # alle Artifakte älter als artifact_ttl_days (transienter Store),
+        # nicht nur orphaned. Die dauerhafte Kopie lebt auf dem Storage-Node.
         self.register(
             "artifact_cleanup",
-            lambda: cleanup_orphaned_artifacts(
-                max_age_days=settings.artifact_cleanup_max_age_days
+            lambda: cleanup_expired_artifacts(
+                max_age_days=settings.artifact_ttl_days
             ),
             3600,
         )

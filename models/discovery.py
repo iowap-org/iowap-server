@@ -40,6 +40,12 @@ class DiscoveryCapability(BaseModel):
         None,
         description="Input schema for task validation (from capabilities.yaml)",
     )
+    # T-164: unterstützte Übertragungsmodi (inline / artifact / bridge).
+    # Default volle Treppe, wenn die Capability keine upload_modes deklariert.
+    upload_modes: Optional[list[str]] = Field(
+        None,
+        description="Supported file-transfer modes (inline/artifact/bridge).",
+    )
     nodes: list[DiscoveryNode] = Field(default_factory=list)
 
 
@@ -58,4 +64,6 @@ class DiscoveryDetailResponse(BaseModel):
     version: str
     available: bool
     input_schema: Optional[dict[str, Any]] = None
+    # T-164: unterstützte Übertragungsmodi (inline / artifact / bridge).
+    upload_modes: Optional[list[str]] = None
     nodes: list[DiscoveryNode]

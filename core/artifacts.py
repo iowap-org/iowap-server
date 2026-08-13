@@ -212,37 +212,22 @@ def delete_artifact(artifact_id: str) -> bool:
         conn.close()
 
 
-def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
-    """Delete artifacts whose ``task_id`` no longer refers to an existing task (T-049).
+def _delete_artifact_rows(rows, reason: str) -> tuple[int, int]:
+    """Delete artifact files + DB rows for the given result set.
 
-    Only artifacts older than ``max_age_days`` are considered, so recently
-    created artifacts (e.g. during a running task) are never touched even
-    if the task row briefly disappears.
+    Shared helper for ``cleanup_orphaned_artifacts`` (T-049) and
+    ``cleanup_expired_artifacts`` (T-165). ``reason`` is published in the
+    ``artifact_deleted`` event so consumers can distinguish orphaned vs.
+    TTL-expired. File-system errors are logged but do not abort the run —
+    the DB row is removed regardless so a dangling file can be cleaned up
+    by a later ``db_vacuum``.
 
-    Returns ``{"deleted": n, "freed_bytes": m}``. File-system errors are
-    logged but do not abort the run — the DB row is removed regardless so
-    a dangling file can be cleaned up by a later ``db_vacuum``.
+    Returns ``(deleted, freed_bytes)``.
     """
-    from datetime import timedelta
-
-    cutoff = _format_time(_now() - timedelta(days=max_age_days))
-    freed_bytes = 0
-    deleted = 0
-
     conn = get_conn()
     try:
-        rows = conn.execute(
-            q("""
-            SELECT artifact_id, storage_path, size_bytes
-            FROM artifacts
-            WHERE task_id IS NOT NULL
-              AND task_id NOT IN (SELECT task_id FROM tasks)
-              AND created_at < ?
-            """, (cutoff,)),
-        ).fetchall()
-        if not rows:
-            return {"deleted": 0, "freed_bytes": 0}
-
+        deleted = 0
+        freed_bytes = 0
         for row in rows:
             artifact_id = row["artifact_id"]
             path_str = row["storage_path"]
@@ -261,12 +246,77 @@ def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
             freed_bytes += size
             event_bus.publish_sync(
                 "artifact_deleted",
-                {"artifact_id": artifact_id, "reason": "orphaned"},
+                {"artifact_id": artifact_id, "reason": reason},
             )
         conn.commit()
-        return {"deleted": deleted, "freed_bytes": freed_bytes}
+        return deleted, freed_bytes
     finally:
         conn.close()
+
+
+def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
+    """Delete artifacts whose ``task_id`` no longer refers to an existing task (T-049).
+
+    Only artifacts older than ``max_age_days`` are considered, so recently
+    created artifacts (e.g. during a running task) are never touched even
+    if the task row briefly disappears.
+
+    Returns ``{"deleted": n, "freed_bytes": m}``.
+    """
+    from datetime import timedelta
+
+    cutoff = _format_time(_now() - timedelta(days=max_age_days))
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            q("""
+            SELECT artifact_id, storage_path, size_bytes
+            FROM artifacts
+            WHERE task_id IS NOT NULL
+              AND task_id NOT IN (SELECT task_id FROM tasks)
+              AND created_at < ?
+            """, (cutoff,)),
+        ).fetchall()
+        if not rows:
+            return {"deleted": 0, "freed_bytes": 0}
+        rows = list(rows)
+    finally:
+        conn.close()
+    deleted, freed = _delete_artifact_rows(rows, reason="orphaned")
+    return {"deleted": deleted, "freed_bytes": freed}
+
+
+def cleanup_expired_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
+    """Delete ALL artifacts older than ``max_age_days`` (T-165).
+
+    Unlike ``cleanup_orphaned_artifacts`` this does **not** filter on
+    ``task_id`` — every artifact whose ``created_at`` is older than the
+    TTL is removed, regardless of whether the task still exists. The
+    artifact store is a transient transfer buffer, not an archive; the
+    durable copy lives on the storage node. The watchdog
+    (``maintenance.artifact_cleanup``) calls this on its hourly sweep.
+
+    Returns ``{"deleted": n, "freed_bytes": m}``.
+    """
+    from datetime import timedelta
+
+    cutoff = _format_time(_now() - timedelta(days=max_age_days))
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            q("""
+            SELECT artifact_id, storage_path, size_bytes
+            FROM artifacts
+            WHERE created_at < ?
+            """, (cutoff,)),
+        ).fetchall()
+        if not rows:
+            return {"deleted": 0, "freed_bytes": 0}
+        rows = list(rows)
+    finally:
+        conn.close()
+    deleted, freed = _delete_artifact_rows(rows, reason="ttl")
+    return {"deleted": deleted, "freed_bytes": freed}
 
 
 def _artifact_row_to_dict(row: Any) -> Dict[str, Any]:

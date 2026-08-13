@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from relay_server.api.v2.security import get_auth_context
+from relay_server.config import settings
 from relay_server.core.discovery import (
     get_capabilities,
     get_capability_by_name,
@@ -153,3 +154,22 @@ async def get_capability_detail(
     if not cap:
         raise HTTPException(status_code=404, detail=f"Capability '{name}' not found")
     return cap
+
+
+@router.get("/transfer-config")
+async def get_transfer_config(
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """T-164: Datei-Übertragungs-Treppe (Server-Konfig, node-cli liest sie).
+
+    Liefert die Schwellen, anhand derer die node-cli entscheidet, ob eine
+    Datei inline (base64 im Task-Payload), als Artifact (transienter
+    Relay-Store) oder per Bridge (direkt zum Storage-Node) übertragen
+    wird. ``max_payload_bytes`` wird mitgeliefert, damit die node-cli den
+    base64-Overhead prüfen kann.
+    """
+    return {
+        "max_inline_bytes": settings.max_inline_bytes,
+        "max_artifact_bytes": settings.max_artifact_bytes,
+        "max_payload_bytes": settings.max_payload_bytes,
+    }

@@ -571,6 +571,134 @@ async def dashboard_capabilities(
     return {"capabilities": caps}
 
 
+# ---------------------------------------------------------------------------
+# T-164/T-165: transfer-ladder config + bridge-availability ampel
+# ---------------------------------------------------------------------------
+
+
+def _bridge_available() -> tuple[bool, list[str]]:
+    """Return (bridge_available, bridge_node_ids).
+
+    Bridge is available when at least one node is approved/online AND
+    advertises a capability whose ``upload_modes`` contains ``bridge``.
+    """
+    from relay_server.core.discovery import get_capabilities
+
+    caps = get_capabilities(available_only=True)
+    node_ids: set[str] = set()
+    for cap in caps:
+        modes = cap.get("upload_modes") or []
+        if "bridge" not in modes:
+            continue
+        for n in cap.get("nodes", []):
+            if n.get("available"):
+                node_ids.add(n.get("node_id"))
+    return (len(node_ids) > 0, sorted(node_ids))
+
+
+@router.get("/api/transfer-status")
+async def dashboard_transfer_status(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """T-164/T-165: transfer-ladder config + bridge-availability ampel.
+
+    Returns the current ladder thresholds, the artifact TTL and whether a
+    storage node with bridge support is currently online (green/red
+    ampel). Read-only — needs ``dashboard:view``.
+    """
+    check_dashboard_permission(ctx, "dashboard:view")
+    bridge_ok, bridge_nodes = _bridge_available()
+    return {
+        "bridge_available": bridge_ok,
+        "bridge_nodes": bridge_nodes,
+        "max_inline_bytes": settings.max_inline_bytes,
+        "max_artifact_bytes": settings.max_artifact_bytes,
+        "max_payload_bytes": settings.max_payload_bytes,
+        "artifact_ttl_days": settings.artifact_ttl_days,
+    }
+
+
+# Constraints enforced by the sliders (and the POST handler).
+_INLINE_MAX = 50 * 1024 * 1024        # 50 MB upper bound for the inline slider
+_ARTIFACT_MIN = 10 * 1024 * 1024      # 10 MB lower bound for the artifact slider
+_ARTIFACT_MAX = 2 * 1024 * 1024 * 1024  # 2 GB upper bound
+_TTL_MIN = 1.0
+_TTL_MAX = 90.0
+
+
+def _validate_ladder(inline: int, artifact: int, ttl: float) -> None:
+    """Validate the ladder constraints; raise HTTPException 400 on violation."""
+    if inline <= 0:
+        raise HTTPException(400, "max_inline_bytes must be > 0")
+    if inline > _INLINE_MAX:
+        raise HTTPException(400, f"max_inline_bytes must be <= {_INLINE_MAX}")
+    if artifact < _ARTIFACT_MIN:
+        raise HTTPException(400, f"max_artifact_bytes must be >= {_ARTIFACT_MIN}")
+    if artifact > _ARTIFACT_MAX:
+        raise HTTPException(400, f"max_artifact_bytes must be <= {_ARTIFACT_MAX}")
+    if inline >= artifact:
+        raise HTTPException(400, "max_inline_bytes must be < max_artifact_bytes")
+    if inline * 1.4 >= settings.max_payload_bytes:
+        raise HTTPException(
+            400,
+            f"max_inline_bytes × 1.4 (base64-Overhead) must be < "
+            f"max_payload_bytes ({settings.max_payload_bytes})",
+        )
+    if ttl < _TTL_MIN:
+        raise HTTPException(400, f"artifact_ttl_days must be >= {_TTL_MIN}")
+    if ttl > _TTL_MAX:
+        raise HTTPException(400, f"artifact_ttl_days must be <= {_TTL_MAX}")
+
+
+@router.post("/api/transfer-config")
+async def dashboard_set_transfer_config(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """T-164/T-165: edit the transfer-ladder config (sliders in the admin UI).
+
+    Accepts form fields ``max_inline_bytes``, ``max_artifact_bytes`` and
+    ``artifact_ttl_days``. Validates the ladder constraints, persists the
+    overrides to the ``settings_override`` table and applies them to the
+    live ``settings`` object. Requires ``system:config`` + CSRF.
+    """
+    _verify_csrf(request)
+    check_dashboard_permission(ctx, "system:config")
+    from relay_server.core.db import (
+        apply_settings_overrides,
+        log_audit_event,
+        set_settings_override,
+    )
+
+    form = await request.form()
+    inline_raw = form.get("max_inline_bytes")
+    artifact_raw = form.get("max_artifact_bytes")
+    ttl_raw = form.get("artifact_ttl_days")
+
+    # Parse — missing fields keep the current value (no-op for that key).
+    inline = int(inline_raw) if inline_raw not in (None, "") else settings.max_inline_bytes
+    artifact = int(artifact_raw) if artifact_raw not in (None, "") else settings.max_artifact_bytes
+    ttl = float(ttl_raw) if ttl_raw not in (None, "") else settings.artifact_ttl_days
+
+    _validate_ladder(inline, artifact, ttl)
+
+    updated_by = ctx.user_id if hasattr(ctx, "user_id") else None
+    set_settings_override("max_inline_bytes", str(inline), updated_by=updated_by)
+    set_settings_override("max_artifact_bytes", str(artifact), updated_by=updated_by)
+    set_settings_override("artifact_ttl_days", str(ttl), updated_by=updated_by)
+    apply_settings_overrides()
+
+    log_audit_event(
+        actor_id=ctx.user_id if hasattr(ctx, "user_id") else "dashboard",
+        action="transfer_config_update",
+        resource_type="settings",
+        details=f"max_inline_bytes={inline}, max_artifact_bytes={artifact}, artifact_ttl_days={ttl}",
+    )
+    return {"status": "ok", "max_inline_bytes": inline,
+            "max_artifact_bytes": artifact, "artifact_ttl_days": ttl}
+
+
 @router.post("/api/task-submit")
 async def dashboard_task_submit(
     request: Request,

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
-from relay_server.core.db import get_conn, sync_node_capabilities, q
+from relay_server.core.db import get_conn, q, sync_node_capabilities
 from relay_server.core.events import event_bus
 from relay_server.core.status import (
     StatusCategory,
@@ -434,7 +434,7 @@ def get_capabilities(
             # (sync_node_capabilities does DELETE+INSERT on every replace).
             nc_rows = conn.execute(
                 q("SELECT capability_name, capability_type, capability_version, "
-                "description, input_schema, available "
+                "description, input_schema, upload_modes, available "
                 "FROM node_capabilities WHERE node_id = ?", (row["node_id"],)),
             ).fetchall()
 
@@ -457,6 +457,18 @@ def get_capabilities(
                             schema = json.loads(schema_raw)
                         except Exception:
                             schema = None
+                    # T-164: upload_modes aus der Index-Spalte lesen. Default
+                    # ist die volle Treppe, wenn null (alte Daten / nicht
+                    # deklariert) — so bleibt Backcompat erhalten.
+                    upload_modes = ["inline", "artifact", "bridge"]
+                    modes_raw = nc["upload_modes"] if "upload_modes" in nc.keys() else None
+                    if modes_raw:
+                        try:
+                            parsed = json.loads(modes_raw)
+                            if isinstance(parsed, list):
+                                upload_modes = parsed
+                        except Exception:
+                            pass
                     caps.append({
                         "name": nc["capability_name"],
                         "type": nc["capability_type"] or "",
@@ -464,6 +476,7 @@ def get_capabilities(
                         "description": nc["description"] or "",
                         "available": bool(nc["available"]),
                         "input_schema": schema,
+                        "upload_modes": upload_modes,
                         "config": legacy.get("config", {}),
                     })
             else:
@@ -508,6 +521,7 @@ def get_capabilities(
                         "version": cap.get("version", "1.0.0"),
                         "available": node_available,
                         "input_schema": cap.get("input_schema"),
+                        "upload_modes": cap.get("upload_modes"),
                         "nodes": [],
                     }
 
