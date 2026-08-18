@@ -13,7 +13,12 @@ import sqlalchemy as sa
 from relay_server.config import settings
 from relay_server.core.db import get_capability_details, get_conn, get_node_capability_names, q
 from relay_server.core.events import event_bus
-from relay_server.core.status import node_can_claim, node_claim_statuses
+from relay_server.core.status import (
+    StatusCategory,
+    node_can_claim,
+    node_claim_statuses,
+    node_statuses_in_category,
+)
 
 # ---------------------------------------------------------------------------
 # Retry helper for SQLite lock contention
@@ -909,9 +914,18 @@ class Scheduler:
                 })
 
             # 3. accepted/orphaned whose owner node is offline > grace → failed.
+            #    A node is "live" when it is in the AVAILABLE or BUSY category
+            #    (approved/online/idle/busy/maintenance). BUSY matters: T-081/T-113
+            #    auto-transition a node to "busy" while it runs a heavy job (high
+            #    load / queue_depth >= 1), and such a node is NOT offline — it is
+            #    actively working. Using node_claim_statuses() (AVAILABLE only)
+            #    here would wrongly fail accepted stages whose owner is busy.
             offline_deadline = _format_time(_now() - timedelta(seconds=settings.node_offline_grace_seconds))
-            claim_statuses = node_claim_statuses()
-            placeholders = ",".join("?" for _ in claim_statuses) or "''"
+            live_statuses = (
+                node_statuses_in_category(StatusCategory.AVAILABLE)
+                + node_statuses_in_category(StatusCategory.BUSY)
+            )
+            placeholders = ",".join("?" for _ in live_statuses) or "''"
             node_dead = conn.execute(
                 q(f"""
                 SELECT ts.stage_id, ts.task_id FROM task_stages ts
@@ -923,7 +937,7 @@ class Scheduler:
                         AND n.status IN ({placeholders})
                         AND (n.last_seen IS NULL OR n.last_seen >= ?)
                   )
-                """, [offline_deadline] + list(claim_statuses)),
+                """, list(live_statuses) + [offline_deadline]),
             ).fetchall()
             for r in node_dead:
                 conn.execute(
