@@ -577,6 +577,7 @@ def _schema(conn: DBConn) -> None:
             priority INTEGER DEFAULT 0,
             owner_node_id TEXT,
             timeout_seconds INTEGER DEFAULT 300,
+            idempotency_key TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             completed_at TEXT,
@@ -727,6 +728,15 @@ def _run_migrations(conn: DBConn) -> None:
     _exec(conn,
         "CREATE INDEX IF NOT EXISTS idx_node_tokens_lookup ON node_tokens(token_lookup_hash)"
     )
+
+    # T-045: idempotency_key on tasks — enables duplicate suppression on retries.
+    cols = _column_names(conn, "tasks")
+    if "idempotency_key" not in cols:
+        _exec(conn, "ALTER TABLE tasks ADD COLUMN idempotency_key TEXT")
+    _exec(conn, """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency
+        ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL
+    """)
 
     # Ensure audit_logs table exists (migration for existing databases).
     table_names = _table_names(conn)

@@ -227,6 +227,7 @@ async def scheduler_create_simple_task(
         priority=body.priority,
         owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
+        idempotency_key=body.idempotency_key,
     )
 
     task_detail = Scheduler.get_task(result["task_id"])

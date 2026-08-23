@@ -86,21 +86,50 @@ class Scheduler:
         priority: int = 0,
         owner_node_id: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a new task and decompose it into stages."""
+        """Create a new task and decompose it into stages.
+
+        T-045: When ``idempotency_key`` is given and a task with the same
+        key already exists, that existing task is returned unchanged
+        (duplicate suppression on client retries).
+        """
+        # Idempotency check: same key → return existing task.
+        if idempotency_key:
+            conn = get_conn()
+            try:
+                row = conn.execute(
+                    q("SELECT task_id FROM tasks WHERE idempotency_key = ?", (idempotency_key,))
+                ).fetchone()
+            finally:
+                conn.close()
+            if row:
+                return {"task_id": row["task_id"]}
+
         task_id = _generate_id("task")
         now = _format_time(_now())
         default_timeout = timeout_seconds or settings.default_timeout_seconds
 
         conn = get_conn()
         try:
-            conn.execute(
+            try:
+                conn.execute(
                 q("""
                 INSERT INTO tasks (task_id, task_name, status, priority, owner_node_id,
-                                   timeout_seconds, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (task_id, task_name, "pending", priority, owner_node_id, default_timeout, now, now)),
-            )
+                                   timeout_seconds, idempotency_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (task_id, task_name, "pending", priority, owner_node_id, default_timeout, idempotency_key, now, now)),
+                )
+            except sqlite3.IntegrityError:
+                # Lost a race against a concurrent submit with the same key —
+                # return the winner's task instead of failing.
+                if idempotency_key:
+                    row = conn.execute(
+                        q("SELECT task_id FROM tasks WHERE idempotency_key = ?", (idempotency_key,))
+                    ).fetchone()
+                    if row:
+                        return {"task_id": row["task_id"]}
+                raise
 
             # Build stage records.
             stage_records = []
