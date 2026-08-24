@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 router = APIRouter()
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 DOCS_DIR = PROJECT_ROOT / "docs"
 
 # Primary public documents, keyed by their stable short name. The names mirror
