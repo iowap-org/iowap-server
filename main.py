@@ -377,13 +377,17 @@ async def ready():
     from relay_server.core.db import get_conn
 
     db_ok = False
+    conn = None
     try:
         conn = get_conn()
         conn.execute(q("SELECT 1"))
-        conn.close()
         db_ok = True
     except Exception:  # noqa: BLE001
         db_ok = False
+    finally:
+        # T-093: Connection auch bei Exception schließen.
+        if conn is not None:
+            conn.close()
 
     scheduler_age = metrics.maintenance_age_seconds()
     scheduler_ok = scheduler_age is not None and scheduler_age < 30
@@ -391,7 +395,11 @@ async def ready():
         "status": "ready" if (db_ok and scheduler_ok) else "degraded",
         "database": "ok" if db_ok else "error",
         "scheduler": "ok" if scheduler_ok else "unknown" if scheduler_age is None else "stale",
-        "event_bus": "ok" if event_bus.subscriber_count() >= 0 else "error",
+        # T-092: event_bus ist kein Liveness-Indikator für die Task-Verarbeitung —
+        # `subscriber_count() >= 0` ist immer wahr und liefert damit nie "error".
+        # Der in-process Event-Bus registriert sich pro-Start selbst; eine
+        # Subscriber-Zahl sagt nichts über die Relay-Gesundheit aus. Der eigentlich
+        # aussagekräftige Check ist `scheduler_ok` (maintenance loop age).
         "maintenance_age_seconds": scheduler_age,
     }
 
