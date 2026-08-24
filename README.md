@@ -62,10 +62,14 @@ See `docs/server/setup.md` for full reference.
 
 ## Docs
 
+Full documentation in [iowap-org/iowap-docs](https://github.com/iowap-org/iowap-docs):
+
+- `docs/getting-started.md` — first steps
 - `docs/server/setup.md` — full setup guide
 - `docs/server/docker.md` — Docker deployment
-- `docs/api-reference.md` — API reference
-- `docs/concepts.md` — core concepts
+- `docs/reference/api.md` — API reference
+- `docs/server/dashboard.md` — dashboard usage
+- `docs/server/admin.md` — administration
 
 ## License
 
