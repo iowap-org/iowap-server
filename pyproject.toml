@@ -43,6 +43,8 @@ relay-recovery = "relay_server.cli:main"
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["relay_server*"]
+[tool.setuptools]
+packages = ["relay_server"]
+
+[tool.setuptools.package-dir]
+"relay_server" = "."
