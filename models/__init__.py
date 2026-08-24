@@ -1,4 +1,4 @@
-"""Pydantic models for the AI-Relay-Service v2 API."""
+"""Pydantic models for the IOWAP v2 API."""
 
 from __future__ import annotations
 

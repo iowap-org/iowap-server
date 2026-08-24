@@ -1,4 +1,4 @@
-"""AI-Relay-Service — Main Entry Point"""
+"""IOWAP — Main Entry Point"""
 
 import argparse
 import asyncio
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     # artifact TTL) on top of the YAML/env defaults.
     apply_settings_overrides()
     settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("AI-Relay-Service v%s starting on %s:%s", __version__, settings.host, settings.port)
+    logger.info("IOWAP v%s starting on %s:%s", __version__, settings.host, settings.port)
 
     # Enforce a persistent session secret for cookie signing.
     if not settings.session_secret or len(settings.session_secret) < 32:
@@ -134,7 +134,7 @@ async def lifespan(app: FastAPI):
                     logger.info("Maintenance [%s] shutdown run: %s", name, result)
         except Exception as e:  # noqa: BLE001
             logger.warning("Final maintenance sweep failed: %s", e)
-        logger.info("Shutting down AI-Relay-Service")
+        logger.info("Shutting down IOWAP")
 
 
 async def _maintenance_loop(maintenance: MaintenanceScheduler):
@@ -230,7 +230,7 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 
 app = FastAPI(
-    title="AI-Relay-Service",
+    title="IOWAP",
     version=__version__,
     lifespan=lifespan,
 )
@@ -410,7 +410,7 @@ async def metrics_endpoint():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="AI-Relay-Service v2")
+    parser = argparse.ArgumentParser(description="IOWAP v2")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Server command (default)

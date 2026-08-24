@@ -1,4 +1,4 @@
-"""Recovery CLI for AI-Relay-Service.
+"""Recovery CLI for IOWAP.
 
 This tool is intentionally minimal and only touches the local SQLite database.
 It never accepts passwords on the command line to avoid leaking them into
@@ -79,7 +79,7 @@ def _cmd_enable_recovery(args) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="AI-Relay-Service recovery CLI")
+    parser = argparse.ArgumentParser(description="IOWAP recovery CLI")
     parser.add_argument("--db-path", required=True, type=Path, help="Path to the SQLite database file")
     sub = parser.add_subparsers(dest="command", required=True)
 

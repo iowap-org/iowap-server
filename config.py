@@ -1,4 +1,4 @@
-"""Pydantic-Settings for AI-Relay-Service."""
+"""Pydantic-Settings for IOWAP."""
 
 from pathlib import Path
 from typing import Literal, Optional
@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     # SSN (Server-Side Node) — T-069
     ssn_enabled: bool = False
     ssn_auto_approve: bool = True
-    ssn_service_unit: str = "ai-relay-ssn.service"
+    ssn_service_unit: str = "iowap-ssn.service"
     # T-070: directory where the co-located SSN stores capability pages
     # (~/.ssn/pages). The dashboard reads these directly to render the
     # capability-page overview without a round-trip task to the SSN.
