@@ -1,5 +1,5 @@
 [project]
-name = "relay-server"
+name = "iowap-server"
 version = "2.0.0"
 description = "IOWAP Relay Server — API, Scheduler, Auth, Dashboard, Metrics"
 readme = "README.md"
@@ -44,7 +44,8 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["relay_server"]
+package-dir = {"relay_server" = "."}
 
-[tool.setuptools.package-dir]
-"relay_server" = "."
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["relay_server", "relay_server.*"]
