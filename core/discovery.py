@@ -10,6 +10,7 @@ from relay_server.core.events import event_bus
 from relay_server.core.status import (
     StatusCategory,
     node_can_transition,
+    node_live_statuses,
     node_statuses_in_category,
 )
 
@@ -359,16 +360,23 @@ def get_node(node_id: str) -> Optional[Dict[str, Any]]:
 
 
 def query_nodes_by_capability(capability: str) -> List[Dict[str, Any]]:
-    """Return approved, online nodes that advertise a given capability."""
+    """Return live (non-terminal, non-pending) nodes advertising a capability.
+
+    T-171: visibility uses the central registry (all AVAILABLE + BUSY
+    statuses, e.g. idle/maintenance/busy stay listed) instead of the
+    hardcoded 'approved', 'online'. Claim eligibility is enforced
+    separately by the scheduler via :func:`node_can_claim`.
+    """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
+    live = ", ".join(f"'{s}'" for s in node_live_statuses())
     try:
         rows = conn.execute(
-            q("""
-            SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth,
-                   available, last_seen, registered_at, status, role
+            q(f"""
+            SELECT node_id, node_name, description, endpoint, capabilities, load,
+                   queue_depth, available, last_seen, registered_at, status, role
             FROM nodes
-            WHERE status IN ('approved', 'online')
+            WHERE status IN ({live})
               AND last_seen > ?
             ORDER BY load ASC, queue_depth ASC
             """, (threshold,)),
@@ -411,13 +419,15 @@ def get_capabilities(
     """
     threshold = _format_time(_node_timeout_threshold())
     conn = get_conn()
+    # T-171: registry-based visibility, see query_nodes_by_capability.
+    live = ", ".join(f"'{s}'" for s in node_live_statuses())
     try:
         rows = conn.execute(
-            q("""
+            q(f"""
             SELECT node_id, node_name, description, endpoint, capabilities, load,
                    queue_depth, available, last_seen, status, role
             FROM nodes
-            WHERE status IN ('approved', 'online')
+            WHERE status IN ({live})
               AND (last_seen > ? OR available = 0)
             ORDER BY load ASC
             """, (threshold,)),
@@ -590,9 +600,10 @@ def mark_offline_nodes() -> List[str]:
     stage transitioned here.
     """
     threshold = _format_time(_node_timeout_threshold())
-    # AVAILABLE + BUSY node statuses (approved, online, idle, busy, maintenance).
-    live_statuses = node_statuses_in_category(StatusCategory.AVAILABLE) + \
-        node_statuses_in_category(StatusCategory.BUSY)
+    # AVAILABLE + BUSY node statuses (approved, online, idle, busy, maintenance)
+    # via the central registry (T-171: node_live_statuses, same predicate
+    # as discovery — visibility is one question, claimability another).
+    live_statuses = node_live_statuses()
     placeholders = ",".join("?" for _ in live_statuses) or "''"
     conn = get_conn()
     try:

@@ -229,6 +229,20 @@ def node_claim_statuses() -> list[str]:
     return node_statuses_in_category(StatusCategory.AVAILABLE)
 
 
+def node_live_statuses() -> list[str]:
+    """Statuses of nodes that are alive (heartbeat senders): AVAILABLE + BUSY.
+
+    Used for SQL ``IN (...)`` predicates that decide node *visibility*
+    (discovery, offline-marking). Claim eligibility is a separate,
+    stricter question — see :func:`node_can_claim` /
+    :func:`node_claim_statuses`. Includes ``busy`` so an auto-busy
+    node stays visible in discovery instead of dropping off the map,
+    and ``maintenance`` so an admin still sees the node.
+    """
+    return node_statuses_in_category(StatusCategory.AVAILABLE) + \
+        node_statuses_in_category(StatusCategory.BUSY)
+
+
 # ── Dashboard colour mapping ───────────────────────────────────
 
 STATUS_COLORS: Dict[StatusCategory, str] = {
