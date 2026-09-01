@@ -8,10 +8,8 @@ from relay_server.config import settings
 from relay_server.core.db import get_conn, q, sync_node_capabilities
 from relay_server.core.events import event_bus
 from relay_server.core.status import (
-    StatusCategory,
     node_can_transition,
     node_live_statuses,
-    node_statuses_in_category,
 )
 
 
