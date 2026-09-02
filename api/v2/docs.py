@@ -32,6 +32,7 @@ ALLOWED_DOCS = {
     "server-dashboard": DOCS_DIR / "server" / "dashboard.md",
     # node
     "node-setup": DOCS_DIR / "node" / "setup.md",
+    "node-ha": DOCS_DIR / "node" / "ha-node.md",
     "node-cli-reference": DOCS_DIR / "node" / "cli-reference.md",
     "node-capabilities": DOCS_DIR / "node" / "capabilities.md",
     "node-token-lifecycle": DOCS_DIR / "node" / "token-lifecycle.md",
