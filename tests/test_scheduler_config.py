@@ -84,3 +84,19 @@ def test_claim_settings_db_override_rejected_out_of_range():
     set_settings_override("claim_ttl_seconds", "30")
     apply_settings_overrides()
     assert settings.claim_ttl_seconds == 60  # unchanged (default)
+
+
+def test_watchdog_interval_adapts_without_restart():
+    from relay_server.core.maintenance import maintenance_scheduler
+
+    maintenance_scheduler.register_defaults()
+    assert (
+        maintenance_scheduler._tasks["claim_ttl_watchdog"]["interval"]
+        == settings.claim_ttl_seconds
+    )
+
+    set_settings_override("claim_ttl_seconds", "180")
+    apply_settings_overrides()
+    assert settings.claim_ttl_seconds == 180
+    # The watchdog must pick up the new interval WITHOUT a restart.
+    assert maintenance_scheduler._tasks["claim_ttl_watchdog"]["interval"] == 180

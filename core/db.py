@@ -1404,3 +1404,14 @@ def apply_settings_overrides() -> None:
     # Mutate the live singleton in place.
     for key, val in merged.model_dump().items():
         setattr(settings, key, val)
+
+    # T-181: adaptiv — re-register the claim-TTL watchdog with the fresh
+    # interval so a dashboard edit takes effect without a restart. Lazy
+    # import (circular: maintenance imports config/db); skipped silently
+    # when maintenance was never initialized (e.g. unit tests).
+    try:
+        from relay_server.core.maintenance import maintenance_scheduler
+
+        maintenance_scheduler.refresh_claim_ttl_watchdog()
+    except Exception:  # noqa: BLE001 — watchdog refresh is best-effort
+        pass

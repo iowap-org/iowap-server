@@ -29,7 +29,7 @@ from relay_server.core.db import apply_settings_overrides, init_db, q
 from relay_server.core.events import event_bus
 from relay_server.core import metrics as _metrics
 from relay_server.core.logging_setup import JsonFormatter
-from relay_server.core.maintenance import MaintenanceScheduler
+from relay_server.core.maintenance import MaintenanceScheduler, maintenance_scheduler
 from relay_server.core.session import unsign_user_cookie
 from relay_server.core.users import list_users
 from relay_server.core.zeroconf import RelayZeroconf
@@ -88,9 +88,10 @@ async def lifespan(app: FastAPI):
         )
 
     # T-050: single MaintenanceScheduler bundles every periodic watchdog.
-    maintenance = MaintenanceScheduler()
-    maintenance.register_defaults()
-    maintenance_task = asyncio.create_task(_maintenance_loop(maintenance))
+    # T-181: module-level singleton so dashboard edits can re-register
+    # watchdogs with fresh intervals (see apply_settings_overrides).
+    maintenance_scheduler.register_defaults()
+    maintenance_task = asyncio.create_task(_maintenance_loop(maintenance_scheduler))
 
     mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
     if settings.enable_mdns:
@@ -127,7 +128,7 @@ async def lifespan(app: FastAPI):
         # One final sweep on graceful shutdown (best effort, never raises).
         try:
             final = await asyncio.wait_for(
-                asyncio.to_thread(maintenance.run_all), timeout=10
+                asyncio.to_thread(maintenance_scheduler.run_all), timeout=10
             )
             for name, result in final.items():
                 if result and not (len(result) == 1 and result.get("error")):

@@ -193,6 +193,22 @@ class MaintenanceScheduler:
         """Entfernt einen registrierten Task (no-op falls nicht vorhanden)."""
         self._tasks.pop(name, None)
 
+    def refresh_claim_ttl_watchdog(self) -> None:
+        """T-181: re-register claim_ttl_watchdog with the current TTL.
+
+        Called after settings overrides are applied so a claim_ttl_seconds
+        change takes effect without a restart. ``register()`` overwrites
+        the existing task and resets ``last_run`` to 0, so the next loop
+        tick runs immediately (harmless — the watchdog query is idempotent).
+        """
+        from relay_server.core.scheduler import Scheduler  # lazy, wie register_defaults
+
+        self.register(
+            "claim_ttl_watchdog",
+            Scheduler.release_or_fail_claims,
+            settings.claim_ttl_seconds,
+        )
+
     # -- execution -----------------------------------------------------
 
     def run_due(self) -> Dict[str, Dict[str, Any]]:
@@ -350,3 +366,8 @@ class MaintenanceScheduler:
                 _ssn_auto_approve,
                 settings.maintenance_interval_seconds,
             )
+
+# T-181: module-level singleton — main.py drives the loop with it,
+# core/db.apply_settings_overrides() re-registers watchdogs on it after
+# dashboard edits. (Pattern: core/chunked_upload.py chunked_manager)
+maintenance_scheduler = MaintenanceScheduler()
