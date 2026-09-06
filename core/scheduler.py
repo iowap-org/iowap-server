@@ -449,7 +449,7 @@ class Scheduler:
         stage's ``last_note_at`` (note-based heartbeat). A ``kind=longrun``
         note additionally switches the stage from ``claimed`` to ``accepted``
         and starts a 2h TTL — the worker signals it will take longer than
-        the normal 300s claim timeout.
+        the claim TTL (claim_ttl_seconds, default 60s).
 
         Returns ``{"id", "task_id", "node_id", "message", "kind", "created_at"}``
         on success, or ``None`` when the task does not exist.
@@ -480,7 +480,9 @@ class Scheduler:
             )
 
             # kind=longrun: switch the claimed stage to accepted (worker took
-            # over, not re-claimable) so enforce_timeouts does not kill it.
+            # over, not re-claimable) so the claim-TTL watchdog does not
+            # release it back to pending (T-181: there is no stage/task
+            # timeout enforcement — the claim TTL is the only claim timer).
             if kind == "longrun":
                 conn.execute(
                     q(
