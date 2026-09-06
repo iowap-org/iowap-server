@@ -1239,3 +1239,62 @@ _ENDPOINTS = [
         "description": "Proxy the SSN-hosted HTML dashboard page for a capability (T-070)",
     },
 ]
+
+
+# --- T-181: scheduler claim settings (adaptive, no restart) ------------
+
+@router.get("/api/scheduler-config")
+async def dashboard_get_scheduler_config(
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """T-181: current scheduler claim settings for the admin sliders."""
+    check_dashboard_permission(ctx, "system:config")
+    return {
+        "claim_ttl_seconds": settings.claim_ttl_seconds,
+        "max_retries": settings.max_retries,
+    }
+
+
+@router.post("/api/scheduler-config")
+async def dashboard_set_scheduler_config(
+    request: Request,
+    ctx: AuthContext = Depends(require_dashboard_user),
+):
+    """T-181: edit claim_ttl_seconds / max_retries (admin sliders).
+
+    Values persist to ``settings_override`` and are applied to the live
+    settings object immediately (no restart). apply_settings_overrides()
+    also re-registers the claim-TTL watchdog with the fresh interval.
+    """
+    _verify_csrf(request)
+    check_dashboard_permission(ctx, "system:config")
+    from relay_server.core.db import (
+        apply_settings_overrides,
+        log_audit_event,
+        set_settings_override,
+    )
+
+    form = await request.form()
+    ttl_raw = form.get("claim_ttl_seconds")
+    retry_raw = form.get("max_retries")
+
+    ttl = int(ttl_raw) if ttl_raw not in (None, "") else settings.claim_ttl_seconds
+    retry = int(retry_raw) if retry_raw not in (None, "") else settings.max_retries
+
+    if not 60 <= ttl <= 300:
+        raise HTTPException(400, "claim_ttl_seconds must be between 60 and 300")
+    if not 0 <= retry <= 10:
+        raise HTTPException(400, "max_retries must be between 0 and 10")
+
+    updated_by = ctx.user_id if hasattr(ctx, "user_id") else None
+    set_settings_override("claim_ttl_seconds", str(ttl), updated_by=updated_by)
+    set_settings_override("max_retries", str(retry), updated_by=updated_by)
+    apply_settings_overrides()
+
+    log_audit_event(
+        actor_id=ctx.user_id if hasattr(ctx, "user_id") else "dashboard",
+        action="scheduler_config_update",
+        resource_type="settings",
+        details=f"claim_ttl_seconds={ttl}, max_retries={retry}",
+    )
+    return {"status": "ok", "claim_ttl_seconds": ttl, "max_retries": retry}
