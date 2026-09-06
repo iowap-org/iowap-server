@@ -382,6 +382,8 @@ async function loadAdmin() {
     renderGroups(groupsData);
     // T-164/T-165: Datei-Übertragung (Schieberegler + Bridge-Ampel).
     loadTransferConfig();
+    // T-181: Scheduler claim settings (Claim-TTL + Retries).
+    loadSchedulerConfig();
   } catch (err) {
     adminMsg("Admin load failed: " + err.message, true);
     console.error(err);
@@ -596,6 +598,47 @@ async function saveTransferConfig() {
   }
 }
 
+// ===== Scheduler config (T-181) ========================================
+
+async function loadSchedulerConfig() {
+  try {
+    const data = await fetchJson("/relay/v2/dashboard/api/scheduler-config");
+    document.getElementById("sliderClaimTtl").value = data.claim_ttl_seconds;
+    document.getElementById("claimTtlVal").textContent = data.claim_ttl_seconds + " s";
+    document.getElementById("sliderMaxRetries").value = data.max_retries;
+    document.getElementById("maxRetriesVal").textContent = data.max_retries;
+  } catch (err) {
+    adminMsg("Scheduler-Konfig konnte nicht geladen werden: " + err.message, true);
+  }
+}
+
+async function saveSchedulerConfig() {
+  const ttl = document.getElementById("sliderClaimTtl").value;
+  const retries = document.getElementById("sliderMaxRetries").value;
+  try {
+    await postForm("/relay/v2/dashboard/api/scheduler-config", new URLSearchParams({
+      claim_ttl_seconds: ttl,
+      max_retries: retries,
+    }));
+    adminMsg("Scheduler-Konfig gespeichert (wirkt sofort, ohne Neustart).");
+    loadSchedulerConfig();
+  } catch (err) {
+    adminMsg("Speichern fehlgeschlagen: " + err.message, true);
+  }
+}
+
+function bindSchedulerSliders() {
+  const ttlSlider = document.getElementById("sliderClaimTtl");
+  const retriesSlider = document.getElementById("sliderMaxRetries");
+  ttlSlider.addEventListener("input", () => {
+    document.getElementById("claimTtlVal").textContent = ttlSlider.value + " s";
+  });
+  retriesSlider.addEventListener("input", () => {
+    document.getElementById("maxRetriesVal").textContent = retriesSlider.value;
+  });
+  document.getElementById("btnSaveScheduler").addEventListener("click", saveSchedulerConfig);
+}
+
 // ===== SSN capability pages ============================================
 
 async function loadSsnPages() {
@@ -791,6 +834,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // T-164/T-165: Datei-Übertragung — Schieberegler + Bridge-Ampel.
   bindTransferSliders();
+  bindSchedulerSliders();
 
   loadMe().then(() => {
     loadAll();

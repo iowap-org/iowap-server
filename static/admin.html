@@ -157,6 +157,25 @@
           <button id="btnSaveTransfer" class="btn btn-primary">Speichern</button>
         </div>
       </div>
+      <div id="schedulerSection" class="panel">
+        <div class="transfer-sliders">
+          <div class="slider-row">
+            <label for="sliderClaimTtl">Claim-TTL</label>
+            <input type="range" id="sliderClaimTtl" min="60" max="300" step="5" value="60" />
+            <span id="claimTtlVal" class="slider-val">60 s</span>
+            <span class="slider-hint">Wie lange eine Stage „claimed" bleiben darf, bevor der Watchdog sie zurück in die Queue stellt (verbraucht einen Retry). LLM-Handler brauchen oft 60–300 s. Wirkt ohne Neustart; bereits geclaimte Stages behalten ihren alten Wert.</span>
+          </div>
+          <div class="slider-row">
+            <label for="sliderMaxRetries">Max Retries</label>
+            <input type="range" id="sliderMaxRetries" min="0" max="10" step="1" value="2" />
+            <span id="maxRetriesVal" class="slider-val">2</span>
+            <span class="slider-hint">Wie oft ein abgelaufener Claim erneut in die Queue gestellt wird, bevor die Stage permanent failed. 0 = kein Retry.</span>
+          </div>
+        </div>
+        <div class="transfer-actions">
+          <button id="btnSaveScheduler" class="btn btn-primary">Speichern</button>
+        </div>
+      </div>
     </div>
   </div>
 
