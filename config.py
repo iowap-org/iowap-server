@@ -124,6 +124,22 @@ class Settings(BaseSettings):
     orphaned_ttl_seconds: int = 24 * 3600  # 24h
     node_offline_grace_seconds: int = 600  # 10 min offline → fail
 
+    @field_validator("claim_ttl_seconds")
+    @classmethod
+    def _claim_ttl_range(cls, v: int) -> int:
+        # T-181: dashboard-configurable, bounded so the watchdog interval
+        # stays sane and a runaway claim can never hang forever.
+        if not 60 <= v <= 300:
+            raise ValueError("claim_ttl_seconds must be between 60 and 300")
+        return v
+
+    @field_validator("max_retries")
+    @classmethod
+    def _max_retries_range(cls, v: int) -> int:
+        if not 0 <= v <= 10:
+            raise ValueError("max_retries must be between 0 and 10")
+        return v
+
     # T-081: auto-busy — number of consecutive heartbeats a node's load
     # must stay at or above its load_cap before the server transitions
     # it to "busy". The counter resets as soon as the load drops below
