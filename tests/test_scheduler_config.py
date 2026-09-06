@@ -66,3 +66,21 @@ def test_max_retries_range_validators():
         Settings(max_retries=11)
     assert Settings(max_retries=0).max_retries == 0
     assert Settings(max_retries=10).max_retries == 10
+
+def test_claim_settings_db_override_applies():
+    set_settings_override("claim_ttl_seconds", "180")
+    set_settings_override("max_retries", "5")
+    apply_settings_overrides()
+    assert settings.claim_ttl_seconds == 180
+    assert settings.max_retries == 5
+
+
+def test_claim_settings_db_override_rejected_out_of_range():
+    # The setter does not range-check; apply re-validates via the Pydantic
+    # validators. An out-of-range row is silently SKIPPED (keep old value)
+    # — same failure mode as the T-164 ladder constraints: a corrupt row
+    # must never crash the server. The dashboard endpoint range-checks
+    # before writing, so bad values normally never reach the table.
+    set_settings_override("claim_ttl_seconds", "30")
+    apply_settings_overrides()
+    assert settings.claim_ttl_seconds == 60  # unchanged (default)

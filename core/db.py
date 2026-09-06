@@ -1298,8 +1298,16 @@ def get_capability_details(
 
 # Keys that the dashboard is allowed to override. The ladder constraints
 # (inline < artifact, inline × 1.4 < payload, ttl ≥ 1) are validated by
-# the setter, not by the schema.
-_OVERRIDABLE_KEYS = {"max_inline_bytes", "max_artifact_bytes", "artifact_ttl_days"}
+# the setter, not by the schema. T-181: scheduler claim settings are
+# overridable too — their 60-300 / 0-10 ranges are enforced by the
+# Pydantic field validators on apply.
+_OVERRIDABLE_KEYS = {
+    "max_inline_bytes",
+    "max_artifact_bytes",
+    "artifact_ttl_days",
+    "claim_ttl_seconds",
+    "max_retries",
+}
 
 
 def get_settings_overrides() -> dict[str, str]:
