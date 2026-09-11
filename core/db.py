@@ -822,7 +822,7 @@ def _run_migrations(conn: DBConn) -> None:
         # predate is_active entirely).
         if "is_active" in user_cols:
             _exec(conn,
-                "UPDATE users SET status = CASE WHEN is_active = 0 THEN 'inactive' "
+                "UPDATE users SET status = CASE WHEN is_active = FALSE THEN 'inactive' "
                 "ELSE 'active' END WHERE status IS NULL"
             )
 
@@ -962,7 +962,7 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 name = str(cap)
                 cap_type = None
                 version = "1.0.0"
-                available = 1
+                available = True
                 description = None
                 input_schema = None
             else:
@@ -971,7 +971,11 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                     continue
                 cap_type = cap.get("type")
                 version = cap.get("version", "1.0.0")
-                available = 1 if cap.get("available", True) else 0
+                # T-066 semantics (must match sync_node_capabilities): only
+                # an explicit False is unavailable — available=None stays
+                # true so a startup resync does not flip nullable capabilities.
+                # Bind a real bool so PostgreSQL infers ::BOOLEAN.
+                available = cap.get("available") is not False
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
@@ -998,7 +1002,18 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
 
 
 def _seed_default_rbac(conn: DBConn) -> None:
-    """Seed default groups and permissions if none exist."""
+    """Seed default groups and permissions — on a fresh database only.
+
+    F-12: this used to run on every boot, which silently re-granted
+    permissions an admin had revoked from any group (the ``ON CONFLICT
+    DO NOTHING`` grants) and reset group/permission display names via
+    the ``DO UPDATE`` upserts. Seeding is a first-boot concern; after
+    that RBAC is admin-owned state and only migrations (T-187) may
+    extend the default permission set.
+    """
+    row = _exec(conn, "SELECT COUNT(*) FROM permissions").fetchone()
+    if row is not None and (row[0] or 0) > 0:
+        return
     now = datetime.now(timezone.utc).isoformat()
 
     # Default groups.
@@ -1147,7 +1162,8 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 # T-066: cap.get("available", True) returns True when the key is
                 # absent, but Pydantic may set available=None from the request body
                 # and bool(None) is False. Only treat explicit False as unavailable.
-                available = 1 if cap.get("available") is not False else 0
+                # Bind a real bool so PostgreSQL infers ::BOOLEAN.
+                available = cap.get("available") is not False
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
@@ -1158,7 +1174,7 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 name = str(cap)
                 cap_type = None
                 version = "1.0.0"
-                available = 1
+                available = True
                 description = None
                 input_schema = None
                 upload_modes = None

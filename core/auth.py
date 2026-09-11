@@ -229,7 +229,7 @@ def _create_token(
                 token_hash,
                 token_lookup_hash,
                 token_type,
-                1 if pending else 0,
+                bool(pending),
                 role,
                 _format_time(expires),
                 _format_time(now),

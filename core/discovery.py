@@ -140,7 +140,7 @@ def heartbeat(
             params.append(queue_depth)
         if available is not None:
             updates.append("available = ?")
-            params.append(1 if available else 0)
+            params.append(bool(available))
         if endpoint is not None:
             updates.append("endpoint = ?")
             params.append(endpoint)
@@ -267,7 +267,7 @@ def heartbeat(
         first_heartbeat = is_approved and not row["first_heartbeat_seen"]
         if first_heartbeat:
             updates.append("first_heartbeat_seen = ?")
-            params.append(1)
+            params.append(True)
 
         params.append(node_id)
         sql = f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?"
@@ -426,7 +426,7 @@ def get_capabilities(
                    queue_depth, available, last_seen, status, role
             FROM nodes
             WHERE status IN ({live})
-              AND (last_seen > ? OR available = 0)
+              AND (last_seen > ? OR available = FALSE)
             ORDER BY load ASC
             """, (threshold,)),
         ).fetchall()
@@ -630,7 +630,7 @@ def mark_offline_nodes() -> List[str]:
         # for executemany semantics (Connection.executemany was removed).
         conn.execute(
             q("""
-            UPDATE nodes SET status = 'offline', available = 0
+            UPDATE nodes SET status = 'offline', available = FALSE
             WHERE node_id = ? AND last_seen < ?
             """),
             [{"p0": nid, "p1": threshold} for nid in candidate_ids],
