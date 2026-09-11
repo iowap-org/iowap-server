@@ -64,6 +64,18 @@ node_tokens = sa.Table(
     sa.Column("token_lookup_hash", sa.String(255), nullable=True),
 )
 
+# T-164/T-165: settings_override — DB-persisted overrides for transfer-ladder
+# and artifact-TTL config (dashboard-editable). Declared here so the
+# PostgreSQL path (``metadata.create_all`` in PostgresDatabase.init_db)
+# creates it; the raw ``_schema`` DDL covers the SQLite path.
+settings_override = sa.Table(
+    "settings_override", metadata,
+    sa.Column("key", sa.String(255), primary_key=True),
+    sa.Column("value", sa.Text, nullable=False),
+    sa.Column("updated_at", sa.String(64), nullable=False),
+    sa.Column("updated_by", sa.String(64), nullable=True),
+)
+
 # ---------------------------------------------------------------------------
 # HUMAN USERS & RBAC
 # ---------------------------------------------------------------------------

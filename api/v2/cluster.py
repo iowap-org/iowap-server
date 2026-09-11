@@ -22,9 +22,26 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from relay_server.core.db import get_conn, q
+from relay_server.core.db import get_conn, q, settings
 from relay_server.core.events import event_bus
 from relay_server.core.status import get_category, status_color
+
+# PostgreSQL has no GROUP_CONCAT — it uses string_agg(x, sep). The function
+# has to be baked into the SQL text, so it is chosen per dialect before the
+# query is built. On PostgreSQL the separator must be ' ' (space); on
+# SQLite/MariaDB it is ','. The parser below splits on the separator that
+# matches the dialect, which keeps the call site identical.
+_PG = settings.db_type == "postgres"
+_GROUP_SEP = " " if _PG else ","
+_GROUP_SEP_CH = " " if _PG else ","
+
+
+def _agg(expr: str) -> str:
+    """GROUP_CONCAT(expr, sep) for SQLite/MariaDB, string_agg for PostgreSQL."""
+    if _PG:
+        return f"string_agg({expr}, {_GROUP_SEP!r})"
+    return f"GROUP_CONCAT({expr}, {_GROUP_SEP!r})"
+
 
 router = APIRouter()
 
@@ -347,9 +364,9 @@ async def cluster_users():
     conn = get_conn()
     try:
         rows = conn.execute(
-            q("""
+            q(f"""
             SELECT u.user_id, u.username, u.is_active, u.status, u.created_at,
-                   GROUP_CONCAT(g.group_name, ',') as groups
+                   {_agg('g.group_name')} as groups
             FROM users u
             LEFT JOIN user_groups ug ON ug.user_id = u.user_id
             LEFT JOIN groups g ON g.group_id = ug.group_id
@@ -359,7 +376,7 @@ async def cluster_users():
         ).fetchall()
         users = []
         for r in rows:
-            groups = (r["groups"] or "").split(",") if r["groups"] else []
+            groups = (r["groups"] or "").split(_GROUP_SEP_CH) if r["groups"] else []
             role = "admin" if "admin" in groups else (groups[0] if groups else "user")
             users.append(
                 {

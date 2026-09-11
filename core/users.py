@@ -10,7 +10,25 @@ import bcrypt
 import sqlalchemy as sa
 
 from relay_server.core.auth import login_with_master_seed
-from relay_server.core.db import get_conn, q
+from relay_server.core.db import get_conn, q, settings
+
+# PostgreSQL has no GROUP_CONCAT — it uses string_agg(x, sep). The function
+# has to be baked into the SQL text, so it is chosen per dialect before the
+# query is built. On PostgreSQL the separator must be ' ' (space); on
+# SQLite/MariaDB it is ','. The parsers below split on the separator that
+# matches the dialect, which keeps the call sites identical.
+_PG = settings.db_type == "postgres"
+_GROUP_SEP = " " if _PG else ","
+_GROUP_SEP_CH = " " if _PG else ","
+
+
+def _agg(expr: str) -> str:
+    """GROUP_CONCAT(expr, sep) for SQLite/MariaDB, string_agg for PostgreSQL."""
+    if _PG:
+        return f"string_agg({expr}, {_GROUP_SEP!r})"
+    return f"GROUP_CONCAT({expr}, {_GROUP_SEP!r})"
+
+
 from relay_server.models import AuthContext
 
 
@@ -78,7 +96,7 @@ def has_admin_user() -> bool:
             SELECT 1 FROM users u
             JOIN user_groups ug ON ug.user_id = u.user_id
             JOIN groups g ON g.group_id = ug.group_id
-            WHERE u.is_active = 1 AND g.group_name = 'admin'
+            WHERE u.is_active AND g.group_name = 'admin'
             LIMIT 1
             """)
         ).fetchone()
@@ -119,7 +137,7 @@ def create_user(
             q("""
             INSERT INTO users (user_id, username, email, password_hash, is_active, force_password_change, created_at, created_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, username, email, password_hash, 1, force_password_change, now, created_by)),
+            """, (user_id, username, email, password_hash, True, force_password_change, now, created_by)),
         )
 
         for group_name in group_names:
@@ -217,9 +235,9 @@ def list_users() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            q("""
+            q(f"""
             SELECT u.user_id, u.username, u.email, u.is_active, u.force_password_change, u.created_at, u.created_by,
-                   GROUP_CONCAT(g.group_name, ',') as groups
+                   {_agg('g.group_name')} as groups
             FROM users u
             LEFT JOIN user_groups ug ON ug.user_id = u.user_id
             LEFT JOIN groups g ON g.group_id = ug.group_id
@@ -236,7 +254,7 @@ def list_users() -> List[Dict[str, Any]]:
                 "created_at": r["created_at"],
                 "created_by": r["created_by"],
                 "force_password_change": bool(r["force_password_change"]),
-                "groups": (r["groups"] or "").split(",") if r["groups"] else [],
+                "groups": (r["groups"] or "").split(_GROUP_SEP_CH) if r["groups"] else [],
             }
             for r in rows
         ]
@@ -248,9 +266,9 @@ def list_groups() -> List[Dict[str, Any]]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            q("""
+            q(f"""
             SELECT g.group_id, g.group_name, g.description, g.created_at,
-                   GROUP_CONCAT(p.permission_name, ',') as permissions
+                   {_agg('p.permission_name')} as permissions
             FROM groups g
             LEFT JOIN group_permissions gp ON gp.group_id = g.group_id
             LEFT JOIN permissions p ON p.permission_id = gp.permission_id
@@ -264,7 +282,7 @@ def list_groups() -> List[Dict[str, Any]]:
                 "group_name": r["group_name"],
                 "description": r["description"],
                 "created_at": r["created_at"],
-                "permissions": (r["permissions"] or "").split(",") if r["permissions"] else [],
+                "permissions": (r["permissions"] or "").split(_GROUP_SEP_CH) if r["permissions"] else [],
             }
             for r in rows
         ]
@@ -352,7 +370,7 @@ def set_user_password(user_id: str, password: str) -> None:
     try:
         password_hash = _hash_password(password)
         conn.execute(
-            q("UPDATE users SET password_hash = ?, force_password_change = 0 WHERE user_id = ?", (password_hash, user_id)),
+            q("UPDATE users SET password_hash = ?, force_password_change = FALSE WHERE user_id = ?", (password_hash, user_id)),
         )
         conn.commit()
     finally:
@@ -383,7 +401,7 @@ def set_user_active(user_id: str, is_active: bool) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            q("UPDATE users SET is_active = ? WHERE user_id = ?", (1 if is_active else 0, user_id))
+            q("UPDATE users SET is_active = ? WHERE user_id = ?", (bool(is_active), user_id))
         )
         conn.commit()
     finally:
