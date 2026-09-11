@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from relay_server.api.v2.security import get_approved_context
+from relay_server.api.v2.security import get_alive_context, get_approved_context
 from relay_server.core.artifacts import delete_artifact, list_artifacts, store_artifact
 from relay_server.core.db import get_conn, q
 from relay_server.core.scheduler import Scheduler
@@ -73,7 +73,7 @@ async def scheduler_get_task(
 async def scheduler_add_note(
     task_id: str,
     body: NoteRequest,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Append a free-form note to a task (T-052 mini-chat between nodes).
 
@@ -90,7 +90,7 @@ async def scheduler_add_note(
 @router.post("/claim", response_model=ClaimResponse)
 async def scheduler_claim(
     body: ClaimRequest = ClaimRequest(),
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Claim the next available stage matching the node's capabilities."""
     stage = Scheduler.claim_stage(ctx.node_id, capability=body.capability, capability_type=body.capability_type)
@@ -103,7 +103,7 @@ async def scheduler_claim(
 async def scheduler_complete_stage(
     stage_id: str,
     body: CompleteRequest,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     stage = Scheduler.complete_stage(
         stage_id=stage_id,
@@ -113,7 +113,7 @@ async def scheduler_complete_stage(
     if not stage:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Stage not found, not claimed by this node, or not in claimed status",
+            detail="Stage not found, not claimed by this node, or not in claimable/completable status",
         )
     return StageSummary(**stage)
 
@@ -123,7 +123,7 @@ async def scheduler_upload_artifact(
     task_id: str,
     file: UploadFile = File(...),
     stage_id: Optional[str] = None,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Upload an artifact attached to a task (and optionally a stage)."""
     conn = get_conn()
@@ -149,7 +149,7 @@ async def scheduler_upload_artifact(
 @router.get("/artifacts/{task_id}")
 async def scheduler_list_artifacts(
     task_id: str,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     return {"artifacts": list_artifacts(task_id=task_id), "viewer": ctx.node_id}
 
@@ -157,7 +157,7 @@ async def scheduler_list_artifacts(
 @router.delete("/artifacts/{artifact_id}")
 async def scheduler_delete_artifact(
     artifact_id: str,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     ok = delete_artifact(artifact_id)
     if not ok:

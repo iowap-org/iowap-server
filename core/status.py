@@ -50,7 +50,7 @@ class StatusDef:
 # ── Node statuses ────────────────────────────────────────────────
 
 NODE_STATUSES: Dict[str, StatusDef] = {
-    "offline":     StatusDef("offline",     StatusCategory.OFFLINE,   ["pending"]),
+    "offline":     StatusDef("offline",     StatusCategory.OFFLINE,   ["pending", "online"]),  # approved nodes return via heartbeat without re-approval (T-189 F-08)
     "pending":     StatusDef("pending",     StatusCategory.PENDING,   ["approved", "offline"]),
     "approved":    StatusDef("approved",    StatusCategory.AVAILABLE, ["online", "offline"]),
     "online":      StatusDef("online",      StatusCategory.AVAILABLE, ["busy", "idle", "offline", "maintenance"]),
@@ -77,7 +77,7 @@ TASK_STATUSES: Dict[str, StatusDef] = {
 
 STAGE_STATUSES: Dict[str, StatusDef] = {
     "pending":   StatusDef("pending",   StatusCategory.PENDING,   ["claimed", "accepted", "cancelled"]),
-    "claimed":   StatusDef("claimed",    StatusCategory.BUSY,     ["completed", "failed", "timed_out", "pending"]),
+    "claimed":   StatusDef("claimed",    StatusCategory.BUSY,     ["completed", "failed", "timed_out", "pending", "accepted"]),  # T-154 longrun takeover + orphan recovery → accepted (T-189 F-08)
     "accepted":  StatusDef("accepted",  StatusCategory.PENDING,   ["completed", "failed", "timed_out", "orphaned"]),
     # T-154: orphaned = Long-Run-Lease abgelaufen (2h ohne Note). Nicht
     # re-claimbar (kein pending), aber kein Fehlerzustand. Übergänge:
@@ -223,6 +223,26 @@ def node_statuses_in_category(category: StatusCategory) -> list[str]:
     """
     return [name for name, sd in NODE_STATUSES.items() if sd.category == category]
 
+
+
+def stage_statuses_in_category(category: StatusCategory) -> list[str]:
+    """Return STAGE status names that belong to ``category``.
+
+    Stage-parallel of :func:`node_statuses_in_category` for SQL predicates
+    on ``task_stages.status`` (T-189 F-03) so node/task statuses never
+    leak into the predicate.
+    """
+    return [name for name, sd in STAGE_STATUSES.items() if sd.category == category]
+
+
+def task_statuses_in_category(category: StatusCategory) -> list[str]:
+    """Return TASK status names that belong to ``category``.
+
+    Task-parallel of :func:`node_statuses_in_category` for guards on
+    ``tasks.status`` (T-189 F-05) so node/stage statuses never leak
+    into the predicate.
+    """
+    return [name for name, sd in TASK_STATUSES.items() if sd.category == category]
 
 def node_claim_statuses() -> list[str]:
     """Statuses that allow a node to claim stages (AVAILABLE category)."""

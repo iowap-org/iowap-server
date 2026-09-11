@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
-from relay_server.api.v2.security import get_approved_context
+from relay_server.api.v2.security import get_alive_context
 from relay_server.config import settings
 from relay_server.core.artifacts import (
     delete_artifact,
@@ -35,7 +35,7 @@ async def storage_upload(
     file: UploadFile = File(...),
     task_id: Optional[str] = Query(None, description="Optional task to associate with"),
     stage_id: Optional[str] = Query(None, description="Optional stage to associate with"),
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Upload a standalone file and receive an artifact_id.
 
@@ -115,7 +115,7 @@ async def storage_upload(
 @router.get("/files/{artifact_id}/meta")
 async def storage_file_meta(
     artifact_id: str,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Return artifact metadata without streaming the file."""
     meta = get_artifact_metadata(artifact_id)
@@ -133,7 +133,7 @@ async def storage_file_meta(
 @router.get("/files/{artifact_id}")
 async def storage_file_download(
     artifact_id: str,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Download an artifact by id."""
     meta = get_artifact_metadata(artifact_id)
@@ -159,7 +159,7 @@ async def storage_file_download(
 @router.delete("/files/{artifact_id}")
 async def storage_file_delete(
     artifact_id: str,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Delete an artifact by id."""
     ok = delete_artifact(artifact_id)
@@ -171,7 +171,7 @@ async def storage_file_delete(
 @router.get("/list")
 async def storage_list(
     task_id: Optional[str] = Query(None),
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """List stored artifacts, optionally filtered by task."""
     return {"artifacts": list_artifacts(task_id=task_id), "viewer": ctx.node_id}
@@ -193,7 +193,7 @@ def _chunked_error_status(exc: ChunkedUploadError) -> int:
 @router.post("/chunked/init")
 async def chunked_init(
     data: ChunkedInitRequest,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Start a chunked-upload session and reserve an upload_id."""
     try:
@@ -212,7 +212,7 @@ async def chunked_init(
 async def chunked_chunk(
     upload_id: str,
     data: ChunkedChunkRequest,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Upload a single chunk for an existing upload session."""
     try:
@@ -230,7 +230,7 @@ async def chunked_chunk(
 async def chunked_complete(
     upload_id: str,
     data: ChunkedCompleteRequest,
-    ctx: AuthContext = Depends(get_approved_context),
+    ctx: AuthContext = Depends(get_alive_context),
 ):
     """Assemble all chunks of an upload session into a single artifact."""
     try:

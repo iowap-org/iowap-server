@@ -16,8 +16,10 @@ from relay_server.core.events import event_bus
 from relay_server.core.status import (
     StatusCategory,
     node_can_claim,
-    node_claim_statuses,
+    node_live_statuses,
     node_statuses_in_category,
+    stage_statuses_in_category,
+    task_statuses_in_category,
 )
 
 # ---------------------------------------------------------------------------
@@ -279,20 +281,21 @@ class Scheduler:
         """
         conn = get_conn()
         try:
+            # T-080: status gate via the central registry. A node may
+            # claim stages only when its status is AVAILABLE (approved,
+            # online, idle). BUSY / OFFLINE / TERMINAL nodes cannot claim.
+            # T-189 F-04: the gate is unconditional — it also applies to
+            # explicit-capability claims, so a busy node gets None from
+            # the core regardless of the requested capability. The node
+            # row feeds the capability fallbacks below.
+            node_row = conn.execute(
+                q("SELECT capabilities, status FROM nodes WHERE node_id = ?", (node_id,)),
+            ).fetchone()
+            if not node_row or not node_can_claim(node_row["status"]):
+                return None
+
             # Determine capabilities of the node if not provided.
             if not capability:
-                # T-080: status gate via the central registry. A node may
-                # claim stages only when its status is AVAILABLE (approved,
-                # online, idle). BUSY / OFFLINE / TERMINAL nodes cannot
-                # claim. The capability names come from the normalized
-                # node_capabilities index (T-026) instead of json.loads
-                # on the nodes.capabilities TEXT column.
-                node_row = conn.execute(
-                    q("SELECT capabilities, status FROM nodes WHERE node_id = ?", (node_id,)),
-                ).fetchone()
-                if not node_row or not node_can_claim(node_row["status"]):
-                    return None
-
                 # Use the normalized index for capability names. Fall back
                 # to the JSON column if the index is empty (e.g. legacy
                 # node that has not heartbeat-synced yet).
@@ -319,7 +322,20 @@ class Scheduler:
                     if not cap_names:
                         return None
             else:
+                # T-189 F-04: an explicitly requested capability must be
+                # advertised by this node — validated against the
+                # normalized node_capabilities index (T-026) with the
+                # parsed JSON capabilities column as fallback, mirroring
+                # the implicit branch. A capability the node does not
+                # offer is a silent refusal (None), consistent with the
+                # non-match behavior of the query below.
                 cap_names = [capability]
+                offered = get_node_capability_names(node_id)
+                if not offered:
+                    caps = _parse(node_row["capabilities"]) or []
+                    offered = [c["name"] for c in caps if isinstance(c, dict) and c.get("name")]
+                if capability not in offered:
+                    return None
 
             # Find pending stages whose capability matches and dependencies are completed.
             rows = conn.execute(
@@ -484,6 +500,7 @@ class Scheduler:
             # release it back to pending (T-181: there is no stage/task
             # timeout enforcement — the claim TTL is the only claim timer).
             if kind == "longrun":
+                # registry-legal since T-189 F-08 (claimed→accepted)
                 conn.execute(
                     q(
                         "UPDATE task_stages SET status = 'accepted', updated_at = ? "
@@ -494,6 +511,7 @@ class Scheduler:
 
             # T-154: any note from the worker on an orphaned stage signals
             # the worker is alive again → back to accepted (2h lease restarts).
+            # registry-legal since T-189 F-08 (orphaned→accepted)
             conn.execute(
                 q(
                     "UPDATE task_stages SET status = 'accepted', updated_at = ? "
@@ -537,11 +555,21 @@ class Scheduler:
                 """, (now, _serialize(result), now, stage_id)),
             )
 
-            # Check if all stages completed.
+            # Check if all stages completed (T-189 F-03: "not done" = stage
+            # status in the PENDING or BUSY category — accepted/orphaned
+            # stages are still open work, terminal stages never count).
+            non_terminal = stage_statuses_in_category(StatusCategory.PENDING) + stage_statuses_in_category(StatusCategory.BUSY)
+            placeholders = ",".join("?" for _ in non_terminal)
             pending_count = conn.execute(
-                q("SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status IN ('pending', 'claimed')", (row["task_id"],)),
+                q(f"SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status IN ({placeholders})", (row["task_id"], *non_terminal)),
             ).fetchone()[0]
             if pending_count == 0:
+                # T-189: emit the task's real prior status instead of a
+                # hardcoded "running" (Goal: never guess old_status).
+                task_before = conn.execute(
+                    q("SELECT status FROM tasks WHERE task_id = ?", (row["task_id"],)),
+                ).fetchone()
+                task_old_status = task_before["status"] if task_before else None
                 conn.execute(
                     q("UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE task_id = ?", (now, now, row["task_id"])),
                 )
@@ -549,15 +577,16 @@ class Scheduler:
                     "task_completed",
                     {"task_id": row["task_id"]},
                 )
-                event_bus.publish_sync(
-                    "status_changed",
-                    {
-                        "entity_type": "task",
-                        "entity_id": row["task_id"],
-                        "old_status": "running",
-                        "new_status": "completed",
-                    },
-                )
+                if task_old_status != "completed":
+                    event_bus.publish_sync(
+                        "status_changed",
+                        {
+                            "entity_type": "task",
+                            "entity_id": row["task_id"],
+                            "old_status": task_old_status,
+                            "new_status": "completed",
+                        },
+                    )
             conn.commit()
 
             event_bus.publish_sync(
@@ -569,7 +598,7 @@ class Scheduler:
                 {
                     "entity_type": "stage",
                     "entity_id": stage_id,
-                    "old_status": "claimed",
+                    "old_status": row["status"],
                     "new_status": "completed",
                 },
             )
@@ -640,6 +669,13 @@ class Scheduler:
             tasks_failed = _fail_tasks_if_all_stages_done(
                 conn, affected_tasks, now, terminal_stage_status=("failed",)
             )
+            # T-189 F-05: linear failure policy — a single permanently
+            # failed stage fails the task even while other stages are
+            # still pending. The helper publishes its task_failed /
+            # status_changed events itself (it knows the true old_status).
+            linear_tasks_failed = _fail_tasks_with_failed_critical_stages(
+                conn, affected_tasks, now
+            )
             conn.commit()
 
             for stage_id in failed_stage_ids:
@@ -678,7 +714,7 @@ class Scheduler:
             return {
                 "released": released,
                 "failed": failed_stage_ids,
-                "tasks_failed": tasks_failed,
+                "tasks_failed": tasks_failed + linear_tasks_failed,
             }
         finally:
             conn.close()
@@ -689,11 +725,11 @@ class Scheduler:
         """Fail ``pending`` stages whose capability no node heartbeats (T-063).
 
         A stage is *orphaned* when its ``capability`` does not appear in
-        :table:`node_capabilities` with ``available = 1`` for any online /
-        approved node. Such a stage can never be claimed and would block
-        the task forever; this watchdog marks it ``failed`` instead and,
-        when all of the task's stages have reached a terminal state, fails
-        the owning task too.
+        :table:`node_capabilities` for any live (AVAILABLE or BUSY) node
+        (T-189 F-06). Such a stage can never be claimed and would block
+        the task forever; this watchdog marks it ``failed`` instead and
+        fails the owning task too (T-189 F-05: a single permanently
+        failed stage suffices — linear failure policy).
 
         Returns ``{"stages_failed": [...], "tasks_failed": [...]}``.
         """
@@ -701,16 +737,17 @@ class Scheduler:
         conn = get_conn()
         try:
             # Pending stages whose capability is not advertised by any
-            # AVAILABLE node (T-080: status gate via the central registry).
-            # We intentionally do NOT filter on
+            # AVAILABLE or BUSY node (T-080: status gate via the central
+            # registry). We intentionally do NOT filter on
             # ``node_capabilities.available``: that flag is only flipped
             # to 1 by an explicit worker-heartbeat, so a freshly approved
             # node (still on its first heartbeat) would otherwise be
             # treated as "not covering" the capability and its pending
             # stages would be failed spuriously. The authoritative
             # availability signal is the owning node's ``status``.
-            claim_statuses = node_claim_statuses()
-            placeholders = ",".join("?" for _ in claim_statuses) or "''"
+            # F-06: AVAILABLE+BUSY providers keep pending stages alive; claim-eligibility (node_can_claim) still applies at claim time.
+            live_statuses = node_live_statuses()
+            placeholders = ",".join("?" for _ in live_statuses) or "''"
             rows = conn.execute(
                 q(f"""
                 SELECT ts.stage_id, ts.task_id
@@ -722,7 +759,7 @@ class Scheduler:
                       WHERE nc.capability_name = ts.capability
                         AND n.status IN ({placeholders})
                   )
-                """, claim_statuses),
+                """, live_statuses),
             ).fetchall()
             if not rows:
                 return {"stages_failed": [], "tasks_failed": []}
@@ -747,6 +784,13 @@ class Scheduler:
                 affected_tasks,
                 now,
                 terminal_stage_status=("failed",),
+            )
+            # T-189 F-05: linear failure policy — a single permanently
+            # failed stage fails the task even while other stages are
+            # still pending. The helper publishes its task_failed /
+            # status_changed events itself (it knows the true old_status).
+            linear_tasks_failed = _fail_tasks_with_failed_critical_stages(
+                conn, affected_tasks, now
             )
             conn.commit()
 
@@ -781,7 +825,7 @@ class Scheduler:
 
             return {
                 "stages_failed": failed_stage_ids,
-                "tasks_failed": tasks_failed,
+                "tasks_failed": tasks_failed + linear_tasks_failed,
             }
         finally:
             conn.close()
@@ -937,6 +981,58 @@ def _fail_tasks_if_all_stages_done(
                 "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
             )
             tasks_failed.append(task_id)
+    return tasks_failed
+
+
+def _fail_tasks_with_failed_critical_stages(
+    conn: sqlite3.Connection,
+    task_ids: "set[str]",
+    now: str,
+) -> list[str]:
+    """Fail a task as soon as one of its stages failed permanently (T-189 F-05).
+
+    Linear-Failure-Policy: a single exhausted (``failed``) stage fails the
+    whole task, even while other stages are still pending. Downstream
+    stages of the failed stage stay ``pending`` until the owner cancels
+    or the task is deleted — no cascade cancel (board decision T-189).
+
+    Only tasks still in a non-terminal state are transitioned; the
+    caller is responsible for committing and publishing the
+    ``task_failed`` / ``status_changed`` events.
+    """
+    terminal_tasks = task_statuses_in_category(StatusCategory.TERMINAL)
+    tasks_failed: list[str] = []
+    for task_id in task_ids:
+        failed_count = conn.execute(
+            q("SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status = 'failed'", (task_id,)),
+        ).fetchone()[0]
+        if failed_count == 0:
+            continue
+        task_row = conn.execute(
+            q("SELECT status FROM tasks WHERE task_id = ?", (task_id,)),
+        ).fetchone()
+        if not task_row or task_row["status"] in terminal_tasks:
+            continue
+        old_status = task_row["status"]
+        conn.execute(
+            q("UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
+              "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
+        )
+        tasks_failed.append(task_id)
+        # Publish here with the true old_status read above — the frozen
+        # return type (list of ids) gives the caller no way to know it.
+        # The caller commits (established inline-publish pattern from
+        # enforce_longrun_leases).
+        event_bus.publish_sync("task_failed", {"task_id": task_id})
+        event_bus.publish_sync(
+            "status_changed",
+            {
+                "entity_type": "task",
+                "entity_id": task_id,
+                "old_status": old_status,
+                "new_status": "failed",
+            },
+        )
     return tasks_failed
 
 

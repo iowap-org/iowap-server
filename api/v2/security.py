@@ -6,6 +6,7 @@ from fastapi import Cookie, Header, HTTPException, status
 
 from relay_server.core.auth import validate_token
 from relay_server.core.session import unsign_user_cookie
+from relay_server.core.status import node_live_statuses
 from relay_server.core.users import get_user_permissions, list_users
 from relay_server.models import AuthContext
 
@@ -66,6 +67,41 @@ async def get_approved_context(
 
     return AuthContext(**info)
 
+
+async def get_alive_context(
+    authorization: str | None = Header(None),
+) -> AuthContext:
+    """Dependency: authenticate and require a live (AVAILABLE or BUSY) node.
+
+    Unlike ``get_approved_context`` this accepts busy/idle/maintenance
+    nodes: a node that is currently executing work must still be able
+    to report completion and send progress notes (T-154 lease TTL).
+    Claim-eligibility stays the scheduler's job (node_can_claim, T-080).
+    """
+    token = extract_bearer(authorization)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authentication",
+        )
+
+    info = validate_token(token, require_approved=False)
+    if not info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+    if info["pending"] or info["status"] not in node_live_statuses():
+        status_hint = (
+            "awaiting admin approval" if info["pending"] else f"status is {info['status']}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Node not alive ({status_hint})",
+        )
+
+    return AuthContext(**info)
 
 async def require_admin(
     authorization: Optional[str] = Header(None),
