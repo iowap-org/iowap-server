@@ -282,8 +282,8 @@ def test_completion_counts_accepted_stages():
     task = _create_task(
         admin_token,
         [
-            {"stage_name": "s1", "capability": "build"},
-            {"stage_name": "s2", "capability": "build"},
+            {"stage_name": "s1", "capability": "build", "depends_on": []},
+            {"stage_name": "s2", "capability": "build", "depends_on": []},
         ],
     )
     task_id = task["task"]["task_id"]
