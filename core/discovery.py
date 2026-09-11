@@ -483,6 +483,7 @@ def get_capabilities(
                         "version": nc["capability_version"] or "1.0.0",
                         "description": nc["description"] or "",
                         "available": bool(nc["available"]),
+                        "_cap_available": bool(nc["available"]),
                         "input_schema": schema,
                         "upload_modes": upload_modes,
                         "config": legacy.get("config", {}),
@@ -493,6 +494,11 @@ def get_capabilities(
                 # column so the capability is not invisible until the next
                 # heartbeat arrives.
                 caps = _parse_capabilities(row["capabilities"])
+                # T-195 (F-07): normalize the per-capability flag with the
+                # T-066 rule — only an explicit False disables a capability.
+                for c in caps:
+                    if isinstance(c, dict):
+                        c["_cap_available"] = c.get("available") is not False
 
             for cap in caps:
                 name: str = cap.get("name", "")
@@ -508,8 +514,12 @@ def get_capabilities(
                 if type_filter and cap_type != type_filter:
                     continue
 
+                # T-195 (F-07): effective availability = node-level AND
+                # per-capability flag, computed once per (node, cap) row.
+                eff = node_available and cap.get("_cap_available", True)
+
                 # Filter: only available ones?
-                if available_only and not node_available:
+                if available_only and not eff:
                     continue
 
                 # Filter: config-basiert?
@@ -527,7 +537,9 @@ def get_capabilities(
                         "type": cap_type,
                         "description": cap.get("description", ""),
                         "version": cap.get("version", "1.0.0"),
-                        "available": node_available,
+                        # Neutral initial value — the aggregate below
+                        # overwrites it before any consumer sees it (D-4/D-5).
+                        "available": False,
                         "input_schema": cap.get("input_schema"),
                         "upload_modes": cap.get("upload_modes"),
                         "nodes": [],
@@ -536,29 +548,17 @@ def get_capabilities(
                 cap_map[name]["nodes"].append({
                     "node_id": row["node_id"],
                     "node_name": row["node_name"],
-                    "available": node_available,
+                    "available": eff,
                     "load": row["load"] or 0.0,
                     "queue_depth": row["queue_depth"] or 0,
                     "last_seen": row["last_seen"],
                     "config": cap.get("config", {}),
                 })
 
-            # If this node is not available,
-            # override the availability of its caps
-            # BUT only if no OTHER node still has the cap available.
-            if not node_available:
-                for c in caps:
-                    cname = c.get("name", "")
-                    if cname in cap_map:
-                        # Check if any other node in cap_map[cname]["nodes"]
-                        # still has available=True
-                        other_available = any(
-                            n["available"]
-                            for n in cap_map[cname]["nodes"]
-                            if n["node_id"] != row["node_id"]
-                        )
-                        if not other_available:
-                            cap_map[cname]["available"] = False
+        # T-195 (F-07): aggregate availability over the surviving providers —
+        # any() makes the result order-independent by construction.
+        for cap in cap_map.values():
+            cap["available"] = any(n["available"] for n in cap["nodes"])
 
         return list(cap_map.values())
 
