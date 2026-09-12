@@ -93,6 +93,8 @@ class RefreshResponse(BaseModel):
     token_type: str
     token: str
     expires_at: Optional[str] = None
+    registration_secret: Optional[str] = None
+    registration_secret_expires_at: Optional[str] = None
     message: str
 
 

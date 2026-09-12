@@ -21,6 +21,7 @@ from relay_server.api.v2.security import (
 from relay_server.config import settings
 from relay_server.core.db import get_conn, q
 from relay_server.core.route_registry import router as node_routes_router
+from relay_server.core.status import node_live_statuses
 from relay_server.core.session import (
     CSRF_MAX_AGE_SECONDS,
     MASTER_SEED_SESSION_MAX_AGE_SECONDS,
@@ -209,7 +210,22 @@ async def dashboard_node_profile(node_id: str):
     resolved = _resolve_node_identifier(node_id)
     if resolved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+    # T-193 (F-16): the active profile page is coupled to node liveness —
+    # offline/pending nodes no longer serve it (S-01.3). Historical node
+    # data stays readable through the cluster JSON API.
+    if not _node_is_live(resolved):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
     return FileResponse(STATIC_DIR / "node-profile.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+def _node_is_live(node_id: str) -> bool:
+    """Return True when the node's status is in the registry's live set."""
+    conn = get_conn()
+    try:
+        row = conn.execute(q("SELECT status FROM nodes WHERE node_id = ?", (node_id,))).fetchone()
+        return bool(row) and row["status"] in node_live_statuses()
+    finally:
+        conn.close()
 
 
 @router.get("/user/{user_id}")
@@ -378,6 +394,15 @@ async def dashboard_logout(request: Request):
     response = RedirectResponse(
         url="/relay/v2/dashboard/", status_code=status.HTTP_303_SEE_OTHER
     )
+    _clear_cookies(response)
+    return response
+
+
+@router.post("/logout")
+async def dashboard_logout_post(request: Request) -> JSONResponse:
+    """Clear the dashboard session cookies (POST, CSRF double-submit required)."""
+    _verify_csrf(request)
+    response = JSONResponse({"status": "ok"})
     _clear_cookies(response)
     return response
 

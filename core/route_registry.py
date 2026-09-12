@@ -36,6 +36,7 @@ from relay_server.api.v2.security import (
 )
 from relay_server.config import settings
 from relay_server.core.db import get_conn, q
+from relay_server.core.status import node_live_statuses
 from relay_server.models import AuthContext
 
 logger = logging.getLogger(__name__)
@@ -188,13 +189,20 @@ def _lookup_route(node_id: str, path: str, method: str) -> dict[str, Any] | None
     expired is treated as "not found" so the proxy returns 404 instead
     of forwarding to a dead upstream. Permanent routes
     (``expires_at IS NULL``) never expire.
+
+    T-193 (F-16): routes of nodes that are not currently live
+    (``node_live_statuses()``) do not resolve either — the proxy must
+    not forward to a disconnected node's upstream.
     """
     conn = get_conn()
     try:
+        live = ", ".join(f"'{s}'" for s in node_live_statuses())
         row = conn.execute(
             q(
-                "SELECT node_id, path, method, auth, upstream, description, expires_at "
-                "FROM node_routes WHERE node_id = ? AND path = ? AND method = ?",
+                "SELECT r.node_id, r.path, r.method, r.auth, r.upstream, r.description, r.expires_at "
+                f"FROM node_routes r JOIN nodes n ON n.node_id = r.node_id "
+                "WHERE r.node_id = ? AND r.path = ? AND r.method = ? "
+                f"AND n.status IN ({live})",
                 (node_id, path, method.upper()),
             ),
         ).fetchone()

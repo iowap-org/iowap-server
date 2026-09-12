@@ -12,6 +12,7 @@ from relay_server.core.auth import (
     _create_token as create_runtime_token,
     _replace_runtime_token,
     generate_secret,
+    get_registration_secret_expiry,
     hash_secret,
     register_admin_node,
     register_pending_node,
@@ -259,12 +260,15 @@ async def auth_refresh(
             new_token = _replace_runtime_token(row["node_id"], row["node_name"], row["role"])
             new_secret = rotate_registration_secret(row["node_id"])
             info = validate_token(new_token, require_approved=False)
+            rs_expiry = get_registration_secret_expiry(row["node_id"])
             return RefreshResponse(
                 node_id=row["node_id"],
                 node_name=row["node_name"],
                 token_type="runtime",
                 token=new_token,
                 expires_at=info.get("expires_at") if info else None,
+                registration_secret=new_secret,
+                registration_secret_expires_at=_format_time(rs_expiry) if rs_expiry else None,
                 message="Runtime token recovered; registration secret rotated",
             )
 

@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from relay_server.config import settings
 from relay_server.core.db import get_conn, sync_node_capabilities, q
 from relay_server.core.node_registry import NodeRegistry
+from relay_server.core.status import StatusCategory, get_category
 
 class NodeExistsError(Exception):
     """Raised when a node_id or node_name already exists during registration."""
@@ -540,13 +541,22 @@ def _replace_runtime_token(node_id: str, node_name: str, role: str) -> str:
 
 
 def rotate_registration_secret(node_id: str) -> Optional[str]:
-    """Generate a new registration secret for an approved node. Returns the plain secret."""
+    """Generate a new registration secret for a node past approval (not ``pending``).
+
+    T-193 (F-18): rotation is a credential-lifecycle operation, not a
+    liveness operation — it is allowed for every non-pending,
+    registry-known status. ``None`` for pending and unknown statuses
+    (fail-closed). Returns the plain secret.
+    """
     conn = get_conn()
     try:
         row = conn.execute(
             q("SELECT status FROM nodes WHERE node_id = ?", (node_id,))
         ).fetchone()
-        if not row or row["status"] != "approved":
+        if not row:
+            return None
+        category = get_category(row["status"])
+        if category is None or category is StatusCategory.PENDING:
             return None
 
         new_secret = generate_secret("rs_")
