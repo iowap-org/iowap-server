@@ -36,19 +36,22 @@ async def discovery_heartbeat(
     ``node-cli node busy``/``idle``). ``load_cap`` carries the
     per-node load ceiling used by the auto-busy logic.
     """
-    ok = heartbeat(
-        node_id=ctx.node_id,
-        load=body.load,
-        queue_depth=body.queue_depth,
-        available=body.available,
-        endpoint=body.endpoint,
-        capabilities=[c.model_dump() for c in body.capabilities] if body.capabilities else None,
-        node_name=body.node_name,
-        description=body.description,
-        routes=[r.model_dump() for r in body.routes] if body.routes else None,
-        status=body.status,
-        load_cap=body.load_cap,
-    )
+    try:
+        ok = heartbeat(
+            node_id=ctx.node_id,
+            load=body.load,
+            queue_depth=body.queue_depth,
+            available=body.available,
+            endpoint=body.endpoint,
+            capabilities=[c.model_dump() for c in body.capabilities] if body.capabilities else None,
+            node_name=body.node_name,
+            description=body.description,
+            routes=[r.model_dump() for r in body.routes] if body.routes else None,
+            status=body.status,
+            load_cap=body.load_cap,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")
     return {"status": "ok", "node_id": ctx.node_id}
@@ -64,20 +67,23 @@ async def discovery_worker_heartbeat(
     T-081: forwards ``status`` and ``load_cap`` like the regular
     heartbeat endpoint.
     """
-    ok = heartbeat(
-        node_id=ctx.node_id,
-        load=body.load,
-        queue_depth=body.queue_depth,
-        available=body.available,
-        endpoint=body.endpoint,
-        capabilities=body.capabilities,
-        replace_capabilities=True,
-        node_name=body.node_name,
-        description=body.description,
-        routes=body.routes,
-        status=body.status,
-        load_cap=body.load_cap,
-    )
+    try:
+        ok = heartbeat(
+            node_id=ctx.node_id,
+            load=body.load,
+            queue_depth=body.queue_depth,
+            available=body.available,
+            endpoint=body.endpoint,
+            capabilities=body.capabilities,
+            replace_capabilities=True,
+            node_name=body.node_name,
+            description=body.description,
+            routes=[r.model_dump() for r in body.routes] if body.routes else None,
+            status=body.status,
+            load_cap=body.load_cap,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")
     return {"status": "ok", "node_id": ctx.node_id}

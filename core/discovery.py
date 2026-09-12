@@ -68,6 +68,8 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
     node's next heartbeat so an in-flight upload/download channel keeps
     working while the node is busy. We delete only the permanent rows
     (``expires_at IS NULL``) before re-inserting the declared set.
+    
+    Raises ``ValueError`` when a route declares an invalid upstream.
     """
     conn = get_conn()
     try:
@@ -75,15 +77,7 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
             q("DELETE FROM node_routes WHERE node_id = ? AND expires_at IS NULL", (node_id,))
         )
         for route in routes:
-            try:
-                upstream = _normalize_relative_upstream(route.get("upstream", ""))
-            except ValueError:
-                logger.warning(
-                    "Ignoring invalid route upstream for node %s path=%s",
-                    node_id,
-                    route.get("path", ""),
-                )
-                continue
+            upstream = _normalize_relative_upstream(route.get("upstream", ""))
             conn.execute(
                 q("INSERT INTO node_routes (node_id, path, method, auth, upstream, description) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (
@@ -312,10 +306,7 @@ def heartbeat(
 
     # T-075: sync routes — replace all routes for this node on each heartbeat.
     if routes is not None:
-        try:
-            _sync_node_routes(node_id, routes)
-        except Exception:
-            pass
+        _sync_node_routes(node_id, routes)
 
     # Publish event when node comes back from offline or on its first
     # heartbeat after being approved.
