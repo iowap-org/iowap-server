@@ -36,6 +36,7 @@ from relay_server.api.v2.security import (
 )
 from relay_server.config import settings
 from relay_server.core.db import get_conn, q
+from relay_server.core.net_guard import resolve_route_target, upstream_reject_reason
 from relay_server.core.status import node_live_statuses
 from relay_server.models import AuthContext
 
@@ -98,8 +99,22 @@ async def proxy_node_route(
         await get_auth_context(auth_header)
     # auth == "none" — no check needed
 
-    # Proxy the request to the upstream.
-    upstream = route["upstream"]
+    # T-206: Ziel-Origin fail-closed aufloesen. Relative Pfade binden an den
+    # eigenen endpoint des Nodes; absolute Upstreams sind nur bei gleicher
+    # Origin (Migrationspfad) oder Allowlist erlaubt; Loopback/Link-Local/
+    # Metadata fliegen immer raus. Vorher war ``upstream`` eine freie URL,
+    # die der Relay ungeprueft angefahren hat (Open Proxy).
+    upstream, target_reason = resolve_route_target(
+        str(route.get("upstream") or ""), str(route.get("endpoint") or "")
+    )
+    if upstream is None:
+        logger.warning(
+            "route target refused: node=%s upstream=%r (%s)",
+            node_id,
+            route.get("upstream"),
+            target_reason,
+        )
+        raise HTTPException(status_code=502, detail=f"Route target not allowed: {target_reason}")
     client: httpx.AsyncClient | None = None
     try:
         # T-129: stream the request body and the upstream response chunkwise
@@ -199,7 +214,8 @@ def _lookup_route(node_id: str, path: str, method: str) -> dict[str, Any] | None
         live = ", ".join(f"'{s}'" for s in node_live_statuses())
         row = conn.execute(
             q(
-                "SELECT r.node_id, r.path, r.method, r.auth, r.upstream, r.description, r.expires_at "
+                "SELECT r.node_id, r.path, r.method, r.auth, r.upstream, r.description, "
+                "r.expires_at, n.endpoint "
                 f"FROM node_routes r JOIN nodes n ON n.node_id = r.node_id "
                 "WHERE r.node_id = ? AND r.path = ? AND r.method = ? "
                 f"AND n.status IN ({live})",
@@ -368,6 +384,19 @@ async def register_temp_route(
         raise HTTPException(status_code=400, detail="channel_id too long (max 64)")
     if len(upstream) > 2048:
         raise HTTPException(status_code=400, detail="upstream too long (max 2048)")
+    # T-206: das Ziel muss die eigene Origin des Nodes treffen (oder auf der
+    # Allowlist stehen) — sonst waere der Relay ein Open Proxy.
+    conn = get_conn()
+    try:
+        node_row = conn.execute(
+            q("SELECT endpoint FROM nodes WHERE node_id = ?", (ctx.node_id,))
+        ).fetchone()
+    finally:
+        conn.close()
+    node_endpoint = str(node_row["endpoint"] or "").strip() if node_row else ""
+    reject_reason = upstream_reject_reason(upstream, node_endpoint)
+    if reject_reason is not None:
+        raise HTTPException(status_code=400, detail=reject_reason)
     # TTL bounds — must be a positive integer and capped by the server.
     try:
         ttl = int(ttl_seconds)

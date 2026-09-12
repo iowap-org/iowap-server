@@ -158,6 +158,13 @@ class Settings(BaseSettings):
     # upload/download channel alive without letting stale routes
     # accumulate indefinitely.
     temp_route_max_ttl_seconds: int = 86400
+    # T-206: comma-separated escape hatch for route proxy targets that are
+    # legitimately *not* the node's own endpoint origin (Docker-internal
+    # names, co-located services), e.g.
+    # ``RELAY_ROUTE_TARGET_ALLOW_HOSTS="storage-node,relay.local:8791"``.
+    # Empty (default) means: a route target must be the node's own origin and
+    # must never be loopback/link-local/metadata.
+    route_target_allow_hosts: str = ""
 
     # Capabilities
     capabilities_config_path: Path = Path.home() / ".relay" / "capabilities.yaml"

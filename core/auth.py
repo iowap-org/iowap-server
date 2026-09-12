@@ -11,6 +11,7 @@ import sqlalchemy as sa
 
 from relay_server.config import settings
 from relay_server.core.db import get_conn, sync_node_capabilities, q
+from relay_server.core.net_guard import validate_endpoint
 from relay_server.core.node_registry import NodeRegistry
 from relay_server.core.status import StatusCategory, get_category
 
@@ -284,6 +285,9 @@ def register_admin_node(
         node_id = _mint_node_id()
         now = _format_time(_now())
         caps_json = _serialize_capabilities(capabilities)
+        # T-206: kein ungeprueftes Ziel in der DB — ein Loopback/Link-Local-
+        # endpoint wird fail-closed verworfen (der Node existiert weiter).
+        endpoint, _endpoint_reason = validate_endpoint(endpoint)
         conn.execute(
             q("""
             INSERT INTO nodes
@@ -413,6 +417,8 @@ def approve_node(
             final_caps_list = _parse_capabilities(row["current_caps"])
             final_caps = row["current_caps"]
         final_endpoint = endpoint if endpoint is not None else row["current_endpoint"]
+        # T-206: auch der Admin-Pfad validiert das Ziel (Fail-closed NULL).
+        final_endpoint, _endpoint_reason = validate_endpoint(final_endpoint)
 
         now = _format_time(_now())
         conn.execute(

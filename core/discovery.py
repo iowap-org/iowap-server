@@ -1,16 +1,20 @@
 """Discovery and heartbeat core logic."""
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from relay_server.config import settings
 from relay_server.core.db import get_conn, q, sync_node_capabilities
 from relay_server.core.events import event_bus
+from relay_server.core.net_guard import upstream_reject_reason, validate_endpoint
 from relay_server.core.status import (
     node_can_transition,
     node_live_statuses,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -54,21 +58,45 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
     node's next heartbeat so an in-flight upload/download channel keeps
     working while the node is busy. We delete only the permanent rows
     (``expires_at IS NULL``) before re-inserting the declared set.
+
+    T-206: every route is validated against the node's own ``endpoint``
+    before it is stored (see :func:`relay_server.core.net_guard.upstream_reject_reason`).
+    An invalid route costs **the route**, not the heartbeat — a
+    misconfigured node must not fall off the cluster.
     """
     conn = get_conn()
     try:
+        row = conn.execute(
+            q("SELECT endpoint FROM nodes WHERE node_id = ?", (node_id,))
+        ).fetchone()
+        node_endpoint = str(row["endpoint"] or "").strip() if row else ""
         conn.execute(
             q("DELETE FROM node_routes WHERE node_id = ? AND expires_at IS NULL", (node_id,))
         )
         for route in routes:
+            path = str(route.get("path", "")).strip()
+            upstream = str(route.get("upstream", "")).strip()
+            if not path.startswith("/"):
+                logger.warning("route rejected: node=%s path=%r (must start with '/')", node_id, path)
+                continue
+            reason = upstream_reject_reason(upstream, node_endpoint)
+            if reason is not None:
+                logger.warning(
+                    "route rejected: node=%s path=%r upstream=%r (%s)",
+                    node_id,
+                    path,
+                    upstream,
+                    reason,
+                )
+                continue
             conn.execute(
                 q("INSERT INTO node_routes (node_id, path, method, auth, upstream, description) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (
                     node_id,
-                    route.get("path", ""),
+                    path,
                     route.get("method", "GET").upper(),
                     route.get("auth", "session"),
-                    route.get("upstream", ""),
+                    upstream,
                     route.get("description", ""),
                 )),
             )
@@ -142,8 +170,21 @@ def heartbeat(
             updates.append("available = ?")
             params.append(bool(available))
         if endpoint is not None:
+            # T-206: der endpoint ist der Ursprung, an den Routen gebunden
+            # werden — deshalb wird er hier validiert. Ein untauglicher Wert
+            # (Loopback/Link-Local/Metadata) wird fail-closed als NULL
+            # gespeichert: der Node bleibt online, kann aber kein Proxy-Ziel
+            # mehr sein. Frueher wurde der Wert ungeprueft uebernommen.
+            safe_endpoint, endpoint_reason = validate_endpoint(endpoint)
+            if endpoint_reason is not None:
+                logger.warning(
+                    "heartbeat: endpoint %r for node %s rejected (%s)",
+                    endpoint,
+                    node_id,
+                    endpoint_reason,
+                )
             updates.append("endpoint = ?")
-            params.append(endpoint)
+            params.append(safe_endpoint)
         # T-072: node-level node_name + description overrides.
         if node_name is not None:
             updates.append("node_name = ?")
@@ -292,7 +333,9 @@ def heartbeat(
         try:
             _sync_node_routes(node_id, routes)
         except Exception:
-            pass
+            # T-206: still verschluckt hiess "Route weg, keine Spur". Der
+            # Heartbeat darf weiterlaufen, aber der Grund muss ins Log.
+            logger.warning("route sync failed for node %s", node_id, exc_info=True)
 
     # Publish event when node comes back from offline or on its first
     # heartbeat after being approved.
