@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from relay_server.config import settings
 
@@ -341,6 +342,17 @@ class RouteDeclaration(BaseModel):
     upstream: str = Field(..., max_length=2048)
     description: Optional[str] = Field(None, max_length=256)
 
+    @field_validator("upstream")
+    @classmethod
+    def _relative_upstream_only(cls, value: str) -> str:
+        raw = value.strip()
+        parsed = urlsplit(raw)
+        if parsed.scheme or parsed.netloc or raw.startswith("//"):
+            raise ValueError("upstream must be a relative path on the node endpoint")
+        if not parsed.path or not parsed.path.startswith("/"):
+            raise ValueError("upstream must start with '/'")
+        return raw
+
 
 class CapabilityStatus(BaseModel):
     name: str
@@ -394,7 +406,7 @@ class NodeHeartbeatRequest(BaseModel):
     capabilities: Optional[List[dict[str, Any]]] = None
     node_name: Optional[str] = Field(None, max_length=128)
     description: Optional[str] = Field(None, max_length=1024)
-    routes: Optional[List[dict[str, Any]]] = None
+    routes: Optional[List[RouteDeclaration]] = None
     # T-081: explicit node status request + load ceiling (see HeartbeatRequest).
     status: Optional[str] = Field(None, max_length=64)
     load_cap: Optional[float] = Field(None, ge=0.0, le=1000000.0)

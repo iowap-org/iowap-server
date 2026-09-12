@@ -22,6 +22,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -89,7 +90,7 @@ def _set_status(node_id: str, status_value: str) -> None:
 
 def _make_node(status_value: str, name: str) -> str:
     """Create a node that ends up in ``status_value`` and return its id."""
-    node_id, _, _ = auth.register_pending_node(name, None, [{"name": "t193.cap"}])
+    node_id, _, _ = auth.register_pending_node(name, "http://node.test:9999", [{"name": "t193.cap"}])
     if status_value != "pending":
         auth.approve_node(node_id)
     if status_value not in ("approved", "pending"):
@@ -103,7 +104,7 @@ def _register_route(node_id: str) -> None:
         q(
             "INSERT INTO node_routes(node_id, path, method, auth, upstream) "
             "VALUES (?, ?, ?, ?, ?)",
-            (node_id, "/page", "GET", "session", "http://localhost:9999/page"),
+            (node_id, "/page", "GET", "session", "/page"),
         )
     )
     conn.commit()
@@ -161,6 +162,10 @@ def test_live_proxy_attempts_upstream():
     """Invariant: a live node's route is still proxied (dead upstream -> 502)."""
     _admin_session()
     node_id = _make_node("online", "t193-proxy-live")
+    conn = get_conn()
+    conn.execute(q("UPDATE nodes SET endpoint = ? WHERE node_id = ?", ("http://127.0.0.1:9", node_id)))
+    conn.commit()
+    conn.close()
     _register_route(node_id)
     r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
     assert r.status_code == 502
@@ -173,6 +178,86 @@ def test_offline_proxy_returns_404():
     _register_route(node_id)
     r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
     assert r.status_code == 404
+
+
+def test_proxy_binds_relative_upstream_to_node_endpoint(monkeypatch):
+    """F-21: dynamic routes must use the node endpoint origin, not a stored full URL."""
+    _admin_session()
+    node_id = _make_node("online", "t193-proxy-bind")
+    conn = get_conn()
+    conn.execute(
+        q("UPDATE nodes SET endpoint = ? WHERE node_id = ?", ("http://node.example:8791/base", node_id))
+    )
+    conn.execute(
+        q(
+            "INSERT INTO node_routes(node_id, path, method, auth, upstream) VALUES (?, ?, ?, ?, ?)",
+            (node_id, "/page", "GET", "session", "/internal/page?x=1"),
+        )
+    )
+    conn.commit()
+    conn.close()
+
+    captured = {}
+
+    async def fake_send(self, request, stream=True):
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            content=b"ok",
+            headers={"content-type": "text/plain"},
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", fake_send)
+
+    r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
+    assert r.status_code == 200
+    assert r.text == "ok"
+    assert captured["url"] == "http://node.example:8791/internal/page?x=1"
+
+
+def test_temp_route_register_rejects_absolute_upstream():
+    """F-21: temp routes must not accept arbitrary absolute upstream URLs."""
+    node_id = _make_node("online", "t193-temp-abs")
+    conn = get_conn()
+    conn.execute(q("UPDATE nodes SET endpoint = ? WHERE node_id = ?", ("http://node.test:9999", node_id)))
+    conn.commit()
+    conn.close()
+    r = client.post(
+        f"{BASE}/api/node-routes/register",
+        headers={"Authorization": f"******"},
+        json={
+            "path": "/upload/ch1",
+            "method": "POST",
+            "upstream": "http://evil.example/upload/ch1",
+            "channel_id": "ch1",
+            "ttl_seconds": 60,
+        },
+    )
+    assert r.status_code == 400
+    assert "relative path" in r.json()["detail"]
+
+
+def test_heartbeat_rejects_absolute_route_upstream():
+    """F-21: heartbeat route declarations must reject absolute upstream URLs."""
+    node_id, _, _ = auth.register_pending_node("t193-heartbeat-abs", "http://node.test:9999", [{"name": "t193.cap"}])
+    rt = auth.approve_node(node_id)
+    r = client.post(
+        "/relay/v2/discovery/heartbeat",
+        headers={"Authorization": f"******"},
+        json={
+            "endpoint": "http://node.test:9999",
+            "routes": [
+                {
+                    "path": "/page",
+                    "method": "GET",
+                    "auth": "session",
+                    "upstream": "http://evil.example/page",
+                }
+            ],
+        },
+    )
+    assert r.status_code == 422
 
 
 # ── F-17: POST /logout contract (S-02.5 / S-02.11) ──────────────────────

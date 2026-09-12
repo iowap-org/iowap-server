@@ -185,7 +185,7 @@ node_routes = sa.Table(
     sa.Column("path", sa.String(512), nullable=False),
     sa.Column("method", sa.String(16), nullable=False),
     sa.Column("auth", sa.String(32), nullable=False, default="session"),
-    sa.Column("upstream", sa.String(512), nullable=False),
+    sa.Column("upstream", sa.String(512), nullable=False),  # node-local relative path
     sa.Column("description", sa.Text, default=""),
     sa.Column("expires_at", sa.String(64), nullable=True),
     sa.Column("channel_id", sa.String(64), nullable=True),

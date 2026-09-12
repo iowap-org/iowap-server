@@ -1,8 +1,10 @@
 """Discovery and heartbeat core logic."""
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from relay_server.config import settings
 from relay_server.core.db import get_conn, q, sync_node_capabilities
@@ -11,6 +13,8 @@ from relay_server.core.status import (
     node_can_transition,
     node_live_statuses,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -45,6 +49,16 @@ def _node_timeout_threshold() -> datetime:
     return _now() - timedelta(seconds=seconds)
 
 
+def _normalize_relative_upstream(value: Any) -> str:
+    raw = str(value or "").strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc or raw.startswith("//"):
+        raise ValueError("upstream must be a relative path on the node endpoint")
+    if not parsed.path or not parsed.path.startswith("/"):
+        raise ValueError("upstream must start with '/'")
+    return raw
+
+
 def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
     """Replace all *permanent* routes for a node (T-075). Called on each heartbeat.
 
@@ -61,6 +75,15 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
             q("DELETE FROM node_routes WHERE node_id = ? AND expires_at IS NULL", (node_id,))
         )
         for route in routes:
+            try:
+                upstream = _normalize_relative_upstream(route.get("upstream", ""))
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid route upstream for node %s path=%s",
+                    node_id,
+                    route.get("path", ""),
+                )
+                continue
             conn.execute(
                 q("INSERT INTO node_routes (node_id, path, method, auth, upstream, description) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (
@@ -68,7 +91,7 @@ def _sync_node_routes(node_id: str, routes: List[Dict[str, Any]]) -> None:
                     route.get("path", ""),
                     route.get("method", "GET").upper(),
                     route.get("auth", "session"),
-                    route.get("upstream", ""),
+                    upstream,
                     route.get("description", ""),
                 )),
             )

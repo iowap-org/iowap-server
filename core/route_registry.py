@@ -3,8 +3,8 @@
 Nodes declare API routes in their capability YAML. The relay stores them
 in the ``node_routes`` table on each heartbeat. The dashboard router
 catches requests under ``/relay/v2/dashboard/api/node-routes/``, looks up
-the matching route in the DB, checks the required auth mode, and proxies
-the request to the node's upstream URL.
+the matching route in the DB, checks the required auth mode, derives the
+upstream URL from the node's registered endpoint, and proxies the request.
 
 Auth modes:
   - ``session`` — requires a valid dashboard session cookie
@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -98,8 +99,8 @@ async def proxy_node_route(
         await get_auth_context(auth_header)
     # auth == "none" — no check needed
 
-    # Proxy the request to the upstream.
-    upstream = route["upstream"]
+    # Proxy the request to the upstream bound to the node's own endpoint.
+    upstream = _build_upstream_url(route)
     client: httpx.AsyncClient | None = None
     try:
         # T-129: stream the request body and the upstream response chunkwise
@@ -199,7 +200,8 @@ def _lookup_route(node_id: str, path: str, method: str) -> dict[str, Any] | None
         live = ", ".join(f"'{s}'" for s in node_live_statuses())
         row = conn.execute(
             q(
-                "SELECT r.node_id, r.path, r.method, r.auth, r.upstream, r.description, r.expires_at "
+                "SELECT r.node_id, r.path, r.method, r.auth, r.upstream, r.description, "
+                "r.expires_at, n.endpoint "
                 f"FROM node_routes r JOIN nodes n ON n.node_id = r.node_id "
                 "WHERE r.node_id = ? AND r.path = ? AND r.method = ? "
                 f"AND n.status IN ({live})",
@@ -229,6 +231,38 @@ def _expired(expires_at: str) -> bool:
     except (ValueError, TypeError):
         return True
     return exp <= datetime.now(timezone.utc)
+
+
+def _normalize_relative_upstream(value: Any) -> str:
+    raw = str(value or "").strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc or raw.startswith("//"):
+        raise ValueError("upstream must be a relative path on the node endpoint")
+    if not parsed.path or not parsed.path.startswith("/"):
+        raise ValueError("upstream must start with '/'")
+    return raw
+
+
+def _build_upstream_url(route: dict[str, Any]) -> str:
+    """Bind a stored relative upstream path to the node's registered endpoint."""
+    endpoint = str(route.get("endpoint") or "").strip()
+    parsed_endpoint = urlsplit(endpoint)
+    if parsed_endpoint.scheme not in ("http", "https") or not parsed_endpoint.netloc:
+        raise HTTPException(status_code=502, detail="Node endpoint unavailable")
+    try:
+        relative = _normalize_relative_upstream(route.get("upstream", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    parsed_relative = urlsplit(relative)
+    return urlunsplit(
+        (
+            parsed_endpoint.scheme,
+            parsed_endpoint.netloc,
+            parsed_relative.path,
+            parsed_relative.query,
+            "",
+        )
+    )
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
@@ -286,6 +320,7 @@ async def list_own_routes(
     heartbeat routes (``expires_at IS NULL``) and live temp routes. The
     caller is a node that wants to inspect/manage its own temp routes
     via ``node-cli route list``; it cannot list another node's routes.
+    ``upstream`` is the node-local relative path, not a full URL.
     """
     auth_header = request.headers.get("authorization", "")
     token = extract_bearer(auth_header)
@@ -329,7 +364,7 @@ async def register_temp_route(
           "path": "/upload/abc123",
           "method": "POST",
           "ttl_seconds": 3600,
-          "upstream": "http://storage-node:8791/upload/abc123",
+          "upstream": "/upload/abc123",
           "channel_id": "ch_abc123",
           "description": "optional human note"
         }
@@ -368,6 +403,10 @@ async def register_temp_route(
         raise HTTPException(status_code=400, detail="channel_id too long (max 64)")
     if len(upstream) > 2048:
         raise HTTPException(status_code=400, detail="upstream too long (max 2048)")
+    try:
+        upstream = _normalize_relative_upstream(upstream)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # TTL bounds — must be a positive integer and capped by the server.
     try:
         ttl = int(ttl_seconds)
@@ -393,6 +432,13 @@ async def register_temp_route(
     expires_at = (now + timedelta(seconds=ttl)).isoformat()
     conn = get_conn()
     try:
+        node_row = conn.execute(
+            q("SELECT endpoint FROM nodes WHERE node_id = ?", (ctx.node_id,))
+        ).fetchone()
+        endpoint = str(node_row["endpoint"] or "").strip() if node_row else ""
+        parsed_endpoint = urlsplit(endpoint)
+        if parsed_endpoint.scheme not in ("http", "https") or not parsed_endpoint.netloc:
+            raise HTTPException(status_code=400, detail="node endpoint must be set for temp routes")
         # UPSERT on (node_id, path, method): re-registering the same path
         # (e.g. channel resumed) refreshes the TTL instead of clashing.
         conn.execute(
