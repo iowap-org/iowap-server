@@ -180,6 +180,19 @@ def test_offline_proxy_returns_404():
     assert r.status_code == 404
 
 
+def test_proxy_route_requires_valid_node_endpoint():
+    """F-21: relative upstreams still require a valid node endpoint origin."""
+    _admin_session()
+    node_id = _make_node("online", "t193-proxy-invalid-endpoint")
+    conn = get_conn()
+    conn.execute(q("UPDATE nodes SET endpoint = ? WHERE node_id = ?", ("mailto:broken", node_id)))
+    conn.commit()
+    conn.close()
+    _register_route(node_id)
+    r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
+    assert r.status_code == 502
+
+
 def test_proxy_binds_relative_upstream_to_node_endpoint(monkeypatch):
     """F-21: dynamic routes must use the node endpoint origin, not a stored full URL."""
     _admin_session()
