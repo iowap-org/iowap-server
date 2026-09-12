@@ -5,7 +5,7 @@
  * tokens + mockup components (nav, hero, status-bar, node cards,
  * activity feed, footer) so the admin looks exactly like the reference
  * mockup, then adds the admin-only specifics (tabs, modals, create-user
- * form, inline inputs, permissions grid, SSN page, action buttons).
+ * form, inline inputs, permissions grid, node profile modal, action buttons).
  *
  * cluster.css is intentionally NOT modified — every override lives here.
  */
@@ -256,7 +256,6 @@ tr.clickable:hover { background: var(--panel-2); }
   background: linear-gradient(135deg, var(--accent), transparent);
 }
 .node-card .banner.warn { background: linear-gradient(135deg, var(--warn), transparent); }
-.node-card .banner.ssn { background: linear-gradient(135deg, var(--accent-2), transparent); }
 .node-card .banner.ct { background: linear-gradient(135deg, var(--info), transparent); }
 .node-card .body { padding: 0 1rem 1rem; margin-top: -20px; }
 .node-card .node-avatar {
@@ -268,7 +267,6 @@ tr.clickable:hover { background: var(--panel-2); }
 }
 .node-card .node-avatar.cyberfox { background: linear-gradient(135deg, var(--accent), var(--ok)); }
 .node-card .node-avatar.mac { background: linear-gradient(135deg, var(--warn), var(--bad)); }
-.node-card .node-avatar.ssn { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
 .node-card .node-avatar.ct { background: linear-gradient(135deg, var(--info), var(--ok)); }
 .node-card .node-avatar.default { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
 .node-card .node-name { font-weight: 600; font-size: 0.95rem; }
@@ -500,17 +498,17 @@ tr.clickable:hover { background: var(--panel-2); }
   font-size: 0.85rem; cursor: pointer;
 }
 
-/* ===== SSN page modal ================================================== */
+/* ===== Node profile modal ============================================== */
 
-.ssn-box {
+.node-box {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 0.75rem; padding: 1rem;
   min-width: 520px; max-width: 90vw; width: 80vw;
   z-index: 100; display: flex; flex-direction: column;
 }
-.ssn-box h3 { margin: 0 0 0.75rem; }
-#ssnPageFrame {
+.node-box h3 { margin: 0 0 0.75rem; }
+#nodePageFrame {
   width: 100%; height: 70vh;
   border: 1px solid var(--border);
   border-radius: 0.5rem;

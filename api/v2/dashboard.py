@@ -2,9 +2,7 @@ import secrets
 
 """Dashboard router for the relay service — static UI + API endpoints."""
 
-import asyncio
 import json
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -68,23 +66,6 @@ STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 USER_COOKIE = "relay_user"
 CSRF_COOKIE = "relay_csrf"
 CSRF_HEADER = "x-csrf-token"
-
-# T-070: capability advertised by the Server-Side Node that hosts HTML
-# dashboard pages for other capabilities. The dashboard asks it (via a
-# task with ``action: list``) which capability pages are available.
-SSN_PAGES_CAPABILITY = "ssn.capability-pages"
-
-# Short-lived cache for the SSN page list so the dashboard does not
-# submit a task to the SSN on every page view. The TTL is deliberately
-# short so newly added/removed pages show up quickly.
-_SSN_PAGES_CACHE_TTL_SECONDS = 30
-_ssn_pages_cache: dict[str, Any] = {"value": None, "expires_at": 0.0}
-
-# How long the relay waits for the SSN to complete a ``list`` task and how
-# often it polls the task status while waiting.
-_SSN_PAGE_TASK_TIMEOUT_SECONDS = 10
-_SSN_PAGE_TASK_POLL_INTERVAL_SECONDS = 0.2
-
 
 def _set_user_cookie(response, user: dict, max_age: int = SESSION_MAX_AGE_SECONDS) -> None:
     """Set the signed relay_user cookie.
@@ -582,13 +563,7 @@ async def dashboard_capabilities(
     request: Request,
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
-    """Return capabilities advertised by online nodes (session-cookie auth).
-
-    The dashboard's **Capabilities** tab lists capabilities offered by a
-    Server-Side Node (SSN) heartbeat — notably ``ssn.capability-pages``.
-    Actual HTML page management is delegated to the SSN via tasks (T-069);
-    the relay no longer stores or serves capability pages itself.
-    """
+    """Return capabilities advertised by online nodes (session-cookie auth)."""
     check_dashboard_permission(ctx, "dashboard:view")
     from relay_server.core.discovery import get_capabilities
 
@@ -769,132 +744,6 @@ async def dashboard_get_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
-
-
-# --- SSN CAPABILITY PAGES (T-070) ---
-
-
-def _ssn_capability_online() -> bool:
-    """Return True when a node heartbeating ``ssn.capability-pages`` is online."""
-    from relay_server.core.discovery import get_capability_by_name
-
-    cap = get_capability_by_name(SSN_PAGES_CAPABILITY)
-    return bool(cap and cap.get("available", False) and cap.get("nodes"))
-
-
-async def _fetch_ssn_pages() -> list[dict[str, str]]:
-    """Submit a ``list`` task to ``ssn.capability-pages`` and collect the result.
-
-    Returns a list of dicts with ``name`` (capability name) and ``url``
-    (Dynamic Route URL to the page). Errors map to an empty list.
-    """
-    from relay_server.api.v2.scheduler import scheduler_create_simple_task
-
-    # Find the SSN node_id from the ssn.capability-pages capability.
-    from relay_server.core.discovery import get_capability_by_name
-    from relay_server.core.scheduler import Scheduler
-    from relay_server.models import SimpleTaskRequest
-    cap = get_capability_by_name(SSN_PAGES_CAPABILITY)
-    if not cap or not cap.get("nodes"):
-        return []
-    ssn_node_id = cap["nodes"][0]["node_id"]
-
-    ctx = AuthContext(
-        token_id="__dashboard_admin__",
-        node_id="__dashboard_admin__",
-        node_name="Dashboard",
-        endpoint=None,
-        capabilities=[],
-        status="approved",
-        role="admin",
-        token_type="internal",
-        pending=False,
-    )
-    try:
-        resp = await scheduler_create_simple_task(
-            SimpleTaskRequest(
-                capability=SSN_PAGES_CAPABILITY,
-                payload={"action": "list"},
-                name="ssn-pages-list",
-            ),
-            ctx,
-        )
-    except HTTPException:
-        return []
-    task_id = resp.task_id
-    stage_id = resp.stage_id
-
-    deadline = time.monotonic() + _SSN_PAGE_TASK_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        task = Scheduler.get_task(task_id)
-        if not task:
-            return []
-        stage = next((s for s in task["stages"] if s["stage_id"] == stage_id), None)
-        if not stage:
-            return []
-        if stage["status"] == "completed":
-            result = stage.get("result") or {}
-            caps = result.get("capabilities")
-            if isinstance(caps, list):
-                pages = []
-                for c in caps:
-                    if isinstance(c, str):
-                        name = c
-                    elif isinstance(c, dict):
-                        name = c.get("name", "")
-                    else:
-                        continue
-                    if not name:
-                        continue
-                    # The page path is the capability name (e.g. image.generate.mflux)
-                    url = f"/relay/v2/dashboard/api/node-routes/{ssn_node_id}/{name}"
-                    pages.append({"name": name, "node_id": ssn_node_id, "url": url})
-                return pages
-            return []
-        if stage["status"] in ("failed", "timed_out"):
-            return []
-        await asyncio.sleep(_SSN_PAGE_TASK_POLL_INTERVAL_SECONDS)
-    return []
-
-
-async def _get_ssn_pages_cached() -> list[dict[str, str]]:
-    """Return the SSN-managed capability-page list with URLs, cached for a short TTL.
-
-    The cache avoids submitting a task to the SSN on every dashboard page
-    view. A fresh fetch is performed when the cache is empty, expired, or
-    when no SSN is currently online.
-    """
-    now = time.monotonic()
-    cached = _ssn_pages_cache
-    if cached["value"] is not None and now < cached["expires_at"]:
-        return cached["value"]  # type: ignore[no-any-return]
-
-    if not _ssn_capability_online():
-        # SSN not reachable — clear the cache so a returning SSN is picked up
-        # immediately instead of after the TTL.
-        cached["value"] = None
-        cached["expires_at"] = 0.0
-        return []
-
-    caps = await _fetch_ssn_pages()
-    cached["value"] = caps
-    cached["expires_at"] = now + _SSN_PAGES_CACHE_TTL_SECONDS
-    return caps
-
-
-@router.get("/api/ssn-pages")
-async def dashboard_ssn_pages(
-    request: Request,
-    ctx: AuthContext = Depends(require_dashboard_user),
-):
-    """Return the list of capabilities that have a dashboard page on the SSN.
-
-    Each entry includes ``name`` (capability name), ``node_id`` (SSN node),
-    and ``url`` (Dynamic Route URL to open in the iframe).
-    """
-    check_dashboard_permission(ctx, "dashboard:view")
-    pages = await _get_ssn_pages_cached()
-    return {"capabilities": pages, "online": _ssn_capability_online()}
 
 
 # --- RBAC MANAGEMENT ---
@@ -1250,18 +1099,6 @@ _ENDPOINTS = [
         "path": "/relay/v2/dashboard/api/tasks/{task_id}",
         "auth": "admin",
         "description": "Task status for a capability page (T-069)",
-    },
-    {
-        "method": "GET",
-        "path": "/relay/v2/dashboard/api/ssn-pages",
-        "auth": "admin",
-        "description": "Capabilities with a dashboard page hosted by the SSN (T-070)",
-    },
-    {
-        "method": "GET",
-        "path": "/relay/v2/dashboard/api/ssn-page/{capability}",
-        "auth": "admin",
-        "description": "Proxy the SSN-hosted HTML dashboard page for a capability (T-070)",
     },
 ]
 

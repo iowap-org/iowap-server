@@ -15,7 +15,7 @@ from relay_server.core.db import get_conn, q, settings
 # PostgreSQL has no GROUP_CONCAT — it uses string_agg(x, sep). The function
 # has to be baked into the SQL text, so it is chosen per dialect before the
 # query is built. On PostgreSQL the separator must be ' ' (space); on
-# SQLite/MariaDB it is ','. The parsers below split on the separator that
+# SQLite it is ','. The parsers below split on the separator that
 # matches the dialect, which keeps the call sites identical.
 _PG = settings.db_type == "postgres"
 _GROUP_SEP = " " if _PG else ","
@@ -23,7 +23,7 @@ _GROUP_SEP_CH = " " if _PG else ","
 
 
 def _agg(expr: str) -> str:
-    """GROUP_CONCAT(expr, sep) for SQLite/MariaDB, string_agg for PostgreSQL."""
+    """GROUP_CONCAT(expr, sep) for SQLite, string_agg for PostgreSQL."""
     if _PG:
         return f"string_agg({expr}, {_GROUP_SEP!r})"
     return f"GROUP_CONCAT({expr}, {_GROUP_SEP!r})"

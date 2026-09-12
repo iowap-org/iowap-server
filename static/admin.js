@@ -2,7 +2,7 @@
 //
 // Complete rewrite. Same backend API contract as before (session cookie
 // + CSRF, fetchJson/postForm/delJson, node approve/token/delete, user +
-// group management, SSN capability pages) but rendering in the mockup
+// group management) but rendering in the mockup
 // style: status-bar row, node profile cards (banner, avatar, name+id,
 // status dot, caps, load-mini, meta + actions), activity feed (icon +
 // text + ts). User/group tables stay tables.
@@ -11,7 +11,6 @@ let currentUser = null;
 let allPermissions = [];
 let groupsData = [];
 let editingGroupId = null;
-let ssnPageCapabilities = new Map();
 
 // ===== helpers ==========================================================
 
@@ -227,14 +226,12 @@ function nodeAvatarClass(nodeName) {
   const n = (nodeName || "").toLowerCase();
   if (n.includes("cyberfox") || n.includes("felix")) return "cyberfox";
   if (n.includes("mac") || n.includes("m4")) return "mac";
-  if (n.includes("ssn")) return "ssn";
   if (n.includes("ct")) return "ct";
   return "default";
 }
 function nodeBannerClass(nodeName) {
   const n = (nodeName || "").toLowerCase();
   if (n.includes("mac") || n.includes("m4")) return "warn";
-  if (n.includes("ssn")) return "ssn";
   if (n.includes("ct")) return "ct";
   return "";
 }
@@ -242,7 +239,6 @@ function nodeAvatarEmoji(nodeName) {
   const n = (nodeName || "").toLowerCase();
   if (n.includes("cyberfox") || n.includes("felix")) return "🦊";
   if (n.includes("mac") || n.includes("m4")) return "💻";
-  if (n.includes("ssn")) return "☁";
   if (n.includes("ct")) return "🌐";
   return (nodeName || "?").charAt(0).toUpperCase();
 }
@@ -643,28 +639,13 @@ function bindSchedulerSliders() {
   document.getElementById("btnSaveScheduler").addEventListener("click", saveSchedulerConfig);
 }
 
-// ===== SSN capability pages ============================================
-
-async function loadSsnPages() {
-  try {
-    const data = await fetchJson("/relay/v2/dashboard/api/ssn-pages");
-    ssnPageCapabilities = new Map((data.capabilities || []).map((p) => [p.name, p]));
-  } catch (err) {
-    ssnPageCapabilities = new Map();
-    console.error("loadSsnPages failed:", err);
-  }
-}
+// ===== Capabilities tab =================================================
 
 function renderCapabilityCard(c) {
-  const page = ssnPageCapabilities.get(c.name);
-  const hasPage = !!page;
-  const clickable = hasPage ? "cap-card-clickable" : "";
-  const badge = hasPage ? '<span class="cap-page-badge" title="Dashboard page available">📄</span>' : "";
-  const dataAttr = hasPage ? `data-capability="${escAttr(c.name)}"` : "";
   const nodeCount = (c.nodes || []).length;
   return `
-    <div class="cap-card ${clickable}" ${dataAttr}>
-      <div class="cap-name">${escHtml(c.name)}${badge}</div>
+    <div class="cap-card">
+      <div class="cap-name">${escHtml(c.name)}</div>
       <p class="cap-desc">${escHtml(c.description || "No description")}</p>
       <div class="node-caps">
         <span class="tag info">${escHtml(c.type || "unknown")}</span>
@@ -675,10 +656,7 @@ function renderCapabilityCard(c) {
 
 async function loadCapabilities() {
   try {
-    const [capsReq] = await Promise.all([
-      fetchJson("/relay/v2/dashboard/api/capabilities"),
-      loadSsnPages(),
-    ]);
+    const capsReq = await fetchJson("/relay/v2/dashboard/api/capabilities");
     const caps = capsReq.capabilities || [];
     const container = document.getElementById("capabilityCards");
     if (!caps.length) {
@@ -691,21 +669,11 @@ async function loadCapabilities() {
   }
 }
 
-function openSsnPageModal(capability) {
-  const page = ssnPageCapabilities.get(capability);
-  if (!page || !page.url) return;
-  const frame = document.getElementById("ssnPageFrame");
-  frame.src = page.url;
-  document.getElementById("ssnPageTitle").textContent = capability;
-  document.getElementById("ssnPageOverlay").classList.remove("hidden");
-  document.getElementById("ssnPageBox").classList.remove("hidden");
-}
-
-function hideSsnPageModal() {
-  const frame = document.getElementById("ssnPageFrame");
+function hideNodePageModal() {
+  const frame = document.getElementById("nodePageFrame");
   frame.src = "about:blank";
-  document.getElementById("ssnPageOverlay").classList.add("hidden");
-  document.getElementById("ssnPageBox").classList.add("hidden");
+  document.getElementById("nodePageOverlay").classList.add("hidden");
+  document.getElementById("nodePageBox").classList.add("hidden");
 }
 
 // ===== main load =======================================================
@@ -766,11 +734,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (card && !e.target.closest("button, .approve-btn, .token-btn, .delete-btn")) {
       const name = card.dataset.nodeName;
       if (name) {
-        const frame = document.getElementById("ssnPageFrame");
+        const frame = document.getElementById("nodePageFrame");
         frame.src = "/relay/v2/dashboard/node/" + encodeURIComponent(name);
-        document.getElementById("ssnPageTitle").textContent = name;
-        document.getElementById("ssnPageOverlay").classList.remove("hidden");
-        document.getElementById("ssnPageBox").classList.remove("hidden");
+        document.getElementById("nodePageTitle").textContent = name;
+        document.getElementById("nodePageOverlay").classList.remove("hidden");
+        document.getElementById("nodePageBox").classList.remove("hidden");
         return;
       }
     }
@@ -824,17 +792,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // SSN capability page card click.
-  document.addEventListener("click", (e) => {
-    const card = e.target.closest(".cap-card-clickable");
-    if (card && card.dataset.capability) {
-      openSsnPageModal(card.dataset.capability);
-      return;
-    }
-  });
-
-  document.getElementById("ssnPageOverlay")?.addEventListener("click", hideSsnPageModal);
-  document.querySelector(".close-ssn-page-btn")?.addEventListener("click", hideSsnPageModal);
+  document.getElementById("nodePageOverlay")?.addEventListener("click", hideNodePageModal);
+  document.querySelector(".close-node-page-btn")?.addEventListener("click", hideNodePageModal);
 
   // T-164/T-165: Datei-Übertragung — Schieberegler + Bridge-Ampel.
   bindTransferSliders();

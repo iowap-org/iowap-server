@@ -47,7 +47,6 @@ function nodeAvatarClass(nodeName) {
   const n = (nodeName || "").toLowerCase();
   if (n.includes("cyberfox") || n.includes("felix")) return "cyberfox";
   if (n.includes("mac") || n.includes("m4")) return "mac";
-  if (n.includes("ssn")) return "ssn";
   if (n.includes("ct")) return "ct";
   return "default";
 }
@@ -55,7 +54,6 @@ function nodeAvatarEmoji(nodeName) {
   const n = (nodeName || "").toLowerCase();
   if (n.includes("cyberfox") || n.includes("felix")) return "🦊";
   if (n.includes("mac") || n.includes("m4")) return "💻";
-  if (n.includes("ssn")) return "☁";
   if (n.includes("ct")) return "🌐";
   return (nodeName || "?").charAt(0).toUpperCase();
 }

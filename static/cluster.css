@@ -282,7 +282,6 @@ nav.topnav .topnav-avatar {
   background: linear-gradient(135deg, var(--accent), transparent);
 }
 .node-card .banner.warn { background: linear-gradient(135deg, var(--warn), transparent); }
-.node-card .banner.ssn { background: linear-gradient(135deg, var(--accent-2), transparent); }
 .node-card .banner.ct { background: linear-gradient(135deg, var(--info), transparent); }
 .node-card .body { padding: 0 1rem 1rem; margin-top: -20px; }
 .node-card .node-avatar {
@@ -299,7 +298,6 @@ nav.topnav .topnav-avatar {
 }
 .node-card .node-avatar.cyberfox { background: linear-gradient(135deg, var(--accent), var(--ok)); }
 .node-card .node-avatar.mac { background: linear-gradient(135deg, var(--warn), var(--bad)); }
-.node-card .node-avatar.ssn { background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
 .node-card .node-avatar.ct { background: linear-gradient(135deg, var(--info), var(--ok)); }
 .node-card .node-avatar.default { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
 .node-card .node-name { font-weight: 600; font-size: 0.95rem; }

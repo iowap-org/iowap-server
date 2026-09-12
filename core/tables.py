@@ -2,7 +2,7 @@
 
 Every table is declared once here as a :class:`sqlalchemy.Table` against a
 shared :class:`sqlalchemy.MetaData`. ``metadata.create_all(engine)`` then
-builds the schema on any backend (SQLite, PostgreSQL, MariaDB) from the
+builds the schema on any backend (SQLite, PostgreSQL) from the
 same declaration — no dialect-specific DDL strings in business code.
 
 Conventions (deliberate, see T-110 plan):

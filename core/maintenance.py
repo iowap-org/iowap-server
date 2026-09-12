@@ -100,32 +100,6 @@ def _db_vacuum() -> Dict[str, Any]:
         conn.close()
 
 
-def _ssn_auto_approve() -> Dict[str, Any]:
-    """Auto-approve pending SSN node registrations (T-069).
-
-    The SSN registers as a normal worker node. When ``ssn_auto_approve``
-    is enabled we periodically sweep for pending worker nodes and approve
-    them so the SSN can transition to ``online`` on its first heartbeat.
-    """
-    if not settings.ssn_auto_approve:
-        return {"approved": 0}
-    from relay_server.core.auth import approve_node  # noqa: PLC0415
-
-    approved = 0
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            q("SELECT node_id FROM nodes WHERE status = 'pending' AND role = 'worker'")
-        ).fetchall()
-        node_ids = [r["node_id"] for r in rows]
-    finally:
-        conn.close()
-    for node_id in node_ids:
-        if approve_node(node_id) is not None:
-            approved += 1
-    return {"approved": approved}
-
-
 def _temp_route_cleanup() -> Dict[str, Any]:
     """Reap expired temporary bridge routes (T-125).
 
@@ -356,16 +330,6 @@ class MaintenanceScheduler:
             _temp_route_cleanup,
             settings.temp_route_cleanup_interval_seconds,
         )
-
-        # SSN auto-approve (T-069) — only registered when ssn_enabled and
-        # ssn_auto_approve are both on. Approves pending SSN registrations
-        # so the SSN can come online without a manual admin action.
-        if settings.ssn_enabled and settings.ssn_auto_approve:
-            self.register(
-                "ssn_auto_approve",
-                _ssn_auto_approve,
-                settings.maintenance_interval_seconds,
-            )
 
 # T-181: module-level singleton — main.py drives the loop with it,
 # core/db.apply_settings_overrides() re-registers watchdogs on it after

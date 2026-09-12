@@ -13,7 +13,6 @@ Currently supported backends:
   ``db_postgres.py``, SQLAlchemy Core engine with connection pooling; DSN
   ``postgresql+psycopg://user:pass@host:5432/relay`` via ``settings.pg_dsn``,
   T-110)
-* ``mariadb`` (stub, raises ``NotImplementedError`` — :class:`MariadbDatabase`)
 
 T-110: ``SqliteDatabase`` is now backed by a SQLAlchemy Core engine. The
 on-disk SQLite database is the same file; SQLAlchemy simply opens it through
@@ -306,10 +305,6 @@ def create_database() -> Database:
         from relay_server.core.db_postgres import PostgresDatabase
 
         return PostgresDatabase(settings.pg_dsn)
-    if db_type == "mariadb":
-        from relay_server.core.db_mariadb import MariadbDatabase
-
-        return MariadbDatabase(settings.mariadb_dsn)
     raise ValueError(f"Unknown db_type: {db_type!r}")
 
 
@@ -370,8 +365,7 @@ def q(sql: str, params: Any = ()) -> "sa.TextClause":
     rewrites ``?`` to named bind parameters (``:p0``, ``:p1`` …) and binds
     the tuple values in order. SQLAlchemy then renders the correct
     placeholder for the active dialect — ``?`` on SQLite, ``$N`` on
-    PostgreSQL, ``%s`` on MySQL/MariaDB — so the same call site works
-    against every backend.
+    PostgreSQL — so the same call site works against every backend.
 
     Usage::
 

@@ -36,12 +36,10 @@ class Settings(BaseSettings):
 
     # Database backend selection (pluggable abstraction).
     # ``sqlite`` is the default; ``postgres`` is fully implemented
-    # (SQLAlchemy engine + migrations); ``mariadb`` is a stub whose
-    # implementation is deferred. DSNs are only consulted when the
-    # matching ``db_type`` is active.
-    db_type: Literal["sqlite", "postgres", "mariadb"] = "sqlite"
+    # (SQLAlchemy engine + migrations). DSNs are only consulted when
+    # the matching ``db_type`` is active.
+    db_type: Literal["sqlite", "postgres"] = "sqlite"
     pg_dsn: str = ""
-    mariadb_dsn: str = ""
 
     # Auth
     token_ttl_hours: int = 168
@@ -164,15 +162,6 @@ class Settings(BaseSettings):
     # Capabilities
     capabilities_config_path: Path = Path.home() / ".relay" / "capabilities.yaml"
 
-    # SSN (Server-Side Node) — T-069
-    ssn_enabled: bool = False
-    ssn_auto_approve: bool = True
-    ssn_service_unit: str = "iowap-ssn.service"
-    # T-070: directory where the co-located SSN stores capability pages
-    # (~/.ssn/pages). The dashboard reads these directly to render the
-    # capability-page overview without a round-trip task to the SSN.
-    ssn_pages_dir: Path = Path.home() / ".ssn" / "pages"
-
     class Config:
         env_prefix = "RELAY_"
         env_file = ".env"
@@ -217,7 +206,6 @@ def _apply_yaml_overrides(base: Settings, path: Optional[Path]) -> Settings:
         "chunked_uploads_dir",
         "static_dir",
         "capabilities_config_path",
-        "ssn_pages_dir",
         "tls_certfile",
         "tls_keyfile",
     ]:

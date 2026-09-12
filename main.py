@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import logging
-import subprocess
 import sys
 from contextlib import asynccontextmanager
 
@@ -104,18 +103,9 @@ async def lifespan(app: FastAPI):
             # Start mDNS in the background so it cannot block server startup.
             asyncio.get_running_loop().run_in_executor(None, mdns.start)
 
-    # T-069: start the Server-Side Node (SSN) if enabled. The SSN is a
-    # normal ``node-cli`` daemon running on the same host. We start its
-    # systemd user unit so it heartbeats ``ssn.capability-pages`` (and
-    # any other SSN capabilities). When ``ssn_auto_approve`` is set the
-    # maintenance loop auto-approves the pending SSN registration.
-    if settings.ssn_enabled:
-        _ssn_start()
     try:
         yield
     finally:
-        if settings.ssn_enabled:
-            _ssn_stop()
         if settings.enable_mdns:
             mdns.stop()
         maintenance_task.cancel()
@@ -180,52 +170,6 @@ def _is_noop_result(result: dict) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# SSN (Server-Side Node) helpers — T-069
-# ---------------------------------------------------------------------------
-
-def _ssn_start() -> None:
-    """Start the SSN systemd user unit (best effort, never raises)."""
-    try:
-        subprocess.run(  # noqa: S603, S607 — operator-controlled unit name
-            ["systemctl", "--user", "start", settings.ssn_service_unit],
-            check=False,
-            capture_output=True,
-        )
-        logger.info("SSN: started systemd unit %s", settings.ssn_service_unit)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("SSN: could not start %s: %s", settings.ssn_service_unit, exc)
-
-
-def _ssn_stop() -> None:
-    """Stop the SSN systemd user unit (best effort, never raises).
-
-    Uses a 10-second timeout so a stuck SSN cannot block the relay's
-    graceful shutdown indefinitely.
-    """
-    try:
-        subprocess.run(  # noqa: S603, S607
-            ["systemctl", "--user", "stop", settings.ssn_service_unit],
-            check=False,
-            capture_output=True,
-            timeout=10,
-        )
-        logger.info("SSN: stopped systemd unit %s", settings.ssn_service_unit)
-    except subprocess.TimeoutExpired:
-        logger.warning("SSN: stop timed out, sending SIGKILL to %s", settings.ssn_service_unit)
-        try:
-            subprocess.run(  # noqa: S603, S607
-                ["systemctl", "--user", "kill", "-s", "SIGKILL", settings.ssn_service_unit],
-                check=False,
-                capture_output=True,
-                timeout=5,
-            )
-        except Exception:  # noqa: BLE001
-            pass
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("SSN: could not stop %s: %s", settings.ssn_service_unit, exc)
-
-
 def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     """Convert slowapi's default error into JSON for API consumers."""
     return JSONResponse(
@@ -244,9 +188,10 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 
-# T-070/T-076: SSN capability pages are now served via Dynamic Routes
-# under /relay/v2/dashboard/api/node-routes/. The iframe embeds operator-provided
-# HTML, so inline scripts/styles are permitted and frame-ancestors is relaxed
+# Node-declared pages and profiles are served via Dynamic Routes under
+# /relay/v2/dashboard/api/node-routes/ and node profile pages under
+# /relay/v2/dashboard/node/. The iframe embeds operator-provided HTML,
+# so inline scripts/styles are permitted and frame-ancestors is relaxed
 # to 'self' so the dashboard can embed them.
 _NODE_ROUTES_PREFIX = "/relay/v2/dashboard/api/node-routes/"
 _NODE_PROFILE_PREFIX = "/relay/v2/dashboard/node/"
