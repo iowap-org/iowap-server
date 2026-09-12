@@ -121,10 +121,11 @@ def test_legacy_db_without_version_rows_is_baselined_and_keeps_data():
 def test_legacy_schema_missing_column_gets_migrated():
     assert "consecutive_high_load" in _node_columns()
 
-    # Simulate a pre-T-081 database: column gone, no version history.
+    # Simulate a database grown before T-187: the ledger table does not exist
+    # at all, the column is gone.
     _raw_edit(
         "ALTER TABLE nodes DROP COLUMN consecutive_high_load",
-        "DELETE FROM schema_version",
+        "DROP TABLE schema_version",
     )
     assert "consecutive_high_load" not in _node_columns()
 
