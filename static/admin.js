@@ -582,14 +582,18 @@ function bindTransferSliders() {
 }
 
 async function saveTransferConfig() {
-  const inline = document.getElementById("sliderInline").value;
-  const artifact = document.getElementById("sliderArtifact").value;
-  const ttl = document.getElementById("sliderTtl").value;
+  // F-13: the sliders are MiB — the server wants BYTES. Convert before
+  // posting so the saved values round-trip through loadTransferConfig.
+  const inline = Number(document.getElementById("sliderInline").value);
+  const artifact = Number(document.getElementById("sliderArtifact").value);
+  const ttl = Number(document.getElementById("sliderTtl").value);
+  const inlineBytes = Math.round(inline * 1024 * 1024);
+  const artifactBytes = Math.round(artifact * 1024 * 1024);
   try {
     await postForm("/relay/v2/dashboard/api/transfer-config", new URLSearchParams({
-      max_inline_bytes: inline,
-      max_artifact_bytes: artifact,
-      artifact_ttl_days: ttl,
+      max_inline_bytes: String(inlineBytes),
+      max_artifact_bytes: String(artifactBytes),
+      artifact_ttl_days: String(ttl),
     }));
     adminMsg("Transfer-Konfig gespeichert.");
     loadTransferConfig();

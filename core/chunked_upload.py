@@ -95,6 +95,10 @@ class ChunkedUploadManager:
             "created_at": _now_ts(),
             "created_by": created_by,
             "total_bytes": 0,
+            # F-15a (D-10b): per-slot sizes — a re-sent chunk replaces its
+            # slot, so the total tracks the current slots, not cumulative
+            # upload bytes.
+            "chunk_sizes": {},
         }
         return {"upload_id": upload_id, "status": "init"}
 
@@ -104,6 +108,14 @@ class ChunkedUploadManager:
         chunk_index: int,
         data: bytes | str,
     ) -> Dict[str, Any]:
+        """Store one chunk in its on-disk slot (F-15a: replacement-diff).
+
+        ``total_bytes`` is the sum of the CURRENT on-disk slot sizes: a
+        re-sent chunk index replaces its slot, so only the difference
+        between the new payload and the old slot flows into the total
+        (D-10). The size limit is checked against that current total,
+        never against cumulative upload bytes.
+        """
         session = self._sessions.get(upload_id)
         if session is None:
             raise ChunkedUploadError("Upload session not found", upload_id)
@@ -124,8 +136,10 @@ class ChunkedUploadManager:
                 f"max_chunk_size of {settings.max_chunk_size} bytes"
             )
 
-        # Enforce total upload size limit.
-        new_total = session["total_bytes"] + len(payload)
+        # F-15a (D-10): enforce the total limit against the current slots —
+        # a replaced slot contributes its difference, not its full size.
+        old_slot_size = session["chunk_sizes"].get(chunk_index, 0)
+        new_total = session["total_bytes"] - old_slot_size + len(payload)
         if new_total > settings.max_upload_bytes:
             raise ChunkedUploadError(
                 f"Upload would exceed max_upload_bytes of "
@@ -136,6 +150,7 @@ class ChunkedUploadManager:
         chunk_path.write_bytes(payload)
         session["received"].add(chunk_index)
         session["total_bytes"] = new_total
+        session["chunk_sizes"][chunk_index] = len(payload)
         return {
             "upload_id": upload_id,
             "chunk_index": chunk_index,
@@ -199,13 +214,38 @@ class ChunkedUploadManager:
     def prune_stale(self, max_age_seconds: float = 3600.0) -> int:
         """Drop sessions older than ``max_age_seconds`` (default 1h).
 
-        Returns the number of pruned sessions.
+        Also reaps orphan session directories on disk that are unknown to the
+        in-memory session map (restart case, F-15b): any directory under the
+        chunked-uploads base dir whose mtime is older than ``max_age_seconds``
+        and which belongs to no known session is removed. Fresh unknown dirs
+        survive via the age filter. Heuristic (accepted by the audit contract):
+        an upload interrupted for >1h by a manager restart loses its directory.
+
+        Returns the number of pruned sessions (known-stale + orphans).
         """
         cutoff = _now_ts() - max_age_seconds
         stale = [uid for uid, s in self._sessions.items() if s["created_at"] < cutoff]
         for uid in stale:
             self.discard_session(uid)
-        return len(stale)
+
+        # F-15b (D-9): orphan pass — age ∩ unknown-to-map ∩ is-dir. Runs
+        # after the known-session loop, so discarded session dirs are
+        # already gone and remaining known dirs are excluded by name.
+        orphans = 0
+        try:
+            for d in self._resolve_base_dir().iterdir():
+                if (
+                    d.is_dir()
+                    and d.name not in self._sessions
+                    and d.stat().st_mtime < cutoff
+                ):
+                    shutil.rmtree(d, ignore_errors=True)
+                    orphans += 1
+        except OSError:
+            # Base dir vanished between resolve and iterdir — zero
+            # orphans, not an exception (ignore_errors spirit).
+            pass
+        return len(stale) + orphans
 
 
 # Module-level singleton used by the storage router.

@@ -60,6 +60,25 @@ def maintenance_age_seconds() -> float | None:
     return time.monotonic() - _last_maintenance_run
 
 
+def maintenance_last_ok() -> bool:
+    """Return the ``ok`` flag of the last maintenance sweep (True if none ran).
+
+    F-20: public read accessor for the module-global ``_last_maintenance_ok``.
+    ``/ready`` uses it to degrade when a sweep failed.
+    """
+    return _last_maintenance_ok
+
+
+def evaluate_maintenance_results(results: dict[str, dict[str, Any]]) -> bool:
+    """True iff no result dict carries an 'error' key (empty results = ok).
+
+    F-20: pure function — no globals, no I/O. The maintenance loop feeds it
+    the ``run_due()`` result map; a sweep with any ``{"error": ...}`` task
+    result evaluates to not-ok so the loop marks the sweep failed.
+    """
+    return not any("error" in r for r in results.values())
+
+
 def _count_groups(query: str, col: str) -> dict[str, int]:
     conn = get_conn()
     try:
@@ -93,16 +112,23 @@ def _build_histogram(values: list[float], buckets: list[float]) -> dict:
 
     Returns ``{"buckets": {le_str: cum_count, ...}, "sum": float, "count": n}``.
     Each observation increments every bucket whose upper bound ``>=`` its
-    value, so bucket counts are already cumulative. ``+Inf`` is implied by
-    ``count``. Bucket keys are the ``le`` threshold as strings.
+    value, so bucket counts are already cumulative. The ``+Inf`` bucket is
+    explicit (F-20): inserted last so it renders last (``le`` ascending,
+    ``le="+Inf"`` after the finite buckets per Prometheus convention),
+    and its cumulative count always equals ``count`` — every observation
+    is <= +Inf. Bucket keys are the ``le`` threshold as strings.
     """
     hist = {"buckets": {str(b): 0 for b in buckets}, "sum": 0.0, "count": 0}
+    # F-20 (D-7): +Inf inserted AFTER the finite buckets — insertion
+    # order = render order, so le="+Inf" renders last.
+    hist["buckets"]["+Inf"] = 0
     for v in values:
         hist["sum"] += v
         hist["count"] += 1
         for b in buckets:
             if v <= b:
                 hist["buckets"][str(b)] += 1
+        hist["buckets"]["+Inf"] += 1
     return hist
 
 
@@ -246,17 +272,33 @@ def collect_metrics() -> dict[str, Any]:
     }
 
 
+def _escape_label_value(value: str) -> str:
+    """Escape a Prometheus text-format label value (F-20).
+
+    Backslash -> ``\\\\``, double quote -> ``\\"``, newline -> ``\\n``.
+    Applied ONLY in ``_render_counter_series`` (render-only, D-6) —
+    ``_labels_to_key`` stays raw for the JSON metrics view.
+    """
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+    )
+
+
 def _render_counter_series(name: str, series: dict) -> list[str]:
     """Rendere eine Counter-Serie (Series-Keys sind Label-Tuples).
 
     ``series`` ist das rohe In-Process-Format
     ``{label_tuple: count}`` aus :data:`_counters`. Das Prometheus-Format
-    nutzt ``{endpoint="/x"}`` als inline-Label-Syntax.
+    nutzt ``{endpoint="/x"}`` als inline-Label-Syntax. F-20 (D-6): label
+    values are escaped via :func:`_escape_label_value` here only — the
+    JSON metrics view keeps raw values.
     """
     lines = [f"# HELP {name} {name}", f"# TYPE {name} counter"]
     for labels, value in series.items():
         if labels:
-            lbl = ",".join(f'{k}="{v}"' for k, v in labels)
+            lbl = ",".join(f'{k}="{_escape_label_value(v)}"' for k, v in labels)
             lines.append(f"{name}{{{lbl}}} {value}")
         else:
             lines.append(f"{name} {value}")

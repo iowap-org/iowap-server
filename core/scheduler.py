@@ -1036,6 +1036,58 @@ def _fail_tasks_with_failed_critical_stages(
     return tasks_failed
 
 
+def fail_stages_of_deleted_node(
+    conn: sqlite3.Connection,
+    node_id: str,
+    now: str,
+) -> list[str]:
+    """Fail stages claimed by a node that is about to be deleted (F-19).
+
+    Marks every ``claimed`` stage of ``node_id`` as ``failed`` (F-19: never
+    leave an ownerless ``claimed`` row behind), clears its claim fields and
+    fails the owning tasks via the linear failure policy. The caller owns
+    the transaction: this function issues UPDATEs on ``conn`` but does NOT
+    commit; ``_fail_tasks_with_failed_critical_stages`` publishes the
+    task-level ``task_failed``/``status_changed`` events inline (established
+    pre-commit pattern, cf. enforce_longrun_leases).
+
+    Returns the list of failed stage ids so the caller can publish
+    ``stage_failed`` + stage ``status_changed`` events AFTER commit.
+    """
+    # D-12: claimed-only — pending stages have no owner to orphan and
+    # terminal stages are already final. No cascade to other stages.
+    rows = conn.execute(
+        q(
+            "SELECT stage_id, task_id FROM task_stages "
+            "WHERE claimed_by = ? AND status = 'claimed'",
+            (node_id,),
+        ),
+    ).fetchall()
+    failed_stage_ids: list[str] = []
+    affected_tasks: set[str] = set()
+    for row in rows:
+        stage_id = row["stage_id"]
+        # fail_reason (D-3): no DB column exists — the failure reason
+        # travels in the stage_failed event payload (reason='node_deleted')
+        # published by the admin handler after commit.
+        conn.execute(
+            q(
+                "UPDATE task_stages "
+                "SET status = 'failed', updated_at = ?, claimed_by = NULL, "
+                "claimed_at = NULL, claim_expires_at = NULL "
+                "WHERE stage_id = ?",
+                (now, stage_id),
+            ),
+        )
+        failed_stage_ids.append(stage_id)
+        affected_tasks.add(row["task_id"])
+    if affected_tasks:
+        # Linear failure policy (T-189 F-05): the helper publishes the
+        # task-level events inline with the true old_status (D-2).
+        _fail_tasks_with_failed_critical_stages(conn, affected_tasks, now)
+    return failed_stage_ids
+
+
 def _task_row_to_dict(row: Any) -> Dict[str, Any]:
     return {
         "task_id": row["task_id"],

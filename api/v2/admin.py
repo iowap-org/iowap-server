@@ -1,5 +1,7 @@
 """Administration router for node approval and cluster management."""
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from relay_server.api.v2.security import (
@@ -147,15 +149,45 @@ async def admin_delete_node(
         conn.execute(
             q("UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?", (node_id,)),
         )
+        # F-19: fail (not orphan) the deleted node's claimed stages + their
+        # tasks. The helper clears the claim fields on the failed rows and
+        # publishes task-level events inline; the stage-level events follow
+        # after commit below (D-2).
+        from relay_server.core.scheduler import fail_stages_of_deleted_node
+
+        now = datetime.now(UTC).isoformat()
+        failed_stage_ids = fail_stages_of_deleted_node(conn, node_id, now)
+        # D-13 (F-REV-1): terminal stages keep their claim columns as
+        # completion history (complete_stage never clears them), so the
+        # claimed-only helper above leaves those FK rows dangling. Clear the
+        # remaining node references WITHOUT touching any status — exactly
+        # what main's status-agnostic NULL-claim UPDATE did for these rows.
         conn.execute(
             q("UPDATE task_stages SET claimed_by = NULL, claimed_at = NULL, "
-            "claim_expires_at = NULL WHERE claimed_by = ?", (node_id,)),
+            "claim_expires_at = NULL WHERE claimed_by = ? AND status != 'claimed'",
+            (node_id,)),
         )
         conn.execute(
             q("UPDATE artifacts SET created_by = NULL WHERE created_by = ?", (node_id,)),
         )
         conn.execute(q("DELETE FROM nodes WHERE node_id = ?", (node_id,)))
         conn.commit()
+        # Events AFTER commit so consumers see the final rows.
+        from relay_server.core.events import event_bus
+
+        for stage_id in failed_stage_ids:
+            event_bus.publish_sync(
+                "stage_failed", {"stage_id": stage_id, "reason": "node_deleted"}
+            )
+            event_bus.publish_sync(
+                "status_changed",
+                {
+                    "entity_type": "stage",
+                    "entity_id": stage_id,
+                    "old_status": "claimed",
+                    "new_status": "failed",
+                },
+            )
     finally:
         conn.close()
 

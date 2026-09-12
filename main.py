@@ -146,8 +146,13 @@ async def _maintenance_loop(maintenance: MaintenanceScheduler):
     """
     while True:
         try:
+            # F-20: evaluate the sweep's real outcome instead of assuming
+            # success — run_due never raises; per-task exceptions come back
+            # as {"error": ...} result dicts and must degrade /ready.
+            from relay_server.core.metrics import evaluate_maintenance_results
+
             results = await asyncio.to_thread(maintenance.run_due)
-            _metrics.mark_maintenance_run(ok=True)
+            _metrics.mark_maintenance_run(ok=evaluate_maintenance_results(results))
             for name, result in results.items():
                 # Only log when the task actually did something. Empty
                 # dicts / all-zero counters are treated as no-ops.
@@ -391,7 +396,9 @@ async def ready():
             conn.close()
 
     scheduler_age = metrics.maintenance_age_seconds()
-    scheduler_ok = scheduler_age is not None and scheduler_age < 30
+    # F-20: a failed maintenance sweep degrades readiness too —
+    # scheduler_ok requires BOTH a fresh loop AND a healthy last sweep.
+    scheduler_ok = (scheduler_age is not None and scheduler_age < 30) and metrics.maintenance_last_ok()
     return {
         "status": "ready" if (db_ok and scheduler_ok) else "degraded",
         "database": "ok" if db_ok else "error",
@@ -402,6 +409,8 @@ async def ready():
         # Subscriber-Zahl sagt nichts über die Relay-Gesundheit aus. Der eigentlich
         # aussagekräftige Check ist `scheduler_ok` (maintenance loop age).
         "maintenance_age_seconds": scheduler_age,
+        # F-20: outcome of the last maintenance sweep (additive field).
+        "maintenance_last_ok": metrics.maintenance_last_ok(),
     }
 
 

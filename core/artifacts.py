@@ -212,33 +212,43 @@ def delete_artifact(artifact_id: str) -> bool:
         conn.close()
 
 
-def _delete_artifact_rows(rows, reason: str) -> tuple[int, int]:
+def _delete_artifact_rows(rows, reason: str) -> tuple[int, int, int, int]:
     """Delete artifact files + DB rows for the given result set.
 
     Shared helper for ``cleanup_orphaned_artifacts`` (T-049) and
     ``cleanup_expired_artifacts`` (T-165). ``reason`` is published in the
     ``artifact_deleted`` event so consumers can distinguish orphaned vs.
-    TTL-expired. File-system errors are logged but do not abort the run —
-    the DB row is removed regardless so a dangling file can be cleaned up
-    by a later ``db_vacuum``.
+    TTL-expired.
 
-    Returns ``(deleted, freed_bytes)``.
+    F-14: when unlinking the file raises OSError the DB row is KEPT and
+    the bytes are NOT counted as freed — ``failed``/``failed_bytes`` in
+    the result carry the failure, the warning is logged, and the next
+    sweep retries the same row. A row is only ever deleted together with
+    its file; there is no db_vacuum backstop for artifact files.
+
+    Returns ``(deleted, freed_bytes, failed, failed_bytes)``.
     """
     conn = get_conn()
     try:
         deleted = 0
         freed_bytes = 0
+        failed = 0
+        failed_bytes = 0
         for row in rows:
             artifact_id = row["artifact_id"]
             path_str = row["storage_path"]
             size = int(row["size_bytes"] or 0)
-            # Best-effort file deletion — the DB row is removed either way.
+            # F-14: a row is only ever deleted together with its file —
+            # on OSError the row stays so the next sweep retries it.
             try:
                 p = Path(path_str)
                 if p.exists():
                     p.unlink()
             except OSError as exc:
                 logger.warning("Could not delete artifact file %s: %s", path_str, exc)
+                failed += 1
+                failed_bytes += size
+                continue
             conn.execute(
                 q("DELETE FROM artifacts WHERE artifact_id = ?", (artifact_id,))
             )
@@ -248,8 +258,9 @@ def _delete_artifact_rows(rows, reason: str) -> tuple[int, int]:
                 "artifact_deleted",
                 {"artifact_id": artifact_id, "reason": reason},
             )
+        # Partial success commits the successful deletes (D-11).
         conn.commit()
-        return deleted, freed_bytes
+        return deleted, freed_bytes, failed, failed_bytes
     finally:
         conn.close()
 
@@ -261,7 +272,7 @@ def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
     created artifacts (e.g. during a running task) are never touched even
     if the task row briefly disappears.
 
-    Returns ``{"deleted": n, "freed_bytes": m}``.
+    Returns ``{"deleted": n, "freed_bytes": m, "failed": f, "failed_bytes": fb}``.
     """
     from datetime import timedelta
 
@@ -278,12 +289,17 @@ def cleanup_orphaned_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
             """, (cutoff,)),
         ).fetchall()
         if not rows:
-            return {"deleted": 0, "freed_bytes": 0}
+            return {"deleted": 0, "freed_bytes": 0, "failed": 0, "failed_bytes": 0}
         rows = list(rows)
     finally:
         conn.close()
-    deleted, freed = _delete_artifact_rows(rows, reason="orphaned")
-    return {"deleted": deleted, "freed_bytes": freed}
+    deleted, freed, failed, failed_bytes = _delete_artifact_rows(rows, reason="orphaned")
+    return {
+        "deleted": deleted,
+        "freed_bytes": freed,
+        "failed": failed,
+        "failed_bytes": failed_bytes,
+    }
 
 
 def cleanup_expired_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
@@ -296,7 +312,7 @@ def cleanup_expired_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
     durable copy lives on the storage node. The watchdog
     (``maintenance.artifact_cleanup``) calls this on its hourly sweep.
 
-    Returns ``{"deleted": n, "freed_bytes": m}``.
+    Returns ``{"deleted": n, "freed_bytes": m, "failed": f, "failed_bytes": fb}``.
     """
     from datetime import timedelta
 
@@ -311,12 +327,17 @@ def cleanup_expired_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
             """, (cutoff,)),
         ).fetchall()
         if not rows:
-            return {"deleted": 0, "freed_bytes": 0}
+            return {"deleted": 0, "freed_bytes": 0, "failed": 0, "failed_bytes": 0}
         rows = list(rows)
     finally:
         conn.close()
-    deleted, freed = _delete_artifact_rows(rows, reason="ttl")
-    return {"deleted": deleted, "freed_bytes": freed}
+    deleted, freed, failed, failed_bytes = _delete_artifact_rows(rows, reason="ttl")
+    return {
+        "deleted": deleted,
+        "freed_bytes": freed,
+        "failed": failed,
+        "failed_bytes": failed_bytes,
+    }
 
 
 def _artifact_row_to_dict(row: Any) -> Dict[str, Any]:
