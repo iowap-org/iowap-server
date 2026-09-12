@@ -24,17 +24,21 @@ not ``row["col"]`` directly).
 
 import functools
 import json
+import logging
 import re
 import secrets
 import sqlite3
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime, timezone
 from typing import Any, Optional, Union
 
 import sqlalchemy as sa
 from sqlalchemy.engine.row import Row
 
 from relay_server.config import settings
+
+logger = logging.getLogger(__name__)
 
 # A DB connection can be a raw sqlite3.Connection (used by CLI helpers and
 # the backcompat test fixture) or a SQLAlchemy Connection (the normal path).
@@ -691,18 +695,53 @@ def _schema(conn: DBConn) -> None:
     conn.commit()
 
 
-def _run_migrations(conn: DBConn) -> None:
-    """Run lightweight schema migrations that add columns when missing.
+# ---------------------------------------------------------------------------
+# T-187 (F-09 / D-9 / S-05.3): versioned schema migrations
+# ---------------------------------------------------------------------------
+#
+# ``MIGRATIONS`` is the ordered schema history. Each entry is
+# ``(version, name, apply_fn)``; ``version`` is a strictly increasing positive
+# int, ``apply_fn(conn)`` applies exactly that step. ``schema_version`` records
+# one row per applied step, so the stand of any database is readable and the
+# history is preserved.
+#
+# IDEMPOTENZ-PFLICHT: every body must be re-runnable (guarded via
+# ``_column_names`` / ``_table_names`` / ``IF NOT EXISTS``). A database without
+# a ``schema_version`` row — a fresh one as well as one grown before T-187 —
+# replays *all* entries as its baseline and is then stamped with the latest
+# version; the bodies no-op wherever the schema is already current. A
+# non-idempotent body (DROP, destructive DML) is therefore protected by the
+# version check alone, never by the baseline path.
 
-    Backend-aware: ``PRAGMA table_info`` is used on SQLite, and
-    ``information_schema`` is used on PostgreSQL/other backends. The
-    column-name introspection is centralised in :func:`_column_names` and
-    the table listing in :func:`_table_names`.
-    """
+
+def _m001_users_columns(conn: DBConn) -> None:
+    """users: force_password_change, then status (backfilled from is_active)."""
     # Ensure force_password_change column exists in users table.
     cols = _column_names(conn, "users")
     if "force_password_change" not in cols:
         _exec(conn, "ALTER TABLE users ADD COLUMN force_password_change BOOLEAN DEFAULT 1")
+
+    # T-079 / T-085: users.status column. The legacy ``is_active`` boolean
+    # is kept for backward compatibility; the new ``status`` text column
+    # carries the canonical status ("active" / "inactive") from the central
+    # status registry (core/status.py). Existing rows are backfilled from
+    # ``is_active`` when that column exists so an active user maps to
+    # "active" and a deactivated one to "inactive".
+    user_cols = _column_names(conn, "users")
+    if "status" not in user_cols:
+        _exec(conn, "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
+        # Backfill from is_active for any pre-existing rows, but only
+        # when the legacy column is present (some very old databases
+        # predate is_active entirely).
+        if "is_active" in user_cols:
+            _exec(conn,
+                "UPDATE users SET status = CASE WHEN is_active = FALSE THEN 'inactive' "
+                "ELSE 'active' END WHERE status IS NULL"
+            )
+
+
+def _m002_nodes_columns(conn: DBConn) -> None:
+    """nodes: registration secret hash + expiry, description, high-load counter."""
     # Ensure registration_secret_hash column exists in nodes table.
     cols = _column_names(conn, "nodes")
     if "registration_secret_hash" not in cols:
@@ -714,6 +753,20 @@ def _run_migrations(conn: DBConn) -> None:
     if "description" not in cols:
         _exec(conn, "ALTER TABLE nodes ADD COLUMN description TEXT")
 
+    # T-081: nodes.consecutive_high_load — counter used by the auto-busy
+    # logic in discovery.mark_offline_nodes(). A node whose load stays at
+    # or above its load_cap for ``consecutive_high_load`` heartbeats in a
+    # row is automatically transitioned to "busy"; the counter resets to
+    # 0 whenever the load drops back below the cap.
+    node_cols = _column_names(conn, "nodes")
+    if "consecutive_high_load" not in node_cols:
+        _exec(conn,
+            "ALTER TABLE nodes ADD COLUMN consecutive_high_load INTEGER DEFAULT 0"
+        )
+
+
+def _m003_node_tokens_columns(conn: DBConn) -> None:
+    """node_tokens: deterministic HMAC lookup hash + index."""
     # Ensure token_lookup_hash column exists in node_tokens table (C-1 fix:
     # deterministic HMAC-SHA256 lookup replaces the O(N) bcrypt scan).
     cols = _column_names(conn, "node_tokens")
@@ -723,6 +776,9 @@ def _run_migrations(conn: DBConn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_node_tokens_lookup ON node_tokens(token_lookup_hash)"
     )
 
+
+def _m004_tasks_columns(conn: DBConn) -> None:
+    """tasks: idempotency_key + partial unique index."""
     # T-045: idempotency_key on tasks — enables duplicate suppression on retries.
     cols = _column_names(conn, "tasks")
     if "idempotency_key" not in cols:
@@ -732,6 +788,9 @@ def _run_migrations(conn: DBConn) -> None:
         ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL
     """)
 
+
+def _m005_audit_logs_table(conn: DBConn) -> None:
+    """audit_logs table + both indexes."""
     # Ensure audit_logs table exists (migration for existing databases).
     table_names = _table_names(conn)
     if "audit_logs" not in table_names:
@@ -754,8 +813,12 @@ def _run_migrations(conn: DBConn) -> None:
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id)"
         )
 
+
+def _m006_task_notes_table(conn: DBConn) -> None:
+    """task_notes table + index, then the T-154 ``kind`` column."""
     # T-052: ensure task_notes table exists (migration for existing
     # databases created before this table was added).
+    table_names = _table_names(conn)
     if "task_notes" not in table_names:
         _exec(conn, """
             CREATE TABLE task_notes (
@@ -779,6 +842,9 @@ def _run_migrations(conn: DBConn) -> None:
             "ALTER TABLE task_notes ADD COLUMN kind TEXT DEFAULT 'info'"
         )
 
+
+def _m007_task_stages_columns(conn: DBConn) -> None:
+    """task_stages: long-run lease timestamps + retry counter."""
     # T-154: task_stages last_note_at + longrun_ttl_expires_at for the
     # Long-Run lease. claimed_by stays the owner; these track the note-based
     # heartbeat TTL instead of the static claimed_at+timeout_seconds.
@@ -802,38 +868,12 @@ def _run_migrations(conn: DBConn) -> None:
             "ALTER TABLE task_stages ADD COLUMN retry_count INTEGER DEFAULT 0"
         )
 
-    # T-079 / T-085: users.status column. The legacy ``is_active`` boolean
-    # is kept for backward compatibility; the new ``status`` text column
-    # carries the canonical status ("active" / "inactive") from the central
-    # status registry (core/status.py). Existing rows are backfilled from
-    # ``is_active`` when that column exists so an active user maps to
-    # "active" and a deactivated one to "inactive".
-    user_cols = _column_names(conn, "users")
-    if "status" not in user_cols:
-        _exec(conn, "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'")
-        # Backfill from is_active for any pre-existing rows, but only
-        # when the legacy column is present (some very old databases
-        # predate is_active entirely).
-        if "is_active" in user_cols:
-            _exec(conn,
-                "UPDATE users SET status = CASE WHEN is_active = FALSE THEN 'inactive' "
-                "ELSE 'active' END WHERE status IS NULL"
-            )
 
-    # T-081: nodes.consecutive_high_load — counter used by the auto-busy
-    # logic in discovery.mark_offline_nodes(). A node whose load stays at
-    # or above its load_cap for ``consecutive_high_load`` heartbeats in a
-    # row is automatically transitioned to "busy"; the counter resets to
-    # 0 whenever the load drops back below the cap.
-    node_cols = _column_names(conn, "nodes")
-    if "consecutive_high_load" not in node_cols:
-        _exec(conn,
-            "ALTER TABLE nodes ADD COLUMN consecutive_high_load INTEGER DEFAULT 0"
-        )
-
+def _m008_node_capabilities_columns(conn: DBConn) -> None:
+    """node_capabilities: description, input_schema, upload_modes."""
     # T-053: ensure node_capabilities has the description and input_schema
     # columns (migration for existing databases).
-    if "node_capabilities" in table_names:
+    if "node_capabilities" in _table_names(conn):
         nc_cols = _column_names(conn, "node_capabilities")
         if "description" not in nc_cols:
             _exec(conn,
@@ -851,11 +891,14 @@ def _run_migrations(conn: DBConn) -> None:
                 "ALTER TABLE node_capabilities ADD COLUMN upload_modes TEXT"
             )
 
+
+def _m009_node_routes_columns(conn: DBConn) -> None:
+    """node_routes: temp-bridge TTL + channel id, plus the channel index."""
     # T-123: ensure node_routes has the expires_at + channel_id columns
     # (migration for existing databases). Both are nullable so existing
     # permanent heartbeat routes (expires_at IS NULL) keep working
     # unchanged. New temp bridge routes register with a TTL via T-124.
-    if "node_routes" in table_names:
+    if "node_routes" in _table_names(conn):
         nr_cols = _column_names(conn, "node_routes")
         if "expires_at" not in nr_cols:
             _exec(conn,
@@ -872,8 +915,86 @@ def _run_migrations(conn: DBConn) -> None:
             "ON node_routes(channel_id) WHERE channel_id IS NOT NULL"
         )
 
+
+MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
+    (1, "users_columns", _m001_users_columns),
+    (2, "nodes_columns", _m002_nodes_columns),
+    (3, "node_tokens_columns", _m003_node_tokens_columns),
+    (4, "tasks_columns", _m004_tasks_columns),
+    (5, "audit_logs_table", _m005_audit_logs_table),
+    (6, "task_notes_table", _m006_task_notes_table),
+    (7, "task_stages_columns", _m007_task_stages_columns),
+    (8, "node_capabilities_columns", _m008_node_capabilities_columns),
+    (9, "node_routes_columns", _m009_node_routes_columns),
+]
+
+
+def _ensure_schema_version_table(conn: DBConn) -> None:
+    """Create the migration ledger (no-op when it already exists)."""
+    _exec(conn, """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+    """)
+
+
+def _current_schema_version(conn: DBConn) -> int:
+    """Highest applied migration version — 0 for a database without a ledger row."""
+    row = _exec(conn, "SELECT MAX(version) FROM schema_version").fetchone()
+    if row is None or row[0] is None:
+        return 0
+    return int(row[0])
+
+
+def _record_migration(conn: DBConn, version: int, name: str) -> None:
+    """Append one ledger row for an applied migration."""
+    _exec(conn,
+        "INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)",
+        (version, name, datetime.now(UTC).isoformat()),
+    )
+
+
+def apply_migrations(conn: DBConn) -> int:
+    """Apply every pending migration in order and return the resulting version.
+
+    A database without a ledger row replays *all* entries (baseline path): the
+    bodies are idempotent, so a database that is already current no-ops through
+    and is merely stamped. A database whose recorded version is *ahead* of this
+    code is left untouched — an older server must not "upgrade" a newer schema.
+    """
+    _ensure_schema_version_table(conn)
+    current = _current_schema_version(conn)
+    latest = MIGRATIONS[-1][0] if MIGRATIONS else 0
+    if current > latest:
+        logger.warning(
+            "Schema version %s is ahead of this build (%s) — no migrations applied",
+            current,
+            latest,
+        )
+        return current
+    for version, name, migrate in MIGRATIONS:
+        if version > current:
+            migrate(conn)
+            _record_migration(conn, version, name)
+    return _current_schema_version(conn)
+
+
+def _run_migrations(conn: DBConn) -> None:
+    """Bring the schema to the latest version, then reconcile legacy rows.
+
+    T-187: the introspection cascade that used to live here is now the
+    numbered ``MIGRATIONS`` history above; the baseline path replays it on a
+    database without a ledger row, so both a fresh and a grown database end up
+    stamped at the latest version.
+    """
+    apply_migrations(conn)
+
     # T-026: backfill node_capabilities from the legacy JSON column for
     # existing databases. Runs once when the table is empty but nodes exist.
+    # Not a numbered migration: it reconciles rows rather than schema and is
+    # idempotent, so it keeps running on every boot.
     _migrate_node_capabilities(conn)
 
 
