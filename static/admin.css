@@ -383,13 +383,6 @@ tr.clickable:hover { background: var(--panel-2); }
 .cap-card:hover { border-color: var(--accent); }
 .cap-card .cap-name { font-weight: 600; font-size: 1rem; }
 .cap-card .cap-desc { color: var(--muted); font-size: 0.85rem; }
-.cap-card .cap-page-badge {
-  margin-left: 0.4rem;
-  font-size: 0.95rem;
-  cursor: help;
-}
-.cap-card-clickable { cursor: pointer; transition: border-color 0.15s; }
-.cap-card-clickable:hover { border-color: var(--accent); }
 
 /* ===== Create-user form ================================================= */
 
