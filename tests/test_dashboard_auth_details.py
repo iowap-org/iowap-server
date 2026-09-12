@@ -218,14 +218,18 @@ def test_proxy_binds_relative_upstream_to_node_endpoint(monkeypatch):
 
 def test_temp_route_register_rejects_absolute_upstream():
     """F-21: temp routes must not accept arbitrary absolute upstream URLs."""
-    node_id = _make_node("online", "t193-temp-abs")
+    node_id, _, _ = auth.register_pending_node("t193-temp-abs", "http://node.test:9999", [{"name": "t193.cap"}])
+    runtime_token = auth.approve_node(node_id)
+    assert runtime_token is not None
+    _set_status(node_id, "online")
+    auth_header = {"Authorization": "Bearer " + runtime_token}
     conn = get_conn()
     conn.execute(q("UPDATE nodes SET endpoint = ? WHERE node_id = ?", ("http://node.test:9999", node_id)))
     conn.commit()
     conn.close()
     r = client.post(
         f"{BASE}/api/node-routes/register",
-        headers={"Authorization": f"******"},
+        headers=auth_header,
         json={
             "path": "/upload/ch1",
             "method": "POST",
@@ -241,10 +245,12 @@ def test_temp_route_register_rejects_absolute_upstream():
 def test_heartbeat_rejects_absolute_route_upstream():
     """F-21: heartbeat route declarations must reject absolute upstream URLs."""
     node_id, _, _ = auth.register_pending_node("t193-heartbeat-abs", "http://node.test:9999", [{"name": "t193.cap"}])
-    rt = auth.approve_node(node_id)
+    runtime_token = auth.approve_node(node_id)
+    assert runtime_token is not None
+    auth_header = {"Authorization": "Bearer " + runtime_token}
     r = client.post(
         "/relay/v2/discovery/heartbeat",
-        headers={"Authorization": f"******"},
+        headers=auth_header,
         json={
             "endpoint": "http://node.test:9999",
             "routes": [
