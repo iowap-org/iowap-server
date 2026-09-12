@@ -331,6 +331,7 @@ class MaintenanceScheduler:
             settings.temp_route_cleanup_interval_seconds,
         )
 
+
 # T-181: module-level singleton — main.py drives the loop with it,
 # core/db.apply_settings_overrides() re-registers watchdogs on it after
 # dashboard edits. (Pattern: core/chunked_upload.py chunked_manager)

@@ -704,7 +704,7 @@ async def dashboard_task_submit(
     request: Request,
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
-    """Submit a task from a capability dashboard page (session-cookie auth).
+    """Submit a task from a node page (session-cookie auth).
 
     Expects JSON body::
 
@@ -732,7 +732,7 @@ async def dashboard_get_task(
     task_id: str,
     ctx: AuthContext = Depends(require_dashboard_user),
 ):
-    """Get task status from a capability dashboard page (session-cookie auth).
+    """Get task status from a node page (session-cookie auth).
 
     Returns the same response as ``GET /relay/v2/scheduler/tasks/{task_id}``
     but accepts a dashboard session cookie instead of a node token.
@@ -1092,13 +1092,13 @@ _ENDPOINTS = [
         "method": "POST",
         "path": "/relay/v2/dashboard/api/task-submit",
         "auth": "admin",
-        "description": "Submit a simple task from a capability page (T-069)",
+        "description": "Submit a simple task from a node page (session-cookie auth)",
     },
     {
         "method": "GET",
         "path": "/relay/v2/dashboard/api/tasks/{task_id}",
         "auth": "admin",
-        "description": "Task status for a capability page (T-069)",
+        "description": "Task status for a node page (session-cookie auth)",
     },
 ]
 
