@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     heartbeat_interval_seconds: int = 10
     heartbeat_timeout_multiplier: int = 5
 
+    # T-207: SSE keepalive — ``: ping`` comment every N seconds on every
+    # event stream, so a silent cluster never goes fully silent on the wire.
+    # Must stay well below the node-side SSE read timeout (T-186,
+    # iowap-node: 60s read timeout = 3× this interval).
+    sse_ping_interval_seconds: float = 20.0
+
     # Dashboard session cookie
     session_secret: Optional[str] = None
     # T-116: optional deterministic master admin seed (RELAY_MASTER_SEED).

@@ -87,23 +87,38 @@ class EventBus:
         sub = _Subscriber(sid, node_id, queue, loop, types_set)
         sub._event_bus = self
         self._subscribers[sid] = sub
+        # T-207: keepalive — wait for the next event with a timeout; when
+        # nothing arrives within ``sse_ping_interval_seconds``, emit an SSE
+        # comment so the connection never goes fully silent (hard-killed
+        # servers otherwise leave the node reading a dead stream forever —
+        # the node-side read timeout, T-186 iowap-node, needs wire traffic).
+        from relay_server.config import settings as _settings
+
+        try:
+            interval = float(getattr(_settings, "sse_ping_interval_seconds", 20.0))
+        except Exception:  # noqa: BLE001 — config must never break the stream
+            interval = 20.0
+        pending = asyncio.ensure_future(queue.get())
         try:
             while True:
-                event = await queue.get()
+                if interval <= 0:
+                    event = await pending
+                else:
+                    done, _pending = await asyncio.wait({pending}, timeout=interval)
+                    if pending not in done:
+                        yield ": ping\n\n"
+                        continue
+                event = pending.result()
                 current = self._subscribers.get(sid)
                 dropped = current.dropped if current else 0
                 yield _format_sse(event, dropped=dropped)
+                pending = asyncio.ensure_future(queue.get())
         except asyncio.CancelledError:
-            pass
+            pending.cancel()
         finally:
             self._subscribers.pop(sid, None)
 
     async def publish(self, event_type: str, payload: dict) -> None:
-        """Publish an event to matching subscribers.
-
-        Awaitable but non-blocking: events are dropped for slow consumers
-        rather than back-pressuring the caller.
-        """
         event = _make_event(event_type, payload)
         self._history.append(event)
         if len(self._history) > self._history_size:
