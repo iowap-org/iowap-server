@@ -2,7 +2,7 @@
 
 **IOWAP Relay Server — API, Scheduler, Auth, Dashboard, Metrics**
 
-The relay server is the central coordinator in the IOWAP ecosystem. Nodes register their capabilities via heartbeat, and the relay matches tasks to capable nodes. It is a **dumb scheduler** — it knows nothing about the work itself, only who can do what.
+The relay server is the central coordinator in the IOWAP ecosystem. Nodes register their capabilities via heartbeat, and the relay matches tasks to capable nodes. It is a **purpose-agnostic scheduler** — it knows nothing about the work itself, only who can do what.
 
 ## Features
 
