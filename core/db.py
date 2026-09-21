@@ -764,6 +764,15 @@ def _m002_nodes_columns(conn: DBConn) -> None:
             "ALTER TABLE nodes ADD COLUMN consecutive_high_load INTEGER DEFAULT 0"
         )
 
+    # T-210: nodes.load_source — which rung of the node's load chain
+    # (cgroup2/cgroup/loadavg) produced the last load value, so the
+    # dashboard can distinguish container-scoped CPU measurement from
+    # a host-shared loadavg inside LXC.
+    if "load_source" not in node_cols:
+        _exec(conn,
+            "ALTER TABLE nodes ADD COLUMN load_source TEXT"
+        )
+
 
 def _m003_node_tokens_columns(conn: DBConn) -> None:
     """node_tokens: deterministic HMAC lookup hash + index."""

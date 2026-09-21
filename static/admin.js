@@ -249,6 +249,8 @@ function renderNodeCard(n) {
   const loadPct = load == null ? null : Math.min(load, 100);
   const loadColor = loadPct == null ? "var(--muted)" : loadPct >= 85 ? "var(--bad)" : loadPct >= 60 ? "var(--warn)" : "var(--ok)";
   const loadText = load == null ? "?" : load + "%";
+  // T-210: which load source produced the value (cgroup2/cgroup/loadavg)
+  const loadSrc = n.load_source ? ` <span class="load-src" title="load source: ${escAttr(n.load_source)}">${escHtml(n.load_source)}</span>` : "";
   const statusText = n.status == null ? "unknown" : String(n.status);
   const name = n.node_name || n.node_id;
   const caps = (n.capability_names || [])
@@ -260,7 +262,7 @@ function renderNodeCard(n) {
       <div class="body">
         <div class="node-avatar ${nodeAvatarClass(n.node_name)}">${escHtml(nodeAvatarEmoji(n.node_name))}</div>
         <div class="node-name">${escHtml(name)}<span class="node-id">${escHtml(n.node_id)}</span></div>
-        <div class="node-status"><span class="dot" style="background:${statusVar(color)}"></span>${escHtml(statusText)} · load ${loadText}</div>
+        <div class="node-status"><span class="dot" style="background:${statusVar(color)}"></span>${escHtml(statusText)} · load ${loadText}${loadSrc}</div>
         <div class="node-caps">${caps || '<span class="node-id">no caps</span>'}</div>
         <div class="load-mini"><div class="f" style="width:${loadPct == null ? 0 : loadPct}%;background:${loadColor}"></div></div>
         <div class="node-meta">

@@ -118,6 +118,7 @@ def heartbeat(
     routes: Optional[List[Dict[str, Any]]] = None,
     status: Optional[str] = None,
     load_cap: Optional[float] = None,
+    load_source: Optional[str] = None,
 ) -> bool:
     """Process a node heartbeat. Returns True if node was updated.
 
@@ -163,6 +164,10 @@ def heartbeat(
         if load is not None:
             updates.append("load = ?")
             params.append(load)
+        if load_source is not None:
+            # T-210: which rung produced the load value (cgroup2/cgroup/loadavg)
+            updates.append("load_source = ?")
+            params.append(load_source)
         if queue_depth is not None:
             updates.append("queue_depth = ?")
             params.append(queue_depth)
@@ -370,13 +375,13 @@ def list_nodes(status: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if status and status.lower() != "all":
             rows = conn.execute(
-                q("SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
+                q("SELECT node_id, node_name, description, endpoint, capabilities, load, load_source, queue_depth, "
                 "available, last_seen, registered_at, status, role "
                 "FROM nodes WHERE status = ? ORDER BY registered_at DESC", (status,)),
             ).fetchall()
         else:
             rows = conn.execute(
-                q("SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
+                q("SELECT node_id, node_name, description, endpoint, capabilities, load, load_source, queue_depth, "
                 "available, last_seen, registered_at, status, role "
                 "FROM nodes ORDER BY registered_at DESC")
             ).fetchall()
@@ -391,7 +396,7 @@ def get_node(node_id: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     try:
         row = conn.execute(
-            q("SELECT node_id, node_name, description, endpoint, capabilities, load, queue_depth, "
+            q("SELECT node_id, node_name, description, endpoint, capabilities, load, load_source, queue_depth, "
             "available, last_seen, registered_at, status, role "
             "FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
@@ -780,6 +785,7 @@ def _node_row_to_dict(row: Any) -> Dict[str, Any]:
         "description": row["description"] if "description" in row.keys() else None,
         "capabilities": _parse_capabilities(row["capabilities"]),
         "load": row["load"],
+        "load_source": row["load_source"] if "load_source" in row.keys() else None,
         "queue_depth": row["queue_depth"],
         "available": bool(row["available"]),
         "last_seen": row["last_seen"],

@@ -367,6 +367,9 @@ class CapabilityStatus(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     load: Optional[float] = Field(None, ge=0.0, le=100.0)
+    # T-210: which rung of the node's load chain produced `load`
+    # (cgroup2/cgroup/loadavg) — persisted for dashboard display.
+    load_source: Optional[str] = Field(None, max_length=16)
     queue_depth: Optional[int] = Field(None, ge=0)
     available: Optional[bool] = None
     endpoint: Optional[str] = Field(None, max_length=2048)
@@ -388,6 +391,9 @@ class HeartbeatRequest(BaseModel):
 class NodeHeartbeatRequest(BaseModel):
     """Extended heartbeat model for worker nodes with full capability data."""
     load: Optional[float] = Field(None, ge=0.0, le=100.0)
+    # T-210: which rung of the node's load chain produced `load`
+    # (cgroup2/cgroup/loadavg) — persisted for dashboard display.
+    load_source: Optional[str] = Field(None, max_length=16)
     queue_depth: Optional[int] = Field(None, ge=0)
     available: Optional[bool] = None
     endpoint: Optional[str] = Field(None, max_length=2048)
