@@ -925,6 +925,16 @@ def _m009_node_routes_columns(conn: DBConn) -> None:
         )
 
 
+def _m010_nodes_load_source(conn: DBConn) -> None:
+    """nodes: load_source (T-210) — which chain rung produced the load value."""
+    if "nodes" in _table_names(conn):
+        n_cols = _column_names(conn, "nodes")
+        if "load_source" not in n_cols:
+            _exec(conn,
+                "ALTER TABLE nodes ADD COLUMN load_source TEXT"
+            )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -935,6 +945,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (7, "task_stages_columns", _m007_task_stages_columns),
     (8, "node_capabilities_columns", _m008_node_capabilities_columns),
     (9, "node_routes_columns", _m009_node_routes_columns),
+    (10, "nodes_load_source", _m010_nodes_load_source),
 ]
 
 
