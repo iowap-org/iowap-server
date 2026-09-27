@@ -47,6 +47,10 @@ class DiscoveryCapability(BaseModel):
         description="Supported file-transfer modes (inline/artifact/bridge).",
     )
     nodes: list[DiscoveryNode] = Field(default_factory=list)
+    # T-004 (iowap-flow): Dot-Paths into the task result (e.g.
+    # ["result.answer"]) — pass-through from node_capabilities for the
+    # flow planner; pure metadata for consumers.
+    result_path_hints: Optional[list[str]] = None
 
 
 class DiscoveryResponse(BaseModel):
@@ -66,4 +70,6 @@ class DiscoveryDetailResponse(BaseModel):
     input_schema: Optional[dict[str, Any]] = None
     # T-164: unterstützte Übertragungsmodi (inline / artifact / bridge).
     upload_modes: Optional[list[str]] = None
+    # T-004 (iowap-flow): see DiscoveryCapability.result_path_hints.
+    result_path_hints: Optional[list[str]] = None
     nodes: list[DiscoveryNode]
