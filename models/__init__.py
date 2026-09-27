@@ -277,6 +277,10 @@ class DiscoveryCapability(BaseModel):
     available: bool = True
     input_schema: Optional[dict[str, Any]] = None
     nodes: list[DiscoveryNode] = Field(default_factory=list)
+    # T-004 (iowap-flow): Dot-Paths into the task result (e.g.
+    # ["result.answer"]) — pass-through from node_capabilities for the
+    # flow planner; pure metadata, routing-relevant only for consumers.
+    result_path_hints: Optional[list[str]] = None
 
 
 class DiscoveryResponse(BaseModel):
@@ -295,6 +299,8 @@ class DiscoveryDetailResponse(BaseModel):
     available: bool
     input_schema: Optional[dict[str, Any]] = None
     nodes: list[DiscoveryNode]
+    # T-004 (iowap-flow): see DiscoveryCapability.result_path_hints.
+    result_path_hints: Optional[list[str]] = None
 
 
 # ── Simple Task ─────────────────────────────────────────────────
