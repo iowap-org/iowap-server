@@ -490,7 +490,7 @@ def get_capabilities(
             # (sync_node_capabilities does DELETE+INSERT on every replace).
             nc_rows = conn.execute(
                 q("SELECT capability_name, capability_type, capability_version, "
-                "description, input_schema, upload_modes, available "
+                "description, input_schema, upload_modes, result_path_hints, available "
                 "FROM node_capabilities WHERE node_id = ?", (row["node_id"],)),
             ).fetchall()
 
@@ -525,6 +525,18 @@ def get_capabilities(
                                 upload_modes = parsed
                         except Exception:
                             pass
+                    # T-004 (iowap-flow): result_path_hints aus der Index-Spalte
+                    # lesen (JSON-Array mit Dot-Paths ins Task-Resultat).
+                    hints_raw = nc["result_path_hints"] if "result_path_hints" in nc.keys() else None
+                    if hints_raw:
+                        try:
+                            hints_parsed = json.loads(hints_raw)
+                            if not isinstance(hints_parsed, list):
+                                hints_parsed = None
+                        except Exception:
+                            hints_parsed = None
+                    else:
+                        hints_parsed = None
                     caps.append({
                         "name": nc["capability_name"],
                         "type": nc["capability_type"] or "",
@@ -535,6 +547,7 @@ def get_capabilities(
                         "input_schema": schema,
                         "upload_modes": upload_modes,
                         "config": legacy.get("config", {}),
+                        "result_path_hints": hints_parsed,
                     })
             else:
                 # Fallback: node has never been heartbeated into the index
@@ -590,6 +603,8 @@ def get_capabilities(
                         "available": False,
                         "input_schema": cap.get("input_schema"),
                         "upload_modes": cap.get("upload_modes"),
+                        # T-004 (iowap-flow): result_path_hints pass-through.
+                        "result_path_hints": cap.get("result_path_hints"),
                         "nodes": [],
                     }
 
