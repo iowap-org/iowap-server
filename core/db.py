@@ -935,6 +935,19 @@ def _m010_nodes_load_source(conn: DBConn) -> None:
             )
 
 
+def _m011_node_capabilities_result_paths(conn: DBConn) -> None:
+    """node_capabilities: result_path_hints (T-004 iowap-flow)."""
+    # JSON-Array mit Dot-Paths in das Task-Resultat, z.B. ["result.answer"].
+    # Consumers (flow.run-Planner) nutzen die Hints für Template-Pfade;
+    # alle anderen behandeln das Feld transparent. Nullable.
+    if "node_capabilities" in _table_names(conn):
+        nc_cols = _column_names(conn, "node_capabilities")
+        if "result_path_hints" not in nc_cols:
+            _exec(conn,
+                "ALTER TABLE node_capabilities ADD COLUMN result_path_hints TEXT"
+            )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -946,6 +959,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (8, "node_capabilities_columns", _m008_node_capabilities_columns),
     (9, "node_routes_columns", _m009_node_routes_columns),
     (10, "nodes_load_source", _m010_nodes_load_source),
+    (11, "node_capabilities_result_paths", _m011_node_capabilities_result_paths),
 ]
 
 
@@ -1100,6 +1114,8 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 available = True
                 description = None
                 input_schema = None
+                upload_modes = None
+                result_path_hints = None
             else:
                 name = cap.get("name")
                 if not name:
@@ -1116,23 +1132,28 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 input_schema = json.dumps(schema) if schema is not None else None
                 modes = cap.get("upload_modes")
                 upload_modes = json.dumps(modes) if modes is not None else None
+                # T-004 (iowap-flow): result_path_hints — JSON-Array mit
+                # Dot-Paths in das Task-Resultat (z.B. ["result.answer"]).
+                hints = cap.get("result_path_hints")
+                result_path_hints = json.dumps(hints) if hints is not None else None
             _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 description, input_schema, upload_modes, available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 description, input_schema, upload_modes, result_path_hints, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(node_id, capability_name) DO UPDATE SET
                     capability_type = excluded.capability_type,
                     capability_version = excluded.capability_version,
                     description = excluded.description,
                     input_schema = excluded.input_schema,
                     upload_modes = excluded.upload_modes,
+                    result_path_hints = excluded.result_path_hints,
                     available = excluded.available,
                     updated_at = excluded.updated_at
                 """,
                 (node_id, name, cap_type, version, description, input_schema,
-                 upload_modes, available, now),
+                 upload_modes, result_path_hints, available, now),
             )
 
 
@@ -1305,6 +1326,10 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 # T-164: upload_modes — JSON-Array der Übertragungsmodi.
                 modes = cap.get("upload_modes")
                 upload_modes = json.dumps(modes) if modes is not None else None
+                # T-004 (iowap-flow): result_path_hints — JSON-Array mit
+                # Dot-Paths in das Task-Resultat (z.B. ["result.answer"]).
+                hints = cap.get("result_path_hints")
+                result_path_hints = json.dumps(hints) if hints is not None else None
             else:
                 name = str(cap)
                 cap_type = None
@@ -1313,15 +1338,16 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 description = None
                 input_schema = None
                 upload_modes = None
+                result_path_hints = None
             _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 description, input_schema, upload_modes, available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 description, input_schema, upload_modes, result_path_hints, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (node_id, name, cap_type, version, description, input_schema,
-                 upload_modes, available, now),
+                 upload_modes, result_path_hints, available, now),
             )
         conn.commit()
     finally:

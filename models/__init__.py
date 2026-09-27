@@ -24,6 +24,13 @@ class Capability(BaseModel):
         description="Input schema for task validation (from capabilities.yaml)",
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # T-004 (iowap-flow): result_path_hints — Dot-Paths into the task
+    # result (e.g. ["result.answer"]). Pure metadata for consumers like
+    # the flow planner; the server mediates and routes only.
+    result_path_hints: Optional[List[str]] = Field(
+        None,
+        description="Dot-paths into the task result (hints for template interpolation)",
+    )
 
 
 # ── Node Registration ───────────────────────────────────────────
