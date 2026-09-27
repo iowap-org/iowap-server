@@ -592,6 +592,11 @@ def get_capabilities(
                     ):
                         continue
 
+                # T-004 (iowap-flow): result_path_hints — first non-None
+                # wins. A capability offered by several nodes must not
+                # lose its hints just because a hint-less provider is
+                # iterated first.
+                hints = cap.get("result_path_hints")
                 if name not in cap_map:
                     cap_map[name] = {
                         "name": name,
@@ -603,10 +608,11 @@ def get_capabilities(
                         "available": False,
                         "input_schema": cap.get("input_schema"),
                         "upload_modes": cap.get("upload_modes"),
-                        # T-004 (iowap-flow): result_path_hints pass-through.
-                        "result_path_hints": cap.get("result_path_hints"),
+                        "result_path_hints": hints,
                         "nodes": [],
                     }
+                elif hints and not cap_map[name].get("result_path_hints"):
+                    cap_map[name]["result_path_hints"] = hints
 
                 cap_map[name]["nodes"].append({
                     "node_id": row["node_id"],
