@@ -119,6 +119,8 @@ class ArtifactReference(BaseModel):
     name: str
     mime_type: Optional[str] = None
     size_bytes: Optional[int] = None
+    # T-005g: checksum identifies the content; no storage path is exposed.
+    checksum: Optional[str] = None
     created_by: Optional[str] = None
 
 
@@ -164,7 +166,9 @@ class NoteRequest(BaseModel):
 class ArtifactUploadResponse(BaseModel):
     artifact_id: str
     name: str
-    path: str
+    # T-005g: no ``path`` field — the server-internal storage path must not
+    # leak into API responses; ``checksum`` identifies the stored content.
+    checksum: Optional[str] = None
     size_bytes: int
     mime_type: Optional[str] = None
     created_by: str

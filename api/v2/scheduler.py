@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from relay_server.api.v2.security import get_alive_context, get_approved_context
-from relay_server.core.artifacts import delete_artifact, list_artifacts, store_artifact
+from relay_server.core.artifacts import store_artifact
 from relay_server.core.db import get_conn, q
 from relay_server.core.scheduler import Scheduler
 from relay_server.models import (
@@ -128,14 +128,29 @@ async def scheduler_upload_artifact(
     stage_id: Optional[str] = None,
     ctx: AuthContext = Depends(get_alive_context),
 ):
-    """Upload an artifact attached to a task (and optionally a stage)."""
-    conn = get_conn()
-    try:
-        row = conn.execute(q("SELECT task_id FROM tasks WHERE task_id = ?", (task_id,))).fetchone()
-    finally:
-        conn.close()
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    """Upload an artifact attached to a task (and optionally a stage).
+
+    T-005g: non-admin nodes may only attach artifacts to their own or
+    ownerless tasks — a foreign-owned task is indistinguishable from a
+    missing one (404).
+    """
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    if owner_node_id is not None:
+        task_owner = Scheduler.artifact_task_owner(task_id)
+        if task_owner is not None and task_owner != owner_node_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        if task_owner is None:
+            # artifact_task_owner returns None for missing AND ownerless
+            # tasks — disambiguate before storing (FK requires the task row).
+            conn = get_conn()
+            try:
+                exists = conn.execute(
+                    q("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,))
+                ).fetchone()
+            finally:
+                conn.close()
+            if not exists:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
     content = await file.read()
     result = store_artifact(
@@ -154,7 +169,9 @@ async def scheduler_list_artifacts(
     task_id: str,
     ctx: AuthContext = Depends(get_alive_context),
 ):
-    return {"artifacts": list_artifacts(task_id=task_id), "viewer": ctx.node_id}
+    # T-005g: non-admin nodes only see artifacts of their own/ownerless tasks.
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    return {"artifacts": Scheduler.list_artifacts_scoped(task_id, owner_node_id=owner_node_id), "viewer": ctx.node_id}
 
 
 @router.delete("/artifacts/{artifact_id}")
@@ -162,7 +179,10 @@ async def scheduler_delete_artifact(
     artifact_id: str,
     ctx: AuthContext = Depends(get_alive_context),
 ):
-    ok = delete_artifact(artifact_id)
+    # T-005g: non-admin nodes may only delete artifacts of their own or
+    # ownerless tasks — foreign-owned artifacts report as not found.
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    ok = Scheduler.delete_artifact_scoped(artifact_id, owner_node_id=owner_node_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
     return {"status": "deleted", "artifact_id": artifact_id}

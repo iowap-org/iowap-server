@@ -85,7 +85,9 @@ def store_artifact(
         return {
             "artifact_id": artifact_id,
             "name": name,
-            "path": str(path),
+            # T-005g: storage_path is server-internal and must never leak into
+            # API responses — checksum is returned instead.
+            "checksum": checksum,
             "size_bytes": size,
             "mime_type": mime_type,
             "created_by": created_by,
@@ -152,7 +154,9 @@ def store_artifact_from_file(
         return {
             "artifact_id": artifact_id,
             "name": name,
-            "path": str(target_path),
+            # T-005g: storage_path is server-internal and must never leak into
+            # API responses — checksum is returned instead.
+            "checksum": checksum,
             "size_bytes": size,
             "mime_type": mime_type,
             "created_by": created_by,
@@ -169,7 +173,10 @@ def get_artifact_metadata(artifact_id: str) -> Optional[Dict[str, Any]]:
         ).fetchone()
         if not row:
             return None
-        return _artifact_row_to_dict(row)
+        # include_storage_path=True: server-internal callers (file download
+        # needs the path). API list responses go through list_artifacts,
+        # which strips it.
+        return _artifact_row_to_dict(row, include_storage_path=True)
     finally:
         conn.close()
 
@@ -189,19 +196,40 @@ def list_artifacts(
             ).fetchall()
         else:
             rows = conn.execute(q("SELECT * FROM artifacts ORDER BY created_at DESC")).fetchall()
-        return [_artifact_row_to_dict(r) for r in rows]
+        # T-005g: list responses never include storage_path (server-internal).
+        return [_artifact_row_to_dict(r, include_storage_path=False) for r in rows]
     finally:
         conn.close()
 
 
-def delete_artifact(artifact_id: str) -> bool:
+def delete_artifact(
+    artifact_id: str,
+    owner_node_id: Optional[str] = None,
+) -> bool:
+    """Delete an artifact file and its DB row.
+
+    T-005g: when ``owner_node_id`` is given (non-admin node caller), the
+    artifact's task must be ownerless or owned by this node — deleting a
+    foreign-owned task's artifacts returns ``False`` (404 upstream).
+    Admin callers pass ``owner_node_id=None`` (no ownership check).
+    """
     conn = get_conn()
     try:
         row = conn.execute(
-            q("SELECT storage_path FROM artifacts WHERE artifact_id = ?", (artifact_id,))
+            q("SELECT storage_path, task_id FROM artifacts WHERE artifact_id = ?", (artifact_id,))
         ).fetchone()
         if not row:
             return False
+        if owner_node_id is not None:
+            task_owner = None
+            if row["task_id"]:
+                task_row = conn.execute(
+                    q("SELECT owner_node_id FROM tasks WHERE task_id = ?", (row["task_id"],))
+                ).fetchone()
+                if task_row:
+                    task_owner = task_row["owner_node_id"]
+            if task_owner is not None and task_owner != owner_node_id:
+                return False
         path = Path(row["storage_path"])
         if path.exists():
             path.unlink()
@@ -340,8 +368,11 @@ def cleanup_expired_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
     }
 
 
-def _artifact_row_to_dict(row: Any) -> Dict[str, Any]:
-    return {
+def _artifact_row_to_dict(row: Any, include_storage_path: bool = False) -> Dict[str, Any]:
+    # T-005g: storage_path is a server-internal absolute filesystem path and
+    # must never appear in API responses. It stays available only for
+    # server-internal callers via ``include_storage_path=True`` (file download).
+    result: Dict[str, Any] = {
         "artifact_id": row["artifact_id"],
         "task_id": row["task_id"],
         "stage_id": row["stage_id"],
@@ -349,7 +380,9 @@ def _artifact_row_to_dict(row: Any) -> Dict[str, Any]:
         "mime_type": row["mime_type"],
         "size_bytes": row["size_bytes"],
         "checksum": row["checksum"],
-        "storage_path": row["storage_path"],
         "created_by": row["created_by"],
         "created_at": row["created_at"],
     }
+    if include_storage_path:
+        result["storage_path"] = row["storage_path"]
+    return result

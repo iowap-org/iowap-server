@@ -11,12 +11,14 @@ from fastapi.responses import FileResponse
 from relay_server.api.v2.security import get_alive_context
 from relay_server.config import settings
 from relay_server.core.artifacts import (
-    delete_artifact,
+    _artifact_row_to_dict,
     get_artifact_metadata,
     list_artifacts,
     store_artifact_from_file,
 )
 from relay_server.core.chunked_upload import ChunkedUploadError, chunked_manager
+from relay_server.core.db import get_conn, q
+from relay_server.core.scheduler import Scheduler
 from relay_server.models import (
     ArtifactReference,
     ArtifactUploadResponse,
@@ -41,7 +43,27 @@ async def storage_upload(
 
     Workers upload binary results here first, then reference the artifact_id
     in task payloads for storage nodes to archive onto long-term storage.
+    T-005g: non-admin nodes may only attach artifacts to their own or
+    ownerless tasks — a foreign-owned task is indistinguishable from a
+    missing one (404).
     """
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    if owner_node_id is not None and task_id:
+        task_owner = Scheduler.artifact_task_owner(task_id)
+        if task_owner is not None and task_owner != owner_node_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        if task_owner is None:
+            # artifact_task_owner returns None for missing AND ownerless
+            # tasks — disambiguate before storing (FK requires the task row).
+            conn = get_conn()
+            try:
+                exists = conn.execute(
+                    q("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,))
+                ).fetchone()
+            finally:
+                conn.close()
+            if not exists:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     content_length = file.size
     if content_length is not None and content_length > settings.max_upload_bytes:
         raise HTTPException(
@@ -161,8 +183,13 @@ async def storage_file_delete(
     artifact_id: str,
     ctx: AuthContext = Depends(get_alive_context),
 ):
-    """Delete an artifact by id."""
-    ok = delete_artifact(artifact_id)
+    """Delete an artifact by id.
+
+    T-005g: non-admin nodes may only delete artifacts of their own or
+    ownerless tasks — foreign-owned artifacts report as not found.
+    """
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    ok = Scheduler.delete_artifact_scoped(artifact_id, owner_node_id=owner_node_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
     return {"status": "deleted", "artifact_id": artifact_id}
@@ -174,6 +201,25 @@ async def storage_list(
     ctx: AuthContext = Depends(get_alive_context),
 ):
     """List stored artifacts, optionally filtered by task."""
+    # T-005g: non-admin nodes only see artifacts of their own/ownerless tasks.
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    if owner_node_id is not None and task_id:
+        return {"artifacts": Scheduler.list_artifacts_scoped(task_id, owner_node_id=owner_node_id), "viewer": ctx.node_id}
+    if owner_node_id is not None:
+        # Unfiltered listing: scope every task to this node (ownerless included).
+        conn = get_conn()
+        try:
+            rows = conn.execute(
+                q(
+                    "SELECT a.* FROM artifacts a LEFT JOIN tasks t ON a.task_id = t.task_id"
+                    " WHERE t.owner_node_id IS NULL OR t.owner_node_id = ?"
+                    " ORDER BY a.created_at DESC",
+                    (owner_node_id,),
+                )
+            ).fetchall()
+        finally:
+            conn.close()
+        return {"artifacts": [_artifact_row_to_dict(r, include_storage_path=False) for r in rows], "viewer": ctx.node_id}
     return {"artifacts": list_artifacts(task_id=task_id), "viewer": ctx.node_id}
 
 

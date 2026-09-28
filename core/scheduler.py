@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import sqlalchemy as sa
 
 from relay_server.config import settings
+from relay_server.core.artifacts import delete_artifact, list_artifacts, store_artifact
 from relay_server.core.db import get_capability_details, get_conn, get_node_capability_names, q
 from relay_server.core.events import event_bus
 from relay_server.core.status import (
@@ -262,7 +263,7 @@ class Scheduler:
                 task["stages"].append(stage)
 
             artifact_rows = conn.execute(
-                q("SELECT artifact_id, name, mime_type, size_bytes, created_by FROM artifacts WHERE task_id = ?", (task_id,)),
+                q("SELECT artifact_id, name, mime_type, size_bytes, checksum, created_by FROM artifacts WHERE task_id = ?", (task_id,)),
             ).fetchall()
             task["artifacts"] = [
                 {
@@ -270,6 +271,8 @@ class Scheduler:
                     "name": r["name"],
                     "mime_type": r["mime_type"],
                     "size_bytes": r["size_bytes"],
+                    # T-005g: checksum instead of storage_path (internal).
+                    "checksum": r["checksum"],
                     "created_by": r["created_by"],
                 }
                 for r in artifact_rows
@@ -558,6 +561,109 @@ class Scheduler:
             }
         finally:
             conn.close()
+
+    @staticmethod
+    def artifact_task_owner(
+        task_id: str,
+    ) -> Optional[str]:
+        """Return a task's ``owner_node_id`` (``None`` when ownerless/missing).
+
+        T-005g helper for artifact-endpoint ownership checks: artifact
+        metadata, deletion, and upload must only be served for tasks the
+        caller owns (or ownerless fan-out tasks). Admin callers skip the
+        check entirely at the API layer.
+        """
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                q("SELECT owner_node_id FROM tasks WHERE task_id = ?", (task_id,))
+            ).fetchone()
+            if not row:
+                return None
+            return row["owner_node_id"]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_artifact_scoped(artifact_id: str, owner_node_id: Optional[str] = None) -> bool:
+        """Delete an artifact with owner scoping (T-005g).
+
+        Resolution order mirrors the scoping rule of ``get_task``: the
+        artifact's task must be ownerless (NULL) or owned by
+        ``owner_node_id``; a foreign-owned artifact is reported as
+        ``False`` (→ 404 upstream) and left untouched. Admin callers
+        pass ``owner_node_id=None`` and skip the ownership check.
+        """
+        conn = get_conn()
+        try:
+            art = conn.execute(
+                q("SELECT task_id FROM artifacts WHERE artifact_id = ?", (artifact_id,))
+            ).fetchone()
+            if not art:
+                return False
+            task_owner: Optional[str] = None
+            if art["task_id"]:
+                trow = conn.execute(
+                    q("SELECT owner_node_id FROM tasks WHERE task_id = ?", (art["task_id"],))
+                ).fetchone()
+                if trow:
+                    task_owner = trow["owner_node_id"]
+            if owner_node_id is not None and task_owner is not None and task_owner != owner_node_id:
+                return False
+        finally:
+            conn.close()
+        return delete_artifact(artifact_id, owner_node_id=None)
+
+    @staticmethod
+    def list_artifacts_scoped(
+        task_id: str,
+        owner_node_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List a task's artifacts with owner scoping (T-005g).
+
+        When ``owner_node_id`` is given (non-admin caller), the task must
+        be ownerless or owned by this node — otherwise the artifact list
+        is reported as missing (empty result → 404 upstream), mirroring
+        ``get_task``'s scoping semantics for foreign-owned tasks.
+        """
+        if owner_node_id is not None:
+            task_owner = Scheduler.artifact_task_owner(task_id)
+            # A missing task and a foreign-owned task both yield a scoped
+            # empty result (404 upstream) — no existence oracle.
+            if task_owner is not None and task_owner != owner_node_id:
+                return []
+        return list_artifacts(task_id=task_id)
+
+    @staticmethod
+    def upload_artifact_scoped(
+        name: str,
+        content: bytes,
+        mime_type: Optional[str] = None,
+        task_id: Optional[str] = None,
+        stage_id: Optional[str] = None,
+        created_by: Optional[str] = None,
+        owner_node_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Store an artifact attached to a task with owner scoping (T-005g).
+
+        Non-admin callers (``owner_node_id`` set) may only attach
+        artifacts to ownerless or own tasks — a foreign-owned task yields
+        ``None`` (→ 404 upstream) and nothing is written to disk or DB.
+        Admin callers pass ``owner_node_id=None`` and only get the plain
+        existence check (task must exist).
+        """
+        if owner_node_id is not None:
+            task_owner = Scheduler.artifact_task_owner(task_id) if task_id else None
+            if task_owner is not None and task_owner != owner_node_id:
+                return None
+        return store_artifact(
+            name=name,
+            content=content,
+            mime_type=mime_type,
+            task_id=task_id,
+            stage_id=stage_id,
+            created_by=created_by,
+        )
 
     @staticmethod
     @_retry_db_write
