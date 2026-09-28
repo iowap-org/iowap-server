@@ -194,8 +194,10 @@ def test_proxy_allows_same_origin_absolute_upstream(monkeypatch):
     assert seen == ["http://node.test:9999/page?x=1"]
 
 
-def test_proxy_allows_absolute_upstream_without_endpoint(monkeypatch):
-    """Kompatibilitaet: ohne endpoint bleibt der absolute upstream nutzbar."""
+def test_proxy_rejects_absolute_upstream_without_endpoint(monkeypatch):
+    """T-005g (Funktionstest-Befund): ohne endpoint wird ein absoluter
+    upstream zu fremder Origin jetzt FAIL-CLOSED abgelehnt — auch bei
+    bereits gespeicherten Legacy-Routen (request-time-Hälfte)."""
     seen = _capture_send(monkeypatch)
     node_id = _online_node("t206-nullendp-absolute")
     _set_endpoint(node_id, None)
@@ -203,8 +205,8 @@ def test_proxy_allows_absolute_upstream_without_endpoint(monkeypatch):
 
     r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
 
-    assert r.status_code == 200
-    assert seen == ["http://node.test:9999/page"]
+    assert r.status_code == 502
+    assert seen == [], "fail-closed: kein Proxy-Versuch zu unverifizierter Origin"
 
 
 def test_proxy_binds_relative_upstream_to_endpoint(monkeypatch):
