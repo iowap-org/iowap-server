@@ -55,7 +55,9 @@ async def scheduler_list_tasks(
     status: Optional[str] = Query(None),
     ctx: AuthContext = Depends(get_approved_context),
 ):
-    return {"tasks": Scheduler.list_tasks(status=status), "viewer": ctx.node_id}
+    # T-005g: non-admin nodes only see their own tasks (plus ownerless ones).
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    return {"tasks": Scheduler.list_tasks(status=status, owner_node_id=owner_node_id), "viewer": ctx.node_id}
 
 
 @router.get("/tasks/{task_id}", response_model=TaskView)
@@ -63,7 +65,8 @@ async def scheduler_get_task(
     task_id: str,
     ctx: AuthContext = Depends(get_approved_context),
 ):
-    task = Scheduler.get_task(task_id)
+    owner_node_id = None if ctx.is_admin else ctx.node_id
+    task = Scheduler.get_task(task_id, owner_node_id=owner_node_id)
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return _task_to_view(task)

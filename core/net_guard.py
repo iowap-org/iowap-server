@@ -182,7 +182,12 @@ def upstream_reject_reason(upstream: str, node_endpoint: str) -> str | None:
         reason = blocked_target_reason(host)
         if reason:
             return f"upstream target not allowed ({reason})"
-        if endpoint_origin is not None and origin_of(raw) != endpoint_origin:
+        # T-206a: without a node endpoint there is no origin to match against,
+        # so an absolute upstream to any host would be accepted (found by the
+        # 2026-09-28 function test). Fail closed at registration too.
+        if endpoint_origin is None:
+            return "absolute upstream requires a node endpoint to bind to"
+        if origin_of(raw) != endpoint_origin:
             return "absolute upstream must match the node endpoint origin"
         return None
 
@@ -211,6 +216,9 @@ def resolve_route_target(upstream: str, node_endpoint: str) -> tuple[str | None,
         if reason and not target_allowlisted(host, parts.port):
             return None, f"route target not allowed ({reason})"
         endpoint_origin = origin_of(node_endpoint)
+        if endpoint_origin is None and not target_allowlisted(host, parts.port):
+            # T-206a: fail closed at request time too when no origin to match.
+            return None, "route target requires a node endpoint to bind to"
         if (
             endpoint_origin is not None
             and origin_of(raw) != endpoint_origin

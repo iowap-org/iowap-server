@@ -194,12 +194,32 @@ class Scheduler:
             conn.close()
 
     @staticmethod
-    def list_tasks(status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_tasks(status: Optional[str] = None, owner_node_id: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = get_conn()
         try:
+            # owner_node_id scoping (T-005g): nodes only see their own tasks.
+            # NULL-owner tasks stay visible to everyone — the scheduler routes
+            # ownerless sub-tasks to any capable node (flow fan-out contract).
             if status:
+                if owner_node_id:
+                    rows = conn.execute(
+                        q(
+                            "SELECT * FROM tasks WHERE status = ? AND (owner_node_id IS NULL OR owner_node_id = ?)"
+                            " ORDER BY priority DESC, created_at ASC",
+                            (status, owner_node_id),
+                        )
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        q("SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC", (status,)),
+                    ).fetchall()
+            elif owner_node_id:
                 rows = conn.execute(
-                    q("SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC", (status,)),
+                    q(
+                        "SELECT * FROM tasks WHERE owner_node_id IS NULL OR owner_node_id = ?"
+                        " ORDER BY priority DESC, created_at ASC",
+                        (owner_node_id,),
+                    )
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -210,12 +230,19 @@ class Scheduler:
             conn.close()
 
     @staticmethod
-    def get_task(task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task(task_id: str, owner_node_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         conn = get_conn()
         try:
+            # T-005g: with owner scoping, tasks owned by ANOTHER node are
+            # invisible (404 upstream). NULL-owner tasks remain readable —
+            # nodes must poll sub-task results for fan-out aggregation.
             row = conn.execute(q("SELECT * FROM tasks WHERE task_id = ?", (task_id,))).fetchone()
             if not row:
                 return None
+            if owner_node_id is not None:
+                task_owner = row["owner_node_id"]
+                if task_owner is not None and task_owner != owner_node_id:
+                    return None
             task = _task_row_to_dict(row)
             stage_rows = conn.execute(
                 q("SELECT * FROM task_stages WHERE task_id = ? ORDER BY sequence ASC", (task_id,)),
