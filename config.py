@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
     reload: bool = False
     enable_mdns: bool = False
-    mdns_hostname: str = "ai-relay"
+    mdns_hostname: str = "iowap"
 
     # TLS (T-111). Server-side TLS only (no mTLS — node identity is already
     # handled by runtime tokens). When tls_certfile is set, the relay serves

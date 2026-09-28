@@ -1,7 +1,7 @@
 """mDNS / Zeroconf advertisement for the relay service.
 
 Registers `_http._tcp` service entries so clients can discover the relay as
-`ai-relay.local` on the local network.
+`iowap.local` on the local network.
 """
 
 import logging
@@ -38,7 +38,7 @@ class RelayZeroconf:
 
     def __init__(
         self,
-        hostname: str = "ai-relay",
+        hostname: str = "iowap",
         port: Optional[int] = None,
         addresses: Optional[List[str]] = None,
     ):
