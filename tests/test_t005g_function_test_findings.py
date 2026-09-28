@@ -9,7 +9,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 from relay_server.config import settings
 from relay_server.core.db import get_conn, init_db, q
 from relay_server.core.events import event_bus
