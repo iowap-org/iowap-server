@@ -73,4 +73,4 @@ Full documentation in [iowap-org/iowap-docs](https://github.com/iowap-org/iowap-
 
 ## License
 
-AGPL-3.0
+MIT — see [LICENSE](LICENSE).
