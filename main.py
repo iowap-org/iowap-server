@@ -92,7 +92,10 @@ async def lifespan(app: FastAPI):
     maintenance_scheduler.register_defaults()
     maintenance_task = asyncio.create_task(_maintenance_loop(maintenance_scheduler))
 
-    mdns = RelayZeroconf(hostname=settings.mdns_hostname, port=settings.port)
+    # T-187/T-208: names (hostname + service name) come from settings inside
+    # RelayZeroconf — IOWAP defaults, both configurable. The hard TLS gate
+    # lives in start() itself, so a mismatched config can never advertise.
+    mdns = RelayZeroconf(port=settings.port)
     if settings.enable_mdns:
         if settings.tls_certfile:
             # T-111: TLS active = Internet/Community-Relay mode. mDNS is a
@@ -106,8 +109,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if settings.enable_mdns:
-            mdns.stop()
+        mdns.stop()  # no-op when mDNS was never started
         maintenance_task.cancel()
         try:
             await asyncio.wait_for(maintenance_task, timeout=10)

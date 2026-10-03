@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     reload: bool = False
     enable_mdns: bool = False
     mdns_hostname: str = "iowap"
+    mdns_service_name: str = "IOWAP Relay Service"
 
     # TLS (T-111). Server-side TLS only (no mTLS — node identity is already
     # handled by runtime tokens). When tls_certfile is set, the relay serves
