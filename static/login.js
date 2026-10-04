@@ -1,4 +1,4 @@
-// login.js — AI-Relay Dashboard Login
+// login.js — IOWAP Dashboard Login
 // Keine onclick-Handler im HTML — alles via Event Delegation
 
 function showTab(mode) {

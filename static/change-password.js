@@ -1,4 +1,4 @@
-// change-password.js — AI-Relay Change Password
+// change-password.js — IOWAP Change Password
 // Keine Inline-Scripts — Logik hier ausgelagert
 
 async function getCsrfToken() {

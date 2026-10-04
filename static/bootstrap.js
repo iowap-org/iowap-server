@@ -1,4 +1,4 @@
-// bootstrap.js — AI-Relay Bootstrap (Create First Admin)
+// bootstrap.js — IOWAP Bootstrap (Create First Admin)
 // Keine Inline-Scripts — Logik hier ausgelagert
 
 async function getCsrfToken() {

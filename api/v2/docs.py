@@ -107,7 +107,7 @@ def _render_markdown(path: Path) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{path.stem} — AI Relay Docs</title>
+  <title>{path.stem} — IOWAP Docs</title>
   <style>
     :root {{ color-scheme: dark; }}
     body {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0 auto; max-width: 800px; padding: 2rem 1rem; background: #0b0d11; color: #e0e2e8; line-height: 1.6; }}
