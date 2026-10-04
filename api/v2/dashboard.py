@@ -511,6 +511,15 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
             for r in artifact_rows
         ]
 
+        # T-215: distinct capability names across all nodes (the summary
+        # card reads summary.total_capabilities; admin.js ?? 0 hid the bug).
+        distinct_caps = {
+            c["name"]
+            for node in nodes
+            for c in node["capabilities"]
+            if isinstance(c, dict) and c.get("name")
+        }
+
         return {
             "generated_at": now.isoformat(),
             "summary": {
@@ -520,6 +529,7 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
                 "task_stats": task_stats,
                 "active_stages": len(active_stages),
                 "total_artifacts": len(artifact_rows),
+                "total_capabilities": len(distinct_caps),
             },
             "nodes": nodes,
             "tasks": tasks,
