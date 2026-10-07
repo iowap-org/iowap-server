@@ -597,22 +597,34 @@ def get_capabilities(
                 # lose its hints just because a hint-less provider is
                 # iterated first.
                 hints = cap.get("result_path_hints")
+                # T-204: same aggregation class as the hints above, for the
+                # other optional metadata: a schema-less/description-less
+                # provider iterated first (e.g. a bare heartbeat) must not
+                # blank the aggregate when another provider declares them.
+                schema = cap.get("input_schema")
+                descr = cap.get("description") or ""
                 if name not in cap_map:
                     cap_map[name] = {
                         "name": name,
                         "type": cap_type,
-                        "description": cap.get("description", ""),
+                        "description": descr,
                         "version": cap.get("version", "1.0.0"),
                         # Neutral initial value — the aggregate below
                         # overwrites it before any consumer sees it (D-4/D-5).
                         "available": False,
-                        "input_schema": cap.get("input_schema"),
+                        "input_schema": schema,
                         "upload_modes": cap.get("upload_modes"),
                         "result_path_hints": hints,
                         "nodes": [],
                     }
-                elif hints and not cap_map[name].get("result_path_hints"):
-                    cap_map[name]["result_path_hints"] = hints
+                else:
+                    known = cap_map[name]
+                    if schema and not known.get("input_schema"):
+                        known["input_schema"] = schema
+                    if descr and not known.get("description"):
+                        known["description"] = descr
+                    if hints and not known.get("result_path_hints"):
+                        known["result_path_hints"] = hints
 
                 cap_map[name]["nodes"].append({
                     "node_id": row["node_id"],
