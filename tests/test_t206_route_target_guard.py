@@ -133,7 +133,7 @@ def test_guard_blocks_loopback_link_local_multicast_and_mapped():
 
 
 def test_guard_allows_cluster_and_public_targets():
-    for host in ("192.168.2.60", "10.1.2.3", "172.16.5.5", "93.184.216.34", "storage-node"):
+    for host in ("192.0.2.60", "10.0.2.3", "172.16.5.5", "93.184.216.34", "storage-node"):
         assert blocked_target_reason(host) is None, f"{host} darf erlaubt sein"
 
 

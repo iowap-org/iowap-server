@@ -53,13 +53,13 @@ class TestRouteOriginRegistration:
 
     def test_absolute_upstream_still_allowed_when_origin_matches(self):
         reason = upstream_reject_reason(
-            "http://192.168.2.185:9000/upload", "http://192.168.2.185:9000"
+            "http://192.0.2.185:9000/upload", "http://192.0.2.185:9000"
         )
         assert reason is None
 
     def test_absolute_upstream_other_origin_rejected(self):
         reason = upstream_reject_reason(
-            "http://evil.example.com/upload", "http://192.168.2.185:9000"
+            "http://evil.example.com/upload", "http://192.0.2.185:9000"
         )
         assert reason == "absolute upstream must match the node endpoint origin"
 
