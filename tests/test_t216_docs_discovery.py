@@ -37,18 +37,22 @@ client = TestClient(app, base_url="https://testserver", raise_server_exceptions=
 
 BASE = "/relay/v2/docs"
 
-# Pages that ARE in the repo but were unreachable under the whitelist (F1).
+# Pages that WERE unreachable under the old whitelist (F1) — today's
+# slugs after the T-215-B tree rewrite (node-ssn deliberately absent:
+# SSN documentation was removed with the feature).
 FORMERLY_UNSERVED = [
     "server-docker",
-    "node-node-daemon",
-    "node-federation",
-    "node-handler-contract",
-    "node-handler-primitives",
-    "node-hermes-integration",
-    "node-ssn",
+    "server-database",
+    "node-operations",
+    "node-cli",
+    "node-handlers-contract",
+    "node-handlers-primitives",
+    "node-integrations-hermes",
+    "node-integrations-home-assistant",
+    "federation-concept",
     "storage-storage",
-    "storage-qnap-storage-node",
-    "node-setup",  # served before, but must survive via discovery too
+    "storage-qnap",
+    "concepts-overview",
 ]
 
 # Slugs the dashboard static pages link to (F8) — must never break.
@@ -70,7 +74,13 @@ ESTABLISHED_OVERRIDES = {
 LEGACY_ALIASES = ["setup", "admin-setup", "dashboard", "node-readme",
                   "nodes-design", "token-concept", "token-lifecycle",
                   "capabilities", "design-board", "proxmox-worker-setup",
-                  "api-reference"]
+                  "api-reference",
+                  # T-215-B bridge — pre-rewrite slugs heal onto new pages:
+                  "concepts", "node-token-lifecycle", "node-cli-reference",
+                  "node-node-daemon", "node-node-config",
+                  "node-hermes-integration", "node-capability-concept",
+                  "node-concept", "node-federation",
+                  "storage-qnap-storage-node"]
 
 
 # --------------------------------------------------------------------------

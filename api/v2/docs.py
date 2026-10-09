@@ -31,30 +31,44 @@ _ALLOW_EXTRAS = {
     "agent-readme": PROJECT_ROOT / "AGENT_README.md",
 }
 
-# Established slugs whose mechanical name deviates (e.g. node-ha instead
-# of node-ha-node). Referenced by dashboard static pages, the login-page
-# link and node-cli docs examples — these win over the mechanical rule.
+# Established slugs whose mechanical name deviates (dashboard static
+# pages, login-page link, node-cli docs examples). These win over the
+# mechanical rule. Updated to the T-215-B tree (node/ha-node.md moved
+# to node/integrations/home-assistant.md; node-config became the exact
+# mechanical slug of node/config.md — no override needed).
 _SLUG_OVERRIDES = {
-    "node-ha": DOCS_DIR / "node" / "ha-node.md",
-    "node-config": DOCS_DIR / "node" / "node-config.md",
+    "node-ha": DOCS_DIR / "node" / "integrations" / "home-assistant.md",
 }
 
-# Legacy short names that resolve to (new) primary slugs. Kept so existing
+# Legacy short names that resolve to primary slugs. Kept so existing
 # bookmarks, the dashboard redirect and the login-page link do not break.
-# Note: renames after T-216 must NOT add new aliases here (alias era ends;
-# slugs are stable from here on).
+# Row 2 (added T-215-B): pre-rewrite slugs whose target file moved —
+# they heal onto the new pages. Renames after T-215 must NOT add
+# further aliases (the alias era ended; slugs are stable now).
 _LEGACY_ALIASES = {
     "setup": "server-setup",
     "admin-setup": "server-admin",
     "dashboard": "server-dashboard",
     "node-readme": "node-setup",
-    "nodes-design": "concepts",
-    "token-concept": "concepts",
-    "token-lifecycle": "node-token-lifecycle",
+    "nodes-design": "concepts-overview",
+    "token-concept": "concepts-tokens",
+    "token-lifecycle": "node-tokens",
     "capabilities": "node-capabilities",
     "design-board": "reference-design-board",
     "proxmox-worker-setup": "node-setup",
     "api-reference": "reference-api",
+    # T-215-B bridge: pre-rewrite slugs → new pages
+    "concepts": "concepts-overview",
+    "node-token-lifecycle": "node-tokens",
+    "node-cli-reference": "node-cli",
+    "node-node-daemon": "node-operations",
+    "node-node-config": "node-config",
+    "node-hermes-integration": "node-integrations-hermes",
+    "node-capability-concept": "concepts-capabilities",
+    "node-concept": "concepts-nodes",
+    "node-federation": "federation-concept",
+    "storage-qnap-storage-node": "storage-qnap",
+    "reference-database-backends": "reference-database-backends",  # unchanged, kept explicit
 }
 
 
