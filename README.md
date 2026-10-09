@@ -44,7 +44,7 @@ Server starts on `http://localhost:8788`.
 | `TLS_CERTFILE` | — | TLS cert path (enables HTTPS, disables mDNS) |
 | `POSTGRES_*` | — | PostgreSQL connection (when `RELAY_DB_TYPE=postgres`) |
 
-See `docs/server/setup.md` for full reference.
+See [iowap-docs → server/setup.md](https://github.com/iowap-org/iowap-docs/blob/main/server/setup.md) for full reference.
 
 ## Architecture
 
@@ -64,12 +64,12 @@ See `docs/server/setup.md` for full reference.
 
 Full documentation in [iowap-org/iowap-docs](https://github.com/iowap-org/iowap-docs):
 
-- `docs/getting-started.md` — first steps
-- `docs/server/setup.md` — full setup guide
-- `docs/server/docker.md` — Docker deployment
-- `docs/reference/api.md` — API reference
-- `docs/server/dashboard.md` — dashboard usage
-- `docs/server/admin.md` — administration
+- [getting-started.md](https://github.com/iowap-org/iowap-docs/blob/main/getting-started.md) — first steps
+- [server/setup.md](https://github.com/iowap-org/iowap-docs/blob/main/server/setup.md) — full setup guide
+- [server/docker.md](https://github.com/iowap-org/iowap-docs/blob/main/server/docker.md) — Docker deployment
+- [reference/api.md](https://github.com/iowap-org/iowap-docs/blob/main/reference/api.md) — API reference
+- [server/dashboard.md](https://github.com/iowap-org/iowap-docs/blob/main/server/dashboard.md) — dashboard usage
+- [server/admin.md](https://github.com/iowap-org/iowap-docs/blob/main/server/admin.md) — administration
 
 ## License
 
