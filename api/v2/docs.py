@@ -1,7 +1,13 @@
 """Public documentation router.
 
-Serves selected Markdown documents from the repository as HTML under
-/relay/v2/docs/{name}. The whitelist prevents path traversal.
+Serves Markdown documents from the repository as HTML under
+/relay/v2/docs/{name}. Documents are discovered mechanically from the
+docs/ tree (slug = path relative to DOCS_DIR, "/" joined with "-"), so
+adding a page never requires a server-code change. Path traversal is
+prevented by construction: slugs are flat, dotfiles are excluded, only
+*.md files are discovered. Established short slugs (dashboard links,
+node-cli docs examples) win over mechanical names via _SLUG_OVERRIDES;
+legacy aliases keep old bookmarks resolving.
 """
 
 import re
@@ -16,39 +22,27 @@ router = APIRouter()
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DOCS_DIR = PROJECT_ROOT / "docs"
 
-# Primary public documents, keyed by their stable short name. The names mirror
-# the layout under docs/: <area>/<file>. Backward-compatibility aliases below
-# keep older bookmarks and links working.
-ALLOWED_DOCS = {
+# Project-root extras served alongside the docs/ tree. Outside discovery
+# because they are not files under docs/. Missing files simply report
+# available: false in the index (same behaviour as the old whitelist).
+_ALLOW_EXTRAS = {
     "readme": PROJECT_ROOT / "README.md",
     "changelog": PROJECT_ROOT / "CHANGELOG.md",
     "agent-readme": PROJECT_ROOT / "AGENT_README.md",
-    # concepts
-    "concepts": DOCS_DIR / "concepts.md",
-    "getting-started": DOCS_DIR / "getting-started.md",
-    # server
-    "server-setup": DOCS_DIR / "server" / "setup.md",
-    "server-admin": DOCS_DIR / "server" / "admin.md",
-    "server-dashboard": DOCS_DIR / "server" / "dashboard.md",
-    # node
-    "node-setup": DOCS_DIR / "node" / "setup.md",
-    "node-ha": DOCS_DIR / "node" / "ha-node.md",
-    "node-cli-reference": DOCS_DIR / "node" / "cli-reference.md",
-    "node-capabilities": DOCS_DIR / "node" / "capabilities.md",
-    "node-token-lifecycle": DOCS_DIR / "node" / "token-lifecycle.md",
-    "node-config": DOCS_DIR / "node" / "node-config.md",
-    # reference
-    "reference-api": DOCS_DIR / "reference" / "api.md",
-    "reference-design-board": DOCS_DIR / "reference" / "design-board.md",
-    "reference-database-backends": DOCS_DIR / "reference" / "database-backends.md",
 }
 
-# Reverse map: absolute file path -> doc name (for link rewriting)
-_PATH_TO_DOC = {str(p.resolve()): n for n, p in ALLOWED_DOCS.items()}
+# Established slugs whose mechanical name deviates (e.g. node-ha instead
+# of node-ha-node). Referenced by dashboard static pages, the login-page
+# link and node-cli docs examples — these win over the mechanical rule.
+_SLUG_OVERRIDES = {
+    "node-ha": DOCS_DIR / "node" / "ha-node.md",
+    "node-config": DOCS_DIR / "node" / "node-config.md",
+}
 
-# Legacy short names that now resolve to the same files as their new primary
-# counterparts. They are kept so existing bookmarks, the dashboard redirect,
-# and the login-page link do not break.
+# Legacy short names that resolve to (new) primary slugs. Kept so existing
+# bookmarks, the dashboard redirect and the login-page link do not break.
+# Note: renames after T-216 must NOT add new aliases here (alias era ends;
+# slugs are stable from here on).
 _LEGACY_ALIASES = {
     "setup": "server-setup",
     "admin-setup": "server-admin",
@@ -64,24 +58,57 @@ _LEGACY_ALIASES = {
 }
 
 
+def _discover_docs() -> dict[str, Path]:
+    """Slug -> file map over DOCS_DIR/**.md.
+
+    Mechanical rule: slug = path relative to DOCS_DIR without the .md
+    suffix, directory parts joined with "-" (docs/server/setup.md ->
+    "server-setup"). Dotfiles/dot-directories are excluded. Intentionally
+    uncached: the tree is small and a changed docs/ checkout (submodule
+    bump) is picked up on the next request without a restart.
+    """
+    mapping: dict[str, Path] = {}
+    for p in sorted(DOCS_DIR.rglob("*.md")):
+        rel = p.relative_to(DOCS_DIR)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        mapping["-".join(rel.with_suffix("").parts)] = p
+    return mapping
+
+
+def _primary_map() -> dict[str, Path]:
+    """All resolvable primary slugs: root extras + discovery + overrides."""
+    mapping = _discover_docs()
+    for slug, path in _SLUG_OVERRIDES.items():
+        if path.exists():
+            mapping[slug] = path
+    return {**_ALLOW_EXTRAS, **mapping}
+
+
 def _resolve(name: str):
-    """Return the path for a doc name, resolving legacy aliases."""
-    if name in ALLOWED_DOCS:
-        return ALLOWED_DOCS[name]
-    alias = _LEGACY_ALIASES.get(name)
+    """Return the file path for a doc slug, resolving legacy aliases."""
+    slug = name.strip("/")
+    if not slug or "/" in slug or ".." in slug:
+        return None
+    primary = _primary_map()
+    if slug in primary:
+        return primary[slug]
+    alias = _LEGACY_ALIASES.get(slug)
     if alias is not None:
-        return ALLOWED_DOCS.get(alias)
+        return primary.get(alias)
     return None
 
 
 def _rewrite_links(html: str, source_path: Path) -> str:
     """Rewrite relative .md links in rendered HTML to /relay/v2/docs/{name} URLs.
 
-    Links that point to a known document in ALLOWED_DOCS are rewritten so
-    they work inside the browser. External links and links to unknown files are
-    left untouched.
+    Links that point to a resolvable document are rewritten so they work
+    inside the browser. External links and links to unknown files are
+    left untouched. The reverse map prefers established override slugs
+    (insertion order: mechanical discovery first, overrides last).
     """
     source_dir = source_path.resolve().parent
+    path_to_slug = {str(p.resolve()): slug for slug, p in _primary_map().items()}
 
     def _replace(match: re.Match) -> str:
         href = match.group(1)
@@ -90,7 +117,7 @@ def _rewrite_links(html: str, source_path: Path) -> str:
             return match.group(0)
         # Resolve relative to the source document's directory
         target = (source_dir / href).resolve()
-        doc_name = _PATH_TO_DOC.get(str(target))
+        doc_name = path_to_slug.get(str(target))
         if doc_name is None:
             return match.group(0)  # leave unknown links as-is
         return f'href="/relay/v2/docs/{doc_name}"'
@@ -130,9 +157,9 @@ def _render_markdown(path: Path) -> str:
 
 @router.get("", include_in_schema=False)
 async def docs_index():
-    """List public documents."""
+    """List all public documents (primary slugs; legacy aliases excluded)."""
     items = []
-    for name, path in ALLOWED_DOCS.items():
+    for name, path in _primary_map().items():
         items.append({
             "name": name,
             "title": path.stem,
@@ -144,10 +171,10 @@ async def docs_index():
 
 @router.get("/{doc_name}", include_in_schema=False)
 async def docs_page(doc_name: str):
-    """Render a public Markdown document as HTML.
+    """Render a discovered Markdown document as HTML.
 
-    The whitelist maps short names to files inside the repository. Unknown
-    names return 404. Legacy names are resolved to their current files.
+    Unknown names return 404. Legacy names resolve to their primary
+    slugs' files.
     """
     path = _resolve(doc_name)
     if not path or not path.exists():
