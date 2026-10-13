@@ -21,7 +21,7 @@
 <body>
   <div class="box">
     <h1>Create First Admin</h1>
-    <div class="warning">You are logged in with the master seed. Create the first human admin account now. Store the generated temporary password securely.</div>
+    <div class="warning">You are logged in with the master seed. Create the first human admin account now.</div>
     <form id="form">
       <label for="username">Username</label>
       <input type="text" id="username" required>
@@ -31,7 +31,23 @@
 
       <button type="submit" id="submit">Create admin</button>
       <div id="message" class="error"></div>
+      <button type="button" id="continue" style="display:none">Continue - set password</button>
     </form>
+
+    <div id="step2" style="display:none">
+      <form id="form2">
+        <p id="greeting"></p>
+        <input type="hidden" id="temp_password">
+        <label for="newpw">New password (min. 12 chars)</label>
+        <input type="password" id="newpw" required>
+
+        <label for="conf">Repeat password</label>
+        <input type="password" id="conf" required>
+
+        <button type="submit" id="setpw">Set password and log in</button>
+        <div id="message2" class="error"></div>
+      </form>
+    </div>
   </div>
   <script src="/relay/v2/dashboard/static/bootstrap.js"></script>
 </body>

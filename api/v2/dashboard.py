@@ -366,7 +366,16 @@ async def dashboard_bootstrap_create_admin(
         created_by="master_seed",
         force_password_change=True,
     )
-    return {"status": "ok", "user_id": user["user_id"], "temporary_password": temp_password}
+    # Chain: the response REPLACES the master session with the created
+    # admin's session (force_password_change stays set) so bootstrap.js
+    # goes straight into POST /api/me/password with the temp password as
+    # a hidden current_password field - no copy/Logout/Re-Login step.
+    response = JSONResponse(
+        {"status": "ok", "user_id": user["user_id"], "temporary_password": temp_password}
+    )
+    _set_user_cookie(response, user)
+    _set_csrf_cookie(response)
+    return response
 
 
 @router.get("/logout")
