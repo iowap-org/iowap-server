@@ -341,12 +341,13 @@ case "$MODE" in
     ;;
   uninstall)
     log "Uninstalling (native)..."
+    systemctl --user disable --now "$UNIT_NAME" 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/${UNIT_NAME}.service"
+    systemctl --user daemon-reload 2>/dev/null || true
     if [ -n "$SUDO" ]; then
       $SUDO systemctl disable --now "$UNIT_NAME" 2>/dev/null || true
       $SUDO rm -f "/etc/systemd/system/${UNIT_NAME}.service"
       $SUDO systemctl daemon-reload 2>/dev/null || true
-    else
-      log "No passwordless sudo - remove /etc/systemd/system/${UNIT_NAME}.service manually."
     fi
     rm -rf "$INSTALL_DIR"
     ask DELRELAY "Remove $RELAY_HOME_DIR (config, sqlite DB, artifacts)? (y/n)" "n"
@@ -464,7 +465,11 @@ if [ "$MODE" != "update" ]; then
     DB_KIND=sqlite
   fi
 
-  ask SERVER_PORT "Server port:" "8788"
+  if [ -n "${IOWAP_PORT:-}" ]; then
+    SERVER_PORT="$IOWAP_PORT"
+  else
+    ask SERVER_PORT "Server port:" "8788"
+  fi
   if [ "$LAB_KIND" = "internet" ]; then
     ask TLS_CERT "TLS certificate file path:" ""
     ask TLS_KEY "TLS key file path:" ""
@@ -526,11 +531,12 @@ else
   log "✓ Python dependencies updated"
 fi
 
-# ---- systemd system unit ----
-UNIT_DIR="/etc/systemd/system"
+# ---- systemd unit ----
+SYSTEM_UNIT_DIR="/etc/systemd/system"
 SERVICE_USER="$(id -un)"
-write_unit() {
-  cat <<EOF
+write_unit() { # $1 = system|user
+  if [ "$1" = "system" ]; then
+    cat <<EOF
 [Unit]
 Description=IOWAP Relay Server
 After=network.target postgresql.service
@@ -546,24 +552,54 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+  else
+    cat <<EOF
+[Unit]
+Description=IOWAP Relay Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/.venv/bin/relay-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+  fi
 }
-if [ -n "$SUDO" ]; then
-  write_unit | $SUDO tee "$UNIT_DIR/${UNIT_NAME}.service" >/dev/null
-  $SUDO systemctl daemon-reload || true
-  log "Systemd unit written: $UNIT_DIR/${UNIT_NAME}.service"
+if [ "$(id -u)" = "0" ]; then
+  write_unit system | tee "$SYSTEM_UNIT_DIR/${UNIT_NAME}.service" >/dev/null
+  systemctl daemon-reload || true
+  log "Systemd system unit written: $SYSTEM_UNIT_DIR/${UNIT_NAME}.service (root run)"
 else
-  write_unit >"$INSTALL_DIR/${UNIT_NAME}.service"
-  log "No passwordless sudo - unit written to $INSTALL_DIR/${UNIT_NAME}.service"
-  log "Install manually: ${SUDO:-sudo} cp $INSTALL_DIR/${UNIT_NAME}.service $UNIT_DIR/ && ${SUDO:-sudo} systemctl daemon-reload"
+  USER_UNIT_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$USER_UNIT_DIR"
+  write_unit user >"$USER_UNIT_DIR/${UNIT_NAME}.service"
+  systemctl --user daemon-reload 2>/dev/null || true
+  log "Systemd user unit written: $USER_UNIT_DIR/${UNIT_NAME}.service"
 fi
 
 ENABLED=0
 if [ "$MODE" != "update" ]; then
   ask ENABLE "Enable/start $UNIT_NAME via systemd? (y/n)" "y"
-  if [[ "$ENABLE" =~ ^[Yy] ]] && [ -n "$SUDO" ]; then
-    $SUDO systemctl enable --now "$UNIT_NAME" && ENABLED=1 || log "systemctl enable failed"
-  elif [[ "$ENABLE" =~ ^[Yy] ]]; then
-    log "No passwordless sudo - enable manually: sudo systemctl enable --now $UNIT_NAME"
+  if [[ "$ENABLE" =~ ^[Yy] ]]; then
+    if [ "$(id -u)" = "0" ]; then
+      systemctl enable --now "$UNIT_NAME" && ENABLED=1 || log "systemctl enable failed"
+    else
+      systemctl --user enable --now "$UNIT_NAME" && ENABLED=1 || log "systemctl --user enable failed (no user session?)"
+      if [ "$ENABLED" = "1" ] && [ -n "$SUDO" ] && [ "$NONINTERACTIVE" != "1" ]; then
+        ask LINGER "Enable lingering (service survives logout/reboot, sudo prompt)? (y/n)" "y"
+        if [[ "$LINGER" =~ ^[Yy] ]]; then
+          $SUDO loginctl enable-linger "$SERVICE_USER" 2>/dev/null \
+            || log "enable-linger failed - without it the service stops at logout."
+        fi
+      else
+        log "Note: without lingering the user service stops at logout. Enable via: sudo loginctl enable-linger $SERVICE_USER"
+      fi
+    fi
   fi
 fi
 
