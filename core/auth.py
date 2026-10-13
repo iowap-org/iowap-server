@@ -284,8 +284,8 @@ def register_admin_node(
         node_id = _mint_node_id()
         now = _format_time(_now())
         caps_json = _serialize_capabilities(capabilities)
-        # T-206: kein ungeprueftes Ziel in der DB — ein Loopback/Link-Local-
-        # endpoint wird fail-closed verworfen (der Node existiert weiter).
+        # T-206: no unvalidated targets in the DB — a loopback/link-local-
+        # endpoint is discarded fail-closed (the node keeps existing).
         endpoint, _endpoint_reason = validate_endpoint(endpoint)
         conn.execute(
             q("""
@@ -416,7 +416,7 @@ def approve_node(
             final_caps_list = _parse_capabilities(row["current_caps"])
             final_caps = row["current_caps"]
         final_endpoint = endpoint if endpoint is not None else row["current_endpoint"]
-        # T-206: auch der Admin-Pfad validiert das Ziel (Fail-closed NULL).
+        # T-206: the admin path validates the target too (fail-closed NULL).
         final_endpoint, _endpoint_reason = validate_endpoint(final_endpoint)
 
         now = _format_time(_now())

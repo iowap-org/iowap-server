@@ -40,8 +40,8 @@ class DiscoveryCapability(BaseModel):
         None,
         description="Input schema for task validation (from capabilities.yaml)",
     )
-    # T-164: unterstützte Übertragungsmodi (inline / artifact / bridge).
-    # Default volle Treppe, wenn die Capability keine upload_modes deklariert.
+    # T-164: supported transfer modes (inline / artifact / bridge).
+    # Default is the full ladder when the capability declares no upload_modes.
     upload_modes: Optional[list[str]] = Field(
         None,
         description="Supported file-transfer modes (inline/artifact/bridge).",
@@ -68,7 +68,7 @@ class DiscoveryDetailResponse(BaseModel):
     version: str
     available: bool
     input_schema: Optional[dict[str, Any]] = None
-    # T-164: unterstützte Übertragungsmodi (inline / artifact / bridge).
+    # T-164: supported transfer modes (inline / artifact / bridge).
     upload_modes: Optional[list[str]] = None
     # T-004 (iowap-flow): see DiscoveryCapability.result_path_hints.
     result_path_hints: Optional[list[str]] = None

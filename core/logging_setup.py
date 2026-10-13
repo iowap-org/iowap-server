@@ -1,4 +1,4 @@
-"""JSON-Logging-Formatter für strukturierte Logs (T-109)."""
+"""JSON logging formatter for structured logs (T-109)."""
 from __future__ import annotations
 
 import contextvars
@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 
-# Pro-Request-Trace-ID, von einer Middleware gesetzt.
+# Per-request trace ID, set by a middleware.
 _trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "relay_trace_id", default="")
 
@@ -25,7 +25,7 @@ def new_trace_id() -> str:
 
 
 class JsonFormatter(logging.Formatter):
-    """Formatiert LogRecords als eine JSON-Zeile pro Eintrag."""
+    """Formats log records as one JSON line per entry."""
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {

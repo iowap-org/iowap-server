@@ -175,11 +175,11 @@ def heartbeat(
             updates.append("available = ?")
             params.append(bool(available))
         if endpoint is not None:
-            # T-206: der endpoint ist der Ursprung, an den Routen gebunden
-            # werden — deshalb wird er hier validiert. Ein untauglicher Wert
-            # (Loopback/Link-Local/Metadata) wird fail-closed als NULL
-            # gespeichert: der Node bleibt online, kann aber kein Proxy-Ziel
-            # mehr sein. Frueher wurde der Wert ungeprueft uebernommen.
+            # T-206: the endpoint is the origin that routes get bound to,
+            # which is why it is validated here. An ineligible value
+            # (loopback/link-local/metadata) is stored fail-closed as NULL:
+            # the node stays online but can no longer be a proxy target.
+            # Previously the value was adopted unvalidated.
             safe_endpoint, endpoint_reason = validate_endpoint(endpoint)
             if endpoint_reason is not None:
                 logger.warning(
@@ -338,8 +338,8 @@ def heartbeat(
         try:
             _sync_node_routes(node_id, routes)
         except Exception:
-            # T-206: still verschluckt hiess "Route weg, keine Spur". Der
-            # Heartbeat darf weiterlaufen, aber der Grund muss ins Log.
+            # T-206: being silently swallowed used to mean "route gone, no trace". The
+            # heartbeat may keep running, but the reason has to hit the log.
             logger.warning("route sync failed for node %s", node_id, exc_info=True)
 
     # Publish event when node comes back from offline or on its first
@@ -513,9 +513,9 @@ def get_capabilities(
                             schema = json.loads(schema_raw)
                         except Exception:
                             schema = None
-                    # T-164: upload_modes aus der Index-Spalte lesen. Default
-                    # ist die volle Treppe, wenn null (alte Daten / nicht
-                    # deklariert) — so bleibt Backcompat erhalten.
+                    # T-164: read upload_modes from the index column. Default
+                    # is the full ladder when null (old data / not
+                    # declared) — this preserves backcompat.
                     upload_modes = ["inline", "artifact", "bridge"]
                     modes_raw = nc["upload_modes"] if "upload_modes" in nc.keys() else None
                     if modes_raw:
@@ -525,8 +525,8 @@ def get_capabilities(
                                 upload_modes = parsed
                         except Exception:
                             pass
-                    # T-004 (iowap-flow): result_path_hints aus der Index-Spalte
-                    # lesen (JSON-Array mit Dot-Paths ins Task-Resultat).
+                    # T-004 (iowap-flow): result_path_hints from the index
+                    # column (JSON array with dot paths into the task result).
                     hints_raw = nc["result_path_hints"] if "result_path_hints" in nc.keys() else None
                     if hints_raw:
                         try:

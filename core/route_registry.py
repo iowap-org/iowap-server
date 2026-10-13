@@ -99,11 +99,11 @@ async def proxy_node_route(
         await get_auth_context(auth_header)
     # auth == "none" — no check needed
 
-    # T-206: Ziel-Origin fail-closed aufloesen. Relative Pfade binden an den
-    # eigenen endpoint des Nodes; absolute Upstreams sind nur bei gleicher
-    # Origin (Migrationspfad) oder Allowlist erlaubt; Loopback/Link-Local/
-    # Metadata fliegen immer raus. Vorher war ``upstream`` eine freie URL,
-    # die der Relay ungeprueft angefahren hat (Open Proxy).
+    # T-206: resolve the target origin fail-closed. Relative paths bind to the
+    # node's own endpoint; absolute upstreams are only allowed when the
+    # origin matches (migration path) or via allowlist; loopback/link-local/
+    # metadata are always rejected. Previously ``upstream`` was a free URL
+    # the relay hit without validation (open proxy).
     upstream, target_reason = resolve_route_target(
         str(route.get("upstream") or ""), str(route.get("endpoint") or "")
     )
@@ -384,8 +384,8 @@ async def register_temp_route(
         raise HTTPException(status_code=400, detail="channel_id too long (max 64)")
     if len(upstream) > 2048:
         raise HTTPException(status_code=400, detail="upstream too long (max 2048)")
-    # T-206: das Ziel muss die eigene Origin des Nodes treffen (oder auf der
-    # Allowlist stehen) — sonst waere der Relay ein Open Proxy.
+    # T-206: the target must hit the node's own origin (or be on the
+    # allowlist) — otherwise the relay would be an open proxy.
     conn = get_conn()
     try:
         node_row = conn.execute(

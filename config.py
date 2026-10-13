@@ -70,16 +70,16 @@ class Settings(BaseSettings):
     max_payload_bytes: int = 10 * 1024 * 1024   # 10 MiB — task payload limit
     max_chunk_size: int = 10 * 1024 * 1024  # 10 MiB — per-chunk limit for chunked uploads
 
-    # T-164: Datei-Übertragungs-Treppe (Server-Konfig, node-cli liest sie).
-    # Bis max_inline_bytes wird eine Datei inline (base64) im Task-Payload
-    # übertragen; bis max_artifact_bytes über den transienten Artifact-Store,
-    # darüber per Bridge (Storage-Node). Die node-cli wählt den kleinsten
-    # passenden Modus, den die Capability unterstützt (upload_modes).
-    max_inline_bytes: int = 5 * 1024 * 1024     # 5 MB — bis hier inline (base64)
-    max_artifact_bytes: int = 50 * 1024 * 1024  # 50 MB — bis hier artifact, darüber bridge
-    # T-165: Artifact-Store transient — alle Dateien älter als artifact_ttl_days
-    # werden per Watchdog gelöscht. Der Store ist ein Übertragungs-Puffer,
-    # kein Archiv (die dauerhafte Kopie lebt auf dem Storage-Node).
+    # T-164: file-transfer ladder (server config, read by node-cli).
+    # Up to max_inline_bytes a file is transferred inline (base64) in the
+    # task payload; up to max_artifact_bytes via the transient artifact store,
+    # beyond that via the bridge (storage node). The node-cli picks the smallest
+    # suitable mode the capability supports (upload_modes).
+    max_inline_bytes: int = 5 * 1024 * 1024     # 5 MB — up to here inline (base64)
+    max_artifact_bytes: int = 50 * 1024 * 1024  # 50 MB — up to here artifact, beyond that bridge
+    # T-165: the artifact store is transient — all files older than artifact_ttl_days
+    # are deleted by the watchdog. The store is a transfer buffer,
+    # not an archive (the permanent copy lives on the storage node).
     artifact_ttl_days: float = 7.0
 
     @field_validator("max_inline_bytes", "max_artifact_bytes")
@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     @field_validator("max_inline_bytes")
     @classmethod
     def _inline_fits_payload(cls, v: int, info) -> int:
-        # base64-Overhead ×1.4 — inline muss im Task-Payload Platz haben.
+        # base64 overhead ×1.4 — inline must fit inside the task payload.
         payload = info.data.get("max_payload_bytes")
         if payload is not None and v * 1.4 >= payload:
             raise ValueError(

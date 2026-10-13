@@ -558,7 +558,7 @@ async def dashboard_endpoints(request: Request, ctx: AuthContext = Depends(requi
 
 @router.get("/api/metrics")
 async def dashboard_metrics(request: Request, ctx: AuthContext = Depends(require_dashboard_user)):
-    """Gebündelte Metriken für das eingebaute Metrics-Dashboard (T-109)."""
+    """Aggregated metrics for the built-in metrics dashboard (T-109)."""
     check_dashboard_permission(ctx, "dashboard:view")
     from relay_server.core import metrics as _metrics
     return _metrics.collect_metrics()

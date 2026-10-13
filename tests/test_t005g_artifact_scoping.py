@@ -1,8 +1,8 @@
-"""T-005g: Owner-Scoping der Artifact-Endpunkte (Card t_1df8a75c).
+"""T-005g: owner scoping of the artifact endpoints (Card t_1df8a75c).
 
-Non-Admins sehen/ändern bei /artifacts nur Artefakte eigener oder
-ownerless Tasks; fremde Tasks melden sich als 404. storage_path wird
-nie über die API ausgeliefert. Admins sehen alles (unchanged).
+Non-admins only see/modify, under /artifacts, artifacts from their own or
+ownerless tasks; foreign tasks come back as 404. storage_path is
+never delivered via the API. Admins see everything (unchanged).
 """
 import tempfile
 from pathlib import Path

@@ -1,22 +1,22 @@
-"""T-206: Route-Ziel-Origin validieren (T-199-Lock).
+"""T-206: validate route target origin (T-199 lock).
 
-Ausgangslage: ``upstream`` ist eine freie absolute URL, die der Relay
-ungeprueft als Proxy-Ziel benutzt; ``endpoint`` wird beim Heartbeat
-ungeprueft gespeichert. Ein Node kann den Relay damit als **Open Proxy**
-auf beliebige Ziele ansetzen (Loopback, Link-Local/Metadata) — bei
-``auth: "none"`` sogar unauthentifiziert.
+Starting point: ``upstream`` is a free absolute URL the relay treats
+as a proxy target without validation; ``endpoint`` is stored without
+validation by the heartbeat. This lets a node abuse the relay as an **open
+proxy** against arbitrary targets (loopback, link-local/metadata) — with
+``auth: "none"`` even unauthenticated.
 
-Diese Suite nagelt das Ziel-Vertrauensmodell fest:
+This suite pins down the target trust model:
 
-- Geblockte Ziel-Origins (Loopback / Link-Local / Multicast / Unspecified /
-  Reserved / IPv4-mapped) werden **fail-closed** abgelehnt — ohne dass der
-  Relay ueberhaupt eine Verbindung aufbaut.
-- RFC1918 bleibt erlaubt (der Cluster lebt dort).
-- Ein absoluter ``upstream`` ist nur bei gleicher Origin wie der eigene
-  ``endpoint`` des Nodes erlaubt (Migrationspfad fuer Bestandsrouten).
-- Ein ungueltiger ``endpoint`` wird fail-closed als NULL gespeichert; der
-  Node bleibt online (nicht: ganzer Heartbeat 422).
-- Eine ungueltige Route wird nur verworfen, nicht der ganze Heartbeat.
+- Blocked target origins (loopback / link-local / multicast / unspecified /
+  reserved / IPv4-mapped) are rejected **fail-closed** — without the
+  relay even opening a connection.
+- RFC1918 stays allowed (the cluster lives there).
+- An absolute ``upstream`` is only allowed when the origin matches the
+  node's own ``endpoint`` (migration path for legacy routes).
+- An invalid ``endpoint`` is stored fail-closed as NULL; the
+  node stays online (not: the entire heartbeat 422).
+- An invalid route is only discarded, not the entire heartbeat.
 """
 
 import os
@@ -137,7 +137,7 @@ def test_guard_allows_cluster_and_public_targets():
         assert blocked_target_reason(host) is None, f"{host} darf erlaubt sein"
 
 
-# ── 2. Proxy: geblockte und fremde Ziele ─────────────────────────────────
+# ── 2. Proxy: blocked and foreign targets ─────────────────────────────────
 
 
 def test_proxy_refuses_blocked_target_without_connecting(monkeypatch):
@@ -149,7 +149,7 @@ def test_proxy_refuses_blocked_target_without_connecting(monkeypatch):
     r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
 
     assert r.status_code == 502
-    assert seen == [], "der Relay darf keine Verbindung zum geblockten Ziel aufbauen"
+    assert seen == [], "the relay must not connect to the blocked target"
 
 
 def test_proxy_refuses_foreign_absolute_upstream(monkeypatch):
@@ -165,7 +165,7 @@ def test_proxy_refuses_foreign_absolute_upstream(monkeypatch):
 
 
 def test_proxy_refuses_blocked_upstream_without_endpoint(monkeypatch):
-    """Live-Flotte: 5/6 Nodes haben endpoint=NULL — auch dann kein Loopback-Ziel."""
+    """Live fleet: 5/6 nodes have endpoint=NULL — still no loopback target."""
     seen = _capture_send(monkeypatch)
     node_id = _online_node("t206-nullendp-blocked")
     _set_endpoint(node_id, None)
@@ -177,11 +177,11 @@ def test_proxy_refuses_blocked_upstream_without_endpoint(monkeypatch):
     assert seen == []
 
 
-# ── 3. Proxy: Migrationspfad und neue Bindung ────────────────────────────
+# ── 3. Proxy: migration path and new binding ────────────────────────────
 
 
 def test_proxy_allows_same_origin_absolute_upstream(monkeypatch):
-    """Bestandsroute (absoluter upstream == eigene Origin) laeuft weiter."""
+    """Legacy route (absolute upstream == the node's own origin) keeps running."""
     seen = _capture_send(monkeypatch)
     node_id = _online_node("t206-sameorigin")
     _set_endpoint(node_id, "http://node.test:9999")
@@ -195,9 +195,9 @@ def test_proxy_allows_same_origin_absolute_upstream(monkeypatch):
 
 
 def test_proxy_rejects_absolute_upstream_without_endpoint(monkeypatch):
-    """T-005g (Funktionstest-Befund): ohne endpoint wird ein absoluter
-    upstream zu fremder Origin jetzt FAIL-CLOSED abgelehnt — auch bei
-    bereits gespeicherten Legacy-Routen (request-time-Hälfte)."""
+    """T-005g (function-test finding): without endpoint, an absolute
+    upstream to a foreign origin is now rejected FAIL-CLOSED — also for
+    already stored legacy routes (request-time half)."""
     seen = _capture_send(monkeypatch)
     node_id = _online_node("t206-nullendp-absolute")
     _set_endpoint(node_id, None)
@@ -206,7 +206,7 @@ def test_proxy_rejects_absolute_upstream_without_endpoint(monkeypatch):
     r = client.get(f"{BASE}/api/node-routes/{node_id}/page")
 
     assert r.status_code == 502
-    assert seen == [], "fail-closed: kein Proxy-Versuch zu unverifizierter Origin"
+    assert seen == [], "fail-closed: no proxy attempt to an unverified origin"
 
 
 def test_proxy_binds_relative_upstream_to_endpoint(monkeypatch):
@@ -221,7 +221,7 @@ def test_proxy_binds_relative_upstream_to_endpoint(monkeypatch):
     assert seen == ["http://node.test:9999/page?x=1"]
 
 
-# ── 4. Temp-Route-Registrierung ──────────────────────────────────────────
+# ── 4. temp route registration ──────────────────────────────────────────
 
 
 def test_temp_route_register_rejects_foreign_absolute_upstream():
@@ -301,7 +301,7 @@ def test_heartbeat_drops_foreign_route_but_stays_ok():
 
 
 def test_heartbeat_stores_blocked_endpoint_as_null():
-    """Ungueltiger endpoint -> fail-closed NULL, Node bleibt online."""
+    """Invalid endpoint -> fail-closed NULL, node stays online."""
     node_id, _, _ = auth.register_pending_node(
         "t206-hb-endp", "http://node.test:9999", [{"name": "t206.hb2"}]
     )

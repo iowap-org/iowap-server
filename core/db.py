@@ -892,9 +892,9 @@ def _m008_node_capabilities_columns(conn: DBConn) -> None:
             _exec(conn,
                 "ALTER TABLE node_capabilities ADD COLUMN input_schema TEXT"
             )
-        # T-164: upload_modes — JSON-Array der unterstützten Übertragungsmodi
-        # (inline / artifact / bridge). Nullable; Default beim Lesen ist die
-        # volle Treppe [inline, artifact, bridge].
+        # T-164: upload_modes — JSON array of the supported transfer modes
+        # (inline / artifact / bridge). Nullable; the default when reading is
+        # the full ladder [inline, artifact, bridge].
         if "upload_modes" not in nc_cols:
             _exec(conn,
                 "ALTER TABLE node_capabilities ADD COLUMN upload_modes TEXT"
@@ -937,9 +937,9 @@ def _m010_nodes_load_source(conn: DBConn) -> None:
 
 def _m011_node_capabilities_result_paths(conn: DBConn) -> None:
     """node_capabilities: result_path_hints (T-004 iowap-flow)."""
-    # JSON-Array mit Dot-Paths in das Task-Resultat, z.B. ["result.answer"].
-    # Consumers (flow.run-Planner) nutzen die Hints für Template-Pfade;
-    # alle anderen behandeln das Feld transparent. Nullable.
+    # JSON array of dot paths into the task result, e.g. ["result.answer"].
+    # Consumers (the flow.run planner) use the hints for template paths;
+    # everyone else treats the field transparently. Nullable.
     if "node_capabilities" in _table_names(conn):
         nc_cols = _column_names(conn, "node_capabilities")
         if "result_path_hints" not in nc_cols:
@@ -1132,8 +1132,8 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 input_schema = json.dumps(schema) if schema is not None else None
                 modes = cap.get("upload_modes")
                 upload_modes = json.dumps(modes) if modes is not None else None
-                # T-004 (iowap-flow): result_path_hints — JSON-Array mit
-                # Dot-Paths in das Task-Resultat (z.B. ["result.answer"]).
+                # T-004 (iowap-flow): result_path_hints — JSON array of
+                # dot paths into the task result (e.g. ["result.answer"]).
                 hints = cap.get("result_path_hints")
                 result_path_hints = json.dumps(hints) if hints is not None else None
             _exec(conn, 
@@ -1323,11 +1323,11 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 description = cap.get("description")
                 schema = cap.get("input_schema")
                 input_schema = json.dumps(schema) if schema is not None else None
-                # T-164: upload_modes — JSON-Array der Übertragungsmodi.
+                # T-164: upload_modes — JSON array of the transfer modes.
                 modes = cap.get("upload_modes")
                 upload_modes = json.dumps(modes) if modes is not None else None
-                # T-004 (iowap-flow): result_path_hints — JSON-Array mit
-                # Dot-Paths in das Task-Resultat (z.B. ["result.answer"]).
+                # T-004 (iowap-flow): result_path_hints — JSON array of
+                # dot paths into the task result (e.g. ["result.answer"]).
                 hints = cap.get("result_path_hints")
                 result_path_hints = json.dumps(hints) if hints is not None else None
             else:
@@ -1418,10 +1418,10 @@ def get_capability_details(
     Returns ``None`` when the capability is unknown. ``input_schema`` is
     parsed from JSON; if parsing fails it is returned as ``None``.
 
-    T-164: ``upload_modes`` (inline / artifact / bridge) wird mitgeliefert,
-    damit die node-cli bei ``file send``/``file get`` den passenden
-    Übertragungsmodus wählen kann. Default ist die volle Treppe, wenn die
-    Spalte null ist.
+    T-164: ``upload_modes`` (inline / artifact / bridge) is included so the
+    node-cli can pick a matching transfer mode for
+    ``file send``/``file get``. The default is the full ladder when the
+    column is null.
     """
     import json as _json
 
@@ -1448,7 +1448,7 @@ def get_capability_details(
             schema = _json.loads(schema_raw) if schema_raw else None
         except Exception:
             schema = None
-        # T-164: upload_modes — Default volle Treppe.
+        # T-164: upload_modes — defaults to the full ladder.
         upload_modes = ["inline", "artifact", "bridge"]
         modes_raw = row["upload_modes"] if "upload_modes" in row.keys() else None
         if modes_raw:

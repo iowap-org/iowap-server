@@ -205,10 +205,10 @@ async def scheduler_create_simple_task(
     ctx: AuthContext = Depends(get_approved_context),
 ):
     """
-    Einstufigen Task einreichen.
+    Submit a single-stage task.
 
-    Erstellt einen Task mit einer einzigen Stage, die sofort
-    an einen Node mit passender Capability geroutet wird.
+    Creates a task with a single stage that is routed
+    immediately to a node with a matching capability.
     """
     from relay_server.core.discovery import get_capability_by_name
 

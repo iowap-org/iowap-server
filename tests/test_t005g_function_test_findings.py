@@ -1,9 +1,9 @@
-"""Regressionstests für die Funktionstest-Befunde (Card t_6f2b80d5).
+"""Regression tests for the function-test findings (Card t_6f2b80d5).
 
-B1 — Temp-Route-Registrierung: absoluter Upstream zu fremder Origin muss bei
-     endpoint=NULL an der REGISTRIERUNG abgelehnt werden (upstream_reject_reason).
-B2 — Task-Read-Scoping: Scheduler.get_task/list_tasks mit owner_node_id
-     verbergen fremde Tasks; NULL-owner Tasks bleiben sichtbar (Flow-Contract).
+B1 — temp route registration: an absolute upstream to a foreign origin must be
+     REJECTED at registration when endpoint=NULL (upstream_reject_reason).
+B2 — task read scoping: Scheduler.get_task/list_tasks with owner_node_id
+     hide foreign tasks; NULL-owner tasks stay visible (flow contract).
 """
 import tempfile
 from pathlib import Path
@@ -45,8 +45,8 @@ def _seed_node(node_id: str) -> None:
 
 class TestRouteOriginRegistration:
     def test_absolute_upstream_rejected_when_endpoint_none(self):
-        # Funktionstest-Repro: evil.example.com wurde bei endpoint=NULL
-        # akzeptiert. Jetzt: fail closed.
+        # Function-test repro: evil.example.com was accepted with endpoint=NULL;
+        # now: fail closed.
         reason = upstream_reject_reason("http://evil.example.com/upload", None)
         assert reason is not None
         assert "endpoint" in reason
@@ -64,8 +64,8 @@ class TestRouteOriginRegistration:
         assert reason == "absolute upstream must match the node endpoint origin"
 
     def test_allowlisted_host_still_allowed_without_endpoint(self):
-        # Allowlist schlägt Origin-Bind — Loopback selbst ist erst per
-        # route_target_allow_hosts erlaubt (Default: blockiert).
+        # Allowlist beats origin binding — loopback itself only comes in via
+        # route_target_allow_hosts (default: blocked).
         from relay_server.config import settings as cfg
 
         old = cfg.route_target_allow_hosts
@@ -80,7 +80,7 @@ class TestRouteOriginRegistration:
         assert upstream_reject_reason("/upload/x", None) == "relative upstream requires a node endpoint"
 
     def test_resolve_target_fails_closed_without_endpoint(self):
-        # Request-time-Hälfte: gleiche Lücke dicht, allowlisted bleibt offen.
+        # Request-time half: same gap closed, allowlisted stays open.
         url, reason = resolve_route_target("http://evil.example.com/upload", None)
         assert url is None
         assert reason is not None
@@ -98,11 +98,11 @@ class TestRouteOriginRegistration:
             cfg.route_target_allow_hosts = old
 
 
-# ── B2: Owner-Scoping auf Task-Read ───────────────────────────
+# ── B2: owner scoping on task read ───────────────────────────
 
 @pytest.fixture()
 def scoped_tasks():
-    """Zwei Tasks: einer mit Owner A, einer mit Owner B, einer ohne Owner."""
+    """Two tasks: one with owner A, one with owner B, one without an owner."""
     _seed_node("NODE_A")
     _seed_node("NODE_B")
     t_a = Scheduler.create_task(task_name="owned-by-a", stages=[{"stage_name": "s", "capability": "x"}], owner_node_id="NODE_A")
@@ -113,7 +113,7 @@ def scoped_tasks():
 
 class TestTaskOwnerScoping:
     def test_get_task_hides_foreign_owned(self, scoped_tasks):
-        # NODE_A sieht Task von NODE_B nicht (B2-Funktionsrepro)
+        # NODE_A must not see NODE_B's task (B2 function repro)
         assert Scheduler.get_task(scoped_tasks["b"], owner_node_id="NODE_A") is None
 
     def test_get_task_shows_own(self, scoped_tasks):
@@ -124,7 +124,7 @@ class TestTaskOwnerScoping:
         assert Scheduler.get_task(scoped_tasks["free"], owner_node_id="NODE_A") is not None
 
     def test_get_task_unscoped_still_sees_everything(self, scoped_tasks):
-        # Admin/Dashboard-Pfad (owner_node_id=None) unverändert
+        # Admin/dashboard path (owner_node_id=None) unchanged
         assert Scheduler.get_task(scoped_tasks["b"]) is not None
 
     def test_list_scopes_by_owner(self, scoped_tasks):

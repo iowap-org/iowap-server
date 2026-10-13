@@ -119,10 +119,10 @@ async def list_capabilities(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """
-    Liste aller Capabilities aller Nodes.
+    List of all capabilities across all nodes.
 
-    Gruppiert nach Capability-Name, jeder Eintrag enthaelt die
-    Nodes die diese Capability anbieten (mit load, queue_depth, config).
+    Grouped by capability name; each entry lists the
+    nodes that offer this capability (with load, queue_depth, config).
     """
     import json
 
@@ -162,13 +162,13 @@ async def get_capability_detail(
 async def get_transfer_config(
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """T-164: Datei-Übertragungs-Treppe (Server-Konfig, node-cli liest sie).
+    """T-164: file-transfer ladder (server config, read by node-cli).
 
-    Liefert die Schwellen, anhand derer die node-cli entscheidet, ob eine
-    Datei inline (base64 im Task-Payload), als Artifact (transienter
-    Relay-Store) oder per Bridge (direkt zum Storage-Node) übertragen
-    wird. ``max_payload_bytes`` wird mitgeliefert, damit die node-cli den
-    base64-Overhead prüfen kann.
+    Provides the thresholds the node-cli uses to decide whether a file is
+    sent inline (base64 in the task payload), as an artifact (transient
+    relay store), or via the bridge (directly to the storage node).
+    ``max_payload_bytes`` is included so the node-cli can check the
+    base64 overhead.
     """
     return {
         "max_inline_bytes": settings.max_inline_bytes,

@@ -79,9 +79,9 @@ STAGE_STATUSES: Dict[str, StatusDef] = {
     "pending":   StatusDef("pending",   StatusCategory.PENDING,   ["claimed", "accepted", "cancelled"]),
     "claimed":   StatusDef("claimed",    StatusCategory.BUSY,     ["completed", "failed", "timed_out", "pending", "accepted"]),  # T-154 longrun takeover + orphan recovery → accepted (T-189 F-08)
     "accepted":  StatusDef("accepted",  StatusCategory.PENDING,   ["completed", "failed", "timed_out", "orphaned"]),
-    # T-154: orphaned = Long-Run-Lease abgelaufen (2h ohne Note). Nicht
-    # re-claimbar (kein pending), aber kein Fehlerzustand. Übergänge:
-    # Worker-Note → zurück zu accepted, Sender → pending, 24h → failed.
+    # T-154: orphaned = long-run lease elapsed (2h without a note). Not
+    # re-claimable (no pending), but not an error state. Transitions:
+    # worker note → back to accepted, sender → pending, 24h → failed.
     "orphaned":  StatusDef("orphaned",  StatusCategory.PENDING,   ["accepted", "pending", "failed", "cancelled"]),
     "completed": StatusDef("completed", StatusCategory.TERMINAL,  []),
     "failed":    StatusDef("failed",    StatusCategory.TERMINAL,  []),

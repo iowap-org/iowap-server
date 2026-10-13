@@ -1,21 +1,21 @@
-"""Ziel-Guard fuer dynamische Node-Routen (T-206, schliesst T-199).
+"""Target guard for dynamic node routes (T-206, closes T-199).
 
-Der Relay proxyt Routen, die Nodes selbst deklarieren. Ohne Pruefung ist er
-ein Open Proxy: ein Node — und bei ``auth: "none"`` jeder, der den Relay
-erreicht — kann ihn auf Loopback-, Link-Local- und Metadata-Ziele ansetzen
-(``http://169.254.169.254/…``) oder auf beliebige Fremdhosts.
+The relay proxies routes declared by the nodes themselves. Without
+validation it is an open proxy: a node — and with ``auth: "none"`` anyone
+reaching the relay — can point it at loopback, link-local and metadata
+targets (``http://169.254.169.254/…``) or at arbitrary third-party hosts.
 
-Dieses Modul beantwortet drei Fragen fail-closed:
+This module answers three questions fail-closed:
 
-- :func:`blocked_target_reason` — darf ``host`` ueberhaupt Proxy-Ziel sein?
-- :func:`validate_endpoint` — taugt ein node-deklarierter ``endpoint`` als
-  Ursprung fuer Routen (sonst wird er verworfen)?
-- :func:`origin_of` / :func:`target_allowlisted` — bindet ein absoluter
-  ``upstream`` an die eigene Origin des Nodes?
+- :func:`blocked_target_reason` — may ``host`` be a proxy target at all?
+- :func:`validate_endpoint` — is a node-declared ``endpoint`` suitable as
+  the origin for routes (otherwise it is discarded)?
+- :func:`origin_of` / :func:`target_allowlisted` — does an absolute
+  ``upstream`` bind to the node's own origin?
 
-RFC1918 bleibt **erlaubt** — der Cluster lebt dort. Geblockt werden
-Loopback, Link-Local (inkl. Cloud-Metadata ``169.254.0.0/16``), Multicast,
-Unspecified, Reserved und IPv4-gemappte Formen.
+RFC1918 remains **allowed** — the cluster lives there. Blocked are
+loopback, link-local (incl. cloud metadata ``169.254.0.0/16``), multicast,
+Unspecified, Reserved and IPv4-mapped forms.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _HTTP_SCHEMES = ("http", "https")
 
-# ipaddress-Attribute, die ein Ziel disqualifizieren.
+# ipaddress attributes that disqualify a target.
 _BLOCKED_ATTRS = (
     "is_loopback",
     "is_link_local",
@@ -42,8 +42,8 @@ _BLOCKED_ATTRS = (
 
 
 def _blocked_ip_reason(addr: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> str | None:
-    # ::ffff:127.0.0.1 traegt is_loopback nicht selbst — auf die IPv4-Form
-    # zurueckfuehren, sonst rutscht Loopback durch.
+    # ::ffff:127.0.0.1 does not carry is_loopback itself — map to the IPv4
+    # form, otherwise loopback slips through.
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped
     for attr in _BLOCKED_ATTRS:

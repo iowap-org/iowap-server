@@ -211,12 +211,12 @@ _NODE_ROUTES_CSP = (
 
 @app.middleware("http")
 async def _trace_id_middleware(request, call_next):
-    """Setze pro Request eine trace_id (contextvars) für strukturierte Logs (T-109).
+    """Set a trace_id (contextvars) per request for structured logs (T-109).
 
-    FastAPI führt Middlewares in umgekehrter Dekorations-Reihenfolge aus;
-    weil diese Middleware als erste deklariert wird, läuft sie als äußerste
-    Schicht und die trace_id ist in allen nachfolgenden Middlewares und
-    Endpoint-Log-Aufrufen sichtbar.
+    FastAPI runs middlewares in reverse decoration order;
+    since this middleware is declared first, it runs as the outermost
+    layer, and the trace_id is visible in all subsequent middlewares and
+    endpoint log calls.
     """
     from relay_server.core.logging_setup import current_trace_id, new_trace_id, set_trace_id
 
@@ -279,7 +279,7 @@ async def _force_password_change_middleware(request, call_next):
 
 @app.middleware("http")
 async def _metrics_middleware(request, call_next):
-    """Zähle 401/403/429-Antworten global als Auth-Failure-Counter (T-109)."""
+    """Count 401/403/429 responses globally as auth-failure counters (T-109)."""
     response = await call_next(request)
     if response.status_code in (401, 403, 429):
         _metrics.inc("relay_auth_failures_total", {"endpoint": request.url.path})
@@ -325,7 +325,7 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """Liveness für die Task-Verarbeitung — prüft die Subsysteme."""
+    """Liveness for task processing — checks the subsystems."""
     from relay_server.core import metrics
     from relay_server.core.db import get_conn
 
@@ -338,7 +338,7 @@ async def ready():
     except Exception:  # noqa: BLE001
         db_ok = False
     finally:
-        # T-093: Connection auch bei Exception schließen.
+        # T-093: close the connection on exceptions too.
         if conn is not None:
             conn.close()
 
@@ -350,11 +350,11 @@ async def ready():
         "status": "ready" if (db_ok and scheduler_ok) else "degraded",
         "database": "ok" if db_ok else "error",
         "scheduler": "ok" if scheduler_ok else "unknown" if scheduler_age is None else "stale",
-        # T-092: event_bus ist kein Liveness-Indikator für die Task-Verarbeitung —
-        # `subscriber_count() >= 0` ist immer wahr und liefert damit nie "error".
-        # Der in-process Event-Bus registriert sich pro-Start selbst; eine
-        # Subscriber-Zahl sagt nichts über die Relay-Gesundheit aus. Der eigentlich
-        # aussagekräftige Check ist `scheduler_ok` (maintenance loop age).
+        # T-092: event_bus is not a liveness indicator for task processing —
+        # `subscriber_count() >= 0` is always true and therefore never yields "error".
+        # The in-process event bus registers itself on startup; a
+        # subscriber count says nothing about relay health. The check that
+        # actually carries signal is `scheduler_ok` (maintenance loop age).
         "maintenance_age_seconds": scheduler_age,
         # F-20: outcome of the last maintenance sweep (additive field).
         "maintenance_last_ok": metrics.maintenance_last_ok(),
@@ -363,7 +363,7 @@ async def ready():
 
 @app.get("/metrics")
 async def metrics_endpoint():
-    """Prometheus-Exposition (offen wie /health, kein Secrets)."""
+    """Prometheus exposure (open like /health, no secrets)."""
     from relay_server.core import metrics
     from fastapi.responses import PlainTextResponse
 

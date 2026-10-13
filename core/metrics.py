@@ -1,10 +1,10 @@
-"""Observability — Metrik-Sammlung + Prometheus-Format.
+"""Observability — metric collection + Prometheus format.
 
-Bündelt In-Process-Counter (Auth-Failures, Fehler) und DB-abgeleitete
-Gauges (Tasks/Stages/Nodes). Kein externer Metrics-Server nötig; der
-Relay exponiert /metrics selbst und das eingebaute Dashboard rendert die
-Zahlen. Prometheus-Format wird hier erzeugt, damit ein späterer
-Prometheus-Server die Werte ohne Code-Änderung scrapen kann.
+Bundles in-process counters (auth failures, errors) and DB-derived
+gauges (tasks/stages/nodes). No external metrics server is needed; the
+relay exposes /metrics itself and the built-in dashboard renders the
+numbers. The Prometheus format is generated here so that a later
+Prometheus server can scrape the values without code changes.
 """
 from __future__ import annotations
 
@@ -18,43 +18,43 @@ from relay_server.core.db import get_conn, q
 # In-Process-Counter: name -> {(label_dict) -> count}
 _counters: dict[str, dict[tuple[tuple[str, str], ...], int]] = defaultdict(dict)
 
-# Für /ready: Zeitstempel des letzten erfolgreichen Heartbeat-Loops.
+# For /ready: timestamp of the last successful heartbeat loop.
 _last_maintenance_run: float = 0.0
 _last_maintenance_ok: bool = True
 
-# Histogramm-Buckets (Sekunden) für Latenz-Metriken (T-115).
+# Histogram buckets (seconds) for latency metrics (T-115).
 _LATENCY_BUCKETS = [0.5, 1.0, 5.0, 30.0, 120.0, 600.0, 3600.0]
 
-# Latenz-Fenster für Throughput-Metriken (T-115): letzte N Sekunden.
+# Latency windows for throughput metrics (T-115): last N seconds.
 _RATE_WINDOW_SECONDS = 300.0
 
 
 def reset() -> None:
-    """Leere alle In-Process-Counter (Test-Helfer + Server-Neustart)."""
+    """Zero out all in-process counters (test helper + server restart)."""
     _counters.clear()
 
 
 def inc(name: str, labels: dict[str, str] | None = None) -> None:
-    """Erhöhe einen Zähler um 1. ``labels`` sind optionale Key/Value-Tags."""
+    """Increment a counter by 1. ``labels`` are optional key/value tags."""
     key = tuple(sorted((labels or {}).items()))
     _counters[name][key] = _counters[name].get(key, 0) + 1
 
 
 def get_counter(name: str, labels: dict[str, str] | None = None) -> int:
-    """Lies einen Zählerstand (0 wenn nie inkrementiert)."""
+    """Read a counter value (0 if never incremented)."""
     key = tuple(sorted((labels or {}).items()))
     return _counters[name].get(key, 0)
 
 
 def mark_maintenance_run(ok: bool) -> None:
-    """Merke den letzten Maintenance-Sweep (für /ready)."""
+    """Record the last maintenance sweep (for /ready)."""
     global _last_maintenance_run, _last_maintenance_ok
     _last_maintenance_run = time.monotonic()
     _last_maintenance_ok = ok
 
 
 def maintenance_age_seconds() -> float | None:
-    """Sekunden seit letztem Maintenance-Loop (None wenn nie gelaufen)."""
+    """Seconds since the last maintenance loop (None if never run)."""
     if _last_maintenance_run == 0.0:
         return None
     return time.monotonic() - _last_maintenance_run
@@ -225,11 +225,11 @@ def _compute_task_rate() -> dict[str, int]:
 
 
 def _labels_to_key(labels: tuple[tuple[str, str], ...]) -> str:
-    """Serialisiere ein Label-Tuple in einen stabilen JSON-freundlichen String.
+    """Serialize a label tuple into a stable JSON-friendly string.
 
-    Prometheus nutzt ``{endpoint="/auth/login"}``; für die JSON-API und das
-    Dashboard derselbe String als Dict-Key (JSON kann keine Tuple-Keys
-    serialisieren).
+    Prometheus uses ``{endpoint="/auth/login"}``; for the JSON API and the
+    dashboard the same string serves as the dict key (JSON cannot serialize
+    tuple keys).
     """
     if not labels:
         return "{}"
@@ -237,7 +237,7 @@ def _labels_to_key(labels: tuple[tuple[str, str], ...]) -> str:
 
 
 def collect_metrics() -> dict[str, Any]:
-    """Sammle alle Metriken — Counter + DB-Gauges + Latenz + Node-Last. Reiner Read, kein Write."""
+    """Collect all metrics — counters + DB gauges + latency + node load. Pure read, no write."""
     latency = _compute_latency_histograms()
     node_gauges = _compute_node_gauges()
     task_rate = _compute_task_rate()
@@ -287,11 +287,11 @@ def _escape_label_value(value: str) -> str:
 
 
 def _render_counter_series(name: str, series: dict) -> list[str]:
-    """Rendere eine Counter-Serie (Series-Keys sind Label-Tuples).
+    """Render a counter series (series keys are label tuples).
 
-    ``series`` ist das rohe In-Process-Format
-    ``{label_tuple: count}`` aus :data:`_counters`. Das Prometheus-Format
-    nutzt ``{endpoint="/x"}`` als inline-Label-Syntax. F-20 (D-6): label
+    ``series`` is the raw in-process format
+    ``{label_tuple: count}`` from :data:`_counters`. The Prometheus format
+    uses ``{endpoint="/x"}`` as inline label syntax. F-20 (D-6): label
     values are escaped via :func:`_escape_label_value` here only — the
     JSON metrics view keeps raw values.
     """
@@ -306,12 +306,12 @@ def _render_counter_series(name: str, series: dict) -> list[str]:
 
 
 def render_prometheus() -> str:
-    """Rendere alle Metriken im Prometheus-Expositionstextformat."""
+    """Render all metrics in the Prometheus exposition text format."""
     data = collect_metrics()
     out: list[str] = []
-    # Counter direkt aus dem In-Process-Store rendern (Label-Tuples
-    # bleiben erhalten), nicht aus der JSON-freundlichen ``collect_metrics``
-    # Repräsentation.
+    # Render counters directly from the in-process store (label tuples
+    # are preserved), not from the JSON-friendly ``collect_metrics``
+    # representation.
     for name, series in _counters.items():
         out.extend(_render_counter_series(name, series))
     for label, count in sorted(data["tasks_by_status"].items()):
@@ -337,7 +337,7 @@ def render_prometheus() -> str:
         out.append(f"{hname}_sum {hist['sum']}")
         out.append(f"{hname}_count {hist['count']}")
 
-    # T-115: Node-Gauges pro Node
+    # T-115: node gauges per node
     for n in data["nodes"]:
         nl = f'node_id="{n["node_id"]}",node_name="{n["node_name"]}"'
         out.append(f"relay_node_load{{{nl}}} {n['load']}")

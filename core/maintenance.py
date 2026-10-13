@@ -1,13 +1,13 @@
 """Central maintenance scheduler (T-050).
 
-Bündelt alle periodischen Watchdog-/Cleanup-Tasks des Servers in einem
-einzigen :class:`MaintenanceScheduler`. Anstatt in ``main.py`` mehrere
-unabhängige ``asyncio``-Tasks mit jeweils eigenem Sleep-Timer zu pflegen,
-gibt es nur noch einen Loop, der alle ``settings.maintenance_interval_seconds``
-Sekunden :meth:`MaintenanceScheduler.run_due` aufruft. Jeder registrierte
-Task läuft nur, wenn sein individuelles Intervall abgelaufen ist.
+Consolidates all periodic watchdog/cleanup tasks of the server into a
+single :class:`MaintenanceScheduler`. Instead of maintaining multiple
+independent ``asyncio`` tasks with their own sleep timers in ``main.py``,
+there is a single loop that calls :meth:`MaintenanceScheduler.run_due` every
+``settings.maintenance_interval_seconds`` seconds. Each registered
+task only runs once its individual interval has elapsed.
 
-Registrierte Tasks (Default-Intervalle siehe :meth:`register_defaults`):
+Registered tasks (default intervals: see :meth:`register_defaults`):
 
 * ``heartbeat_watchdog``        — :func:`relay_server.core.discovery.mark_offline_nodes`
 * ``claim_ttl_watchdog``        — :meth:`relay_server.core.scheduler.Scheduler.release_or_fail_claims`
@@ -15,7 +15,7 @@ Registrierte Tasks (Default-Intervalle siehe :meth:`register_defaults`):
 * ``artifact_cleanup``          — :func:`relay_server.core.artifacts.cleanup_orphaned_artifacts` (T-049)
 * ``chunked_upload_cleanup``    — :meth:`ChunkedUploadManager.prune_stale`
 * ``orphaned_stage_cleanup``    — :meth:`relay_server.core.scheduler.Scheduler.fail_orphaned_stages` (T-063)
-* ``db_vacuum``                 — WAL-Checkpoint + ``VACUUM`` (1x täglich)
+* ``db_vacuum``                 — WAL checkpoint + ``VACUUM`` (1x daily)
 * ``temp_route_cleanup``        — reap expired temp bridge routes (T-125)
 """
 
@@ -133,12 +133,12 @@ def _temp_route_cleanup() -> Dict[str, Any]:
 
 
 class MaintenanceScheduler:
-    """Registry + dispatcher für periodische Maintenance-Tasks.
+    """Registry + dispatcher for periodic maintenance tasks.
 
-    Singleton-Charakter wird durch den Caller (``main.py``) sichergestellt,
-    der eine Instanz pro Prozess erzeugt. Die Klasse selbst ist zustandslos
-    gegenüber der Außenwelt — alle registrierten Funktionen sind reine
-    DB-Operationen.
+    Singleton character is ensured by the caller (``main.py``),
+    which creates one instance per process. The class itself is stateless
+    with respect to the outside world — all registered functions are pure
+    DB operations.
     """
 
     def __init__(self) -> None:
@@ -150,12 +150,12 @@ class MaintenanceScheduler:
     def register(
         self, name: str, func: Callable[[], Dict[str, Any]], interval_seconds: int
     ) -> None:
-        """Register oder ersetze einen Maintenance-Task.
+        """Register or replace a maintenance task.
 
-        ``func`` muss eine Null-arg-Callable sein, die ein dict zurückgibt
-        (leeres dict = nichts zu tun / no-op). Ein bereits existierender
-        Task gleichen Namens wird überschrieben; ``last_run`` wird auf 0
-        zurückgesetzt, damit der Task beim nächsten ``run_due`` sofort läuft.
+        ``func`` must be a zero-arg callable returning a dict
+        (empty dict = nothing to do / no-op). A task that already exists
+        under the same name is overwritten and its ``last_run`` is reset
+        to 0 so it runs immediately on the next ``run_due``.
         """
         self._tasks[name] = {
             "func": func,
@@ -164,7 +164,7 @@ class MaintenanceScheduler:
         }
 
     def unregister(self, name: str) -> None:
-        """Entfernt einen registrierten Task (no-op falls nicht vorhanden)."""
+        """Removes a registered task (no-op if absent)."""
         self._tasks.pop(name, None)
 
     def refresh_claim_ttl_watchdog(self) -> None:
@@ -186,12 +186,12 @@ class MaintenanceScheduler:
     # -- execution -----------------------------------------------------
 
     def run_due(self) -> Dict[str, Dict[str, Any]]:
-        """Führt alle Tasks aus, deren Intervall abgelaufen ist.
+        """Runs all tasks whose interval has elapsed.
 
-        Returns ``{name: result}`` nur für Tasks die tatsächlich liefen
-        (also fällig waren). Fehler in einem Task beeinflussen nicht die
-        Ausführung der anderen — sie werden geloggt und als
-        ``{"error": str(exc)}`` ins Ergebnis eingetragen.
+        Returns ``{name: result}`` only for tasks that actually ran
+        (i.e. were due). A failure in one task does not affect the
+        execution of the others — it is logged and recorded in the result
+        as ``{"error": str(exc)}``.
         """
         now = time.monotonic()
         results: Dict[str, Dict[str, Any]] = {}
@@ -208,10 +208,10 @@ class MaintenanceScheduler:
         return results
 
     def run_all(self) -> Dict[str, Dict[str, Any]]:
-        """Führt **alle** registrierten Tasks sofort aus (ignoriert Intervall).
+        """Runs **all** registered tasks immediately (ignores intervals).
 
-        Wird beim graceful Shutdown verwendet, um ein letztes Cleanup
-        durchzuführen. Die ``last_run``-Zeit wird dabei aktualisiert.
+        Used during graceful shutdown to perform one final cleanup pass.
+        The ``last_run`` time is updated meanwhile.
         """
         results: Dict[str, Dict[str, Any]] = {}
         for name, entry in list(self._tasks.items()):
@@ -227,12 +227,12 @@ class MaintenanceScheduler:
     # -- introspection -------------------------------------------------
 
     def status(self) -> List[Dict[str, Any]]:
-        """Gibt eine sortierte Status-Liste aller registrierten Tasks zurück.
+        """Returns a sorted status list of all registered tasks.
 
-        Jeder Eintrag: ``{name, interval, last_run, next_run}``.
-        ``last_run``/``next_run`` sind ``time.monotonic()``-Sekunden
-        (relativ zum Prozess) — geeignet für Diagnose/Logging, nicht für
-        Persistenz.
+        Each entry: ``{name, interval, last_run, next_run}``.
+        ``last_run``/``next_run`` are ``time.monotonic()`` seconds
+        (relative to the process) — suitable for diagnostics/logging, not
+        for persistence.
         """
         now = time.monotonic()
         out: List[Dict[str, Any]] = []
@@ -254,13 +254,13 @@ class MaintenanceScheduler:
     # -- default registry ----------------------------------------------
 
     def register_defaults(self) -> None:
-        """Registriert die Standard-Task-Menge des Servers.
+        """Registers the server's default task set.
 
-        Intervalle werden aus :mod:`relay_server.config.settings` gelesen,
-        sodass sie via YAML/Env übersteuerbar sind. Importe sind bewusst
-        lazy (inline), damit ``maintenance`` importiert werden kann, bevor
-        ``init_db`` gelaufen ist — und damit Test-Code gezielt einzelne
-        Tasks durch Mocks ersetzen kann.
+        Intervals are read from :mod:`relay_server.config.settings`,
+        so they can be overridden via YAML/env. Imports are deliberately
+        lazy (inline) so that ``maintenance`` can be imported before
+        ``init_db`` has run — and so tests can selectively replace
+        individual tasks with mocks.
         """
         from relay_server.core.artifacts import cleanup_expired_artifacts
         from relay_server.core.chunked_upload import chunked_manager
@@ -275,20 +275,20 @@ class MaintenanceScheduler:
             settings.heartbeat_interval_seconds,
         )
 
-        # Claim-TTL Watchdog — längeres Intervall als heartbeat, da claims
-        # eine Minute TTL haben.
+        # Claim-TTL watchdog — longer interval than the heartbeat, since claims
+        # have a one-minute TTL.
         self.register(
             "claim_ttl_watchdog",
             Scheduler.release_or_fail_claims,
             settings.claim_ttl_seconds,
         )
 
-        # Token cleanup — einmal pro Stunde.
+        # Token cleanup — once per hour.
         self.register("token_cleanup", _purge_expired_tokens, 3600)
 
-        # Artifact cleanup (T-049/T-165) — einmal pro Stunde. T-165 löscht
-        # alle Artifakte älter als artifact_ttl_days (transienter Store),
-        # nicht nur orphaned. Die dauerhafte Kopie lebt auf dem Storage-Node.
+        # Artifact cleanup (T-049/T-165) — once per hour. T-165 deletes
+        # all artifacts older than artifact_ttl_days (transient store),
+        # not just orphaned ones. The permanent copy lives on the storage node.
         self.register(
             "artifact_cleanup",
             lambda: cleanup_expired_artifacts(
@@ -297,7 +297,7 @@ class MaintenanceScheduler:
             3600,
         )
 
-        # Chunked-upload session cleanup — einmal pro Stunde.
+        # Chunked-upload session cleanup — once per hour.
         self.register(
             "chunked_upload_cleanup",
             lambda: {"pruned": chunked_manager.prune_stale()},
@@ -311,7 +311,7 @@ class MaintenanceScheduler:
             settings.orphaned_stage_interval_seconds,
         )
 
-        # T-154: Long-Run lease watchdog — accepted→orphaned nach 2h ohne Note,
+        # T-154: Long-Run lease watchdog — accepted→orphaned after 2h without a note,
         # orphaned→failed nach 24h, Node offline 10min → failed.
         self.register(
             "longrun_lease_cleanup",
@@ -319,7 +319,7 @@ class MaintenanceScheduler:
             settings.orphaned_stage_interval_seconds,
         )
 
-        # DB VACUUM — einmal pro Tag.
+        # DB VACUUM — once per day.
         self.register("db_vacuum", _db_vacuum, settings.db_vacuum_interval_seconds)
 
         # T-125: temp bridge route cleanup — reaps expired rows in
