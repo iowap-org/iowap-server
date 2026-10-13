@@ -545,7 +545,7 @@ After=network.target postgresql.service
 Type=simple
 User=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/.venv/bin/relay-server
+ExecStart=$INSTALL_DIR/.venv/bin/relay-server server
 Restart=on-failure
 RestartSec=5
 
@@ -561,7 +561,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/.venv/bin/relay-server
+Environment=HOME=$HOME
+ExecStart=$INSTALL_DIR/.venv/bin/relay-server server
 Restart=on-failure
 RestartSec=5
 
