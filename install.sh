@@ -133,8 +133,8 @@ docker_print_login() {
   lan_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
   lan_ip="${lan_ip:-127.0.0.1}"
   log ""
-  log "Dashboard login: $scheme://$lan_ip:$port/login"
-  log "  (local: $scheme://127.0.0.1:$port/login)"
+  log "Dashboard login: $scheme://$lan_ip:$port/relay/v2/dashboard/login"
+  log "  (local: $scheme://127.0.0.1:$port/relay/v2/dashboard/login)"
 }
 
 docker_print_seed() {
@@ -575,8 +575,8 @@ if [ "$MODE" != "update" ]; then
   LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
   LAN_IP="${LAN_IP:-127.0.0.1}"
   log ""
-  log "Dashboard login: $SCHEME://$LAN_IP:$SERVER_PORT/login"
-  log "  (local: $SCHEME://127.0.0.1:$SERVER_PORT/login)"
+  log "Dashboard login: $SCHEME://$LAN_IP:$SERVER_PORT/relay/v2/dashboard/login"
+  log "  (local: $SCHEME://127.0.0.1:$SERVER_PORT/relay/v2/dashboard/login)"
   if [ "$SEED_FLAG" = "SEED_GENERATED" ]; then
     log "Master admin seed: $SEED_VALUE"
   else

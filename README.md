@@ -51,8 +51,9 @@ pip install -e .            # or: pip install -e ".[postgres]"
 relay-server --host 0.0.0.0 --port 8788
 ```
 
-Server starts on `http://localhost:8788` — the dashboard login is under `/login`
-(master seed acts as the bootstrap admin until the first human admin exists).
+Server starts on `http://localhost:8788` — the dashboard login is under
+`/relay/v2/dashboard/login` (master seed acts as the bootstrap admin until the
+first human admin exists).
 
 ## Configuration
 
