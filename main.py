@@ -403,6 +403,14 @@ def main(argv=None):
         _run_admin_command(args)
         return
 
+    # Bare invocation = "server" with settings defaults (the intended
+    # default; before this fallback, bare calls crashed with
+    # AttributeError on args.host, systemd restart-looped).
+    if args.command is None:
+        host, port = settings.host, settings.port
+    else:
+        host, port = args.host, args.port
+
     # TLS (T-111): if a cert is configured, require the key and serve HTTPS.
     uvicorn_kwargs: dict = {
         "log_level": settings.log_level,
@@ -425,8 +433,8 @@ def main(argv=None):
 
     uvicorn.run(
         "relay_server.main:app",
-        host=args.host,
-        port=args.port,
+        host=host,
+        port=port,
         **uvicorn_kwargs,
     )
 
