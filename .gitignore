@@ -3,3 +3,5 @@ __pycache__/
 board
 .hermes/
 .venv/
+build/
+.worktrees/
