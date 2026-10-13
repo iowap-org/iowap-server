@@ -113,17 +113,19 @@ container_exists() {
   [ "$DOCKER" = "1" ] && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"
 }
 
-docker_wait_healthy() {
-  local i status
+docker_wait_healthy() { # $1 = host port (fallback when image has no HEALTHCHECK)
+  local port="${1:-8788}" i status
   for i in $(seq 1 30); do
-    status="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo missing)"
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$CONTAINER_NAME" 2>/dev/null)"
     case "$status" in
       healthy) return 0 ;;
-      missing) log "✗ Container $CONTAINER_NAME vanished - check: docker logs $CONTAINER_NAME"; return 1 ;;
+      "")
+        # Image ships no HEALTHCHECK (live: iowap-server image) - probe /health.
+        if curl -sf "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then return 0; fi ;;
     esac
     sleep 2
   done
-  log "⚠ Container not healthy within 60s - check: docker logs $CONTAINER_NAME"
+  log "⚠ Container not ready within 60s - check: docker logs $CONTAINER_NAME"
   return 1
 }
 
@@ -153,9 +155,22 @@ docker_ask_and_run() { # $1 = fresh|update
     # Recreate from the stored env (pull new image first)
     port="$(grep '^IOWAP_DOCKER_PORT=' "$ENVFILE" | cut -d= -f2-)"
     scheme="$(grep '^IOWAP_DOCKER_SCHEME=' "$ENVFILE" | cut -d= -f2-)"
+    tls_dir="$(grep '^IOWAP_DOCKER_TLS_DIR=' "$ENVFILE" | cut -d= -f2-)"
     log "Pulling image..."
     docker pull "$IMAGE" >/dev/null
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker volume create "$VOLUME_NAME" >/dev/null
+    TMOUNT=()
+    [ -n "$tls_dir" ] && TMOUNT=(-v "$tls_dir:/certs:ro")
+    docker run -d \
+      --name "$CONTAINER_NAME" \
+      --restart unless-stopped \
+      -p "${port}:8788" \
+      --env-file "$ENVFILE" \
+      ${TMOUNT[@]+"${TMOUNT[@]}"} \
+      -v "${VOLUME_NAME}:/app/.relay" \
+      "$IMAGE" >/dev/null
+    log "Container recreated: $CONTAINER_NAME (image updated, volume/env kept)"
   else
     # ---- Questions ----
     if [ "$phase" = "update" ]; then
@@ -185,7 +200,11 @@ docker_ask_and_run() { # $1 = fresh|update
       i|I|internet) LAB=internet ;;
       *) LAB=homelab ;;
     esac
-    ask DOCKER_PORT "Host port for the relay:" "8788"
+    if [ -n "${IOWAP_PORT:-}" ]; then
+      DOCKER_PORT="$IOWAP_PORT"
+    else
+      ask DOCKER_PORT "Host port for the relay:" "8788"
+    fi
     SCHEME=http; [ "$LAB" = "internet" ] && SCHEME=https
     TLS_ENV_ARGS=()
     if [ "$LAB" = "internet" ]; then
@@ -231,6 +250,7 @@ PY
       fi
       echo "IOWAP_DOCKER_PORT=$DOCKER_PORT"
       echo "IOWAP_DOCKER_SCHEME=$SCHEME"
+      echo "IOWAP_DOCKER_TLS_DIR=${tls_dir:-}"
     } >"$ENVFILE"
     port="$DOCKER_PORT"
     scheme="$SCHEME"
@@ -257,8 +277,8 @@ PY
     fi
   fi
   log "Waiting for health check..."
-  if docker_wait_healthy; then
-    log "✓ Container healthy"
+  if docker_wait_healthy "$port"; then
+    log "✓ Server ready (container up, /health ok)"
   fi
   docker_print_login "$scheme" "$port"
   if [ "$phase" = "fresh" ]; then
