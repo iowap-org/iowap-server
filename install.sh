@@ -48,12 +48,36 @@ case "$(uname -s)" in
   *) die "this installer supports Linux only." ;;
 esac
 
-if sudo -n true 2>/dev/null; then SUDO="sudo"; else SUDO=""; fi
+if [ "$(id -u)" = "0" ]; then
+  SUDO=""
+elif sudo -n true 2>/dev/null; then
+  SUDO="sudo"
+elif [ "$NONINTERACTIVE" != "1" ]; then
+  # No passwordless sudo: in interactive runs allow REAL sudo - it prompts
+  # for the password on the tty exactly when a root step needs it.
+  SUDO="sudo"
+  log "Note: no passwordless sudo - sudo password prompts will appear where root is needed."
+else
+  SUDO=""
+fi
 
-# Docker availability: binary + working daemon
+# Docker availability: binary anywhere sensible (incl. QNAP Container-Station
+# qpkg path, where the binary is NOT on the regular PATH) + working daemon.
+DOCKER_BIN=""
+for CAND in docker /usr/local/bin/docker /usr/bin/docker /usr/sbin/docker \
+            /share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker; do
+  if [ -x "$CAND" ]; then DOCKER_BIN="$CAND"; break; fi
+done
 DOCKER=0
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  DOCKER=1
+if [ -n "$DOCKER_BIN" ]; then
+  if "$DOCKER_BIN" info >/dev/null 2>&1; then
+    DOCKER=1
+    case "$DOCKER_BIN" in /*)
+      export PATH="$(dirname "$DOCKER_BIN"):$PATH" ;;
+    esac
+  else
+    log "Docker binary found ($DOCKER_BIN) but the daemon is not reachable - Docker mode unavailable."
+  fi
 fi
 
 check_python() {
