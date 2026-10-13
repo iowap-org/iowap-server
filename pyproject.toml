@@ -55,7 +55,8 @@ packages = [
 package-dir = {relay_server = ".", "relay_server.api" = "api", "relay_server.api.v2" = "api/v2", "relay_server.core" = "core", "relay_server.models" = "models", "relay_server.utils" = "utils"}
 
 [tool.setuptools.package-data]
-# Dashboard templates ride in the wheel: dashboard.py resolves STATIC_DIR as
-# <module>/../static — absent from site-packages the login page 500s (live
-# finding: FileNotFoundError on pip installs, e.g. the Docker image).
-relay_server = ["static/*"]
+# Static dashboard templates + the docs/ tree (iowap-docs submodule) ride in
+# the wheel: dashboard.py/docs.py resolve their assets relative to the module
+# (<site-packages>/relay_server/…). Absent from the wheel, the login page 500s
+# (FileNotFoundError, live Docker finding) and the docs endpoints come up empty.
+relay_server = ["static/*", "docs/**/*.md", "README.md"]
