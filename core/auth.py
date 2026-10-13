@@ -25,7 +25,6 @@ class NodeExistsError(Exception):
 
 
 ADMIN_SEED_PREFIX = "adm_"
-BOOTSTRAP_SEED_PREFIX = "bs_"
 TEMPORARY_TOKEN_PREFIX = "tp_"
 RUNTIME_TOKEN_PREFIX = "rt_"
 
