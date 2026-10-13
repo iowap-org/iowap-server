@@ -17,22 +17,42 @@ The relay server is the central coordinator in the IOWAP ecosystem. Nodes regist
 - **Docker** — `docker compose up` for one-command deployment
 - **Observability** — `/metrics` (Prometheus), `/ready` health checks, structured JSON logs
 
-## Quick Start
+## Quick Start (Linux)
 
 ```bash
-# Clone
-git clone https://github.com/iowap-org/iowap-server.git
-cd iowap-server
-
-# Run (SQLite dev mode)
-cp .env.example .env
-docker compose up -d
-
-# Or with PostgreSQL
-docker compose --profile postgres up -d
+curl -fsSL https://raw.githubusercontent.com/iowap-org/iowap-server/main/install.sh | bash
 ```
 
-Server starts on `http://localhost:8788`.
+The installer asks **native (systemd)** vs. **Docker (GHCR image)**, configures the
+database (SQLite default, PostgreSQL local/remote) and environment (homelab HTTP /
+internet TLS), creates the master admin seed, and prints the dashboard login URL.
+
+**Docker (manual)** — pre-built image on GHCR:
+
+```bash
+docker volume create relay-data
+docker run -d --name iowap-server --restart unless-stopped \
+  -p 8788:8788 \
+  -e RELAY_MASTER_SEED="$(openssl rand -hex 24)" \
+  -e RELAY_SESSION_SECRET="$(openssl rand -base64 32)" \
+  -e RELAY_SESSION_COOKIE_SECURE=false \
+  -v relay-data:/app/.relay \
+  ghcr.io/iowap-org/iowap-server:latest
+```
+
+Compose files live in [iowap-org/iowap-docker](https://github.com/iowap-org/iowap-docker) (`server/docker-compose.yml`).
+
+**Manual (source)**:
+
+```bash
+git clone --recursive https://github.com/iowap-org/iowap-server.git
+cd iowap-server
+pip install -e .            # or: pip install -e ".[postgres]"
+relay-server --host 0.0.0.0 --port 8788
+```
+
+Server starts on `http://localhost:8788` — the dashboard login is under `/login`
+(master seed acts as the bootstrap admin until the first human admin exists).
 
 ## Configuration
 
