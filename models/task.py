@@ -84,6 +84,11 @@ class TaskSummary(BaseModel):
     status: str
     priority: int
     owner_node_id: Optional[str] = None
+    submitted_by: Optional[str] = Field(
+        None,
+        description="Node that submitted the task (T-227 sender view; server-derived "
+                    "from the auth context, not client-suppliable). NULL for legacy tasks.",
+    )
     created_at: str
     updated_at: str
 

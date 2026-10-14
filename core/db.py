@@ -574,6 +574,7 @@ def _schema(conn: DBConn) -> None:
             status TEXT DEFAULT 'pending',
             priority INTEGER DEFAULT 0,
             owner_node_id TEXT,
+            submitted_by TEXT,
             timeout_seconds INTEGER DEFAULT 300,
             idempotency_key TEXT,
             created_at TEXT NOT NULL,
@@ -948,6 +949,15 @@ def _m011_node_capabilities_result_paths(conn: DBConn) -> None:
             )
 
 
+def _m012_tasks_submitted_by(conn: DBConn) -> None:
+    """tasks: submitted_by (T-227 sender view)."""
+    # Server-derived at submit time (auth context), never client-suppliable.
+    # NULL for legacy tasks — they keep owner-only visibility semantics.
+    cols = _column_names(conn, "tasks")
+    if "submitted_by" not in cols:
+        _exec(conn, "ALTER TABLE tasks ADD COLUMN submitted_by TEXT")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -960,6 +970,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (9, "node_routes_columns", _m009_node_routes_columns),
     (10, "nodes_load_source", _m010_nodes_load_source),
     (11, "node_capabilities_result_paths", _m011_node_capabilities_result_paths),
+    (12, "tasks_submitted_by", _m012_tasks_submitted_by),
 ]
 
 

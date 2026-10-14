@@ -40,6 +40,7 @@ async def scheduler_create_task(
         priority=body.priority,
         owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
+        submitted_by=ctx.node_id,
     )
     task = Scheduler.get_task(result["task_id"])
     if not task:
@@ -55,9 +56,10 @@ async def scheduler_list_tasks(
     status: Optional[str] = Query(None),
     ctx: AuthContext = Depends(get_approved_context),
 ):
-    # T-005g: non-admin nodes only see their own tasks (plus ownerless ones).
-    owner_node_id = None if ctx.is_admin else ctx.node_id
-    return {"tasks": Scheduler.list_tasks(status=status, owner_node_id=owner_node_id), "viewer": ctx.node_id}
+    # T-005g + T-227: non-admin nodes see their own tasks, the tasks they
+    # submitted (sender view) and ownerless ones (fan-out contract).
+    scope = None if ctx.is_admin else ctx.node_id
+    return {"tasks": Scheduler.list_tasks(status=status, owner_node_id=scope, submitted_by=scope), "viewer": ctx.node_id}
 
 
 @router.get("/tasks/{task_id}", response_model=TaskView)
@@ -65,8 +67,8 @@ async def scheduler_get_task(
     task_id: str,
     ctx: AuthContext = Depends(get_approved_context),
 ):
-    owner_node_id = None if ctx.is_admin else ctx.node_id
-    task = Scheduler.get_task(task_id, owner_node_id=owner_node_id)
+    scope = None if ctx.is_admin else ctx.node_id
+    task = Scheduler.get_task(task_id, owner_node_id=scope, submitted_by=scope)
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return _task_to_view(task)
@@ -130,14 +132,19 @@ async def scheduler_upload_artifact(
 ):
     """Upload an artifact attached to a task (and optionally a stage).
 
-    T-005g: non-admin nodes may only attach artifacts to their own or
-    ownerless tasks — a foreign-owned task is indistinguishable from a
-    missing one (404).
+    T-005g + T-227: non-admin nodes may only attach artifacts to their
+    own, sender or ownerless tasks — a foreign-owned task is
+    indistinguishable from a missing one (404).
     """
-    owner_node_id = None if ctx.is_admin else ctx.node_id
-    if owner_node_id is not None:
+    scope = None if ctx.is_admin else ctx.node_id
+    if scope is not None:
         task_owner = Scheduler.artifact_task_owner(task_id)
-        if task_owner is not None and task_owner != owner_node_id:
+        task_sender = Scheduler.artifact_task_sender(task_id)
+        if (
+            task_owner is not None
+            and task_owner != scope
+            and task_sender != scope
+        ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
         if task_owner is None:
             # artifact_task_owner returns None for missing AND ownerless
@@ -169,9 +176,10 @@ async def scheduler_list_artifacts(
     task_id: str,
     ctx: AuthContext = Depends(get_alive_context),
 ):
-    # T-005g: non-admin nodes only see artifacts of their own/ownerless tasks.
-    owner_node_id = None if ctx.is_admin else ctx.node_id
-    return {"artifacts": Scheduler.list_artifacts_scoped(task_id, owner_node_id=owner_node_id), "viewer": ctx.node_id}
+    # T-005g + T-227: non-admin nodes only see artifacts of their own,
+    # sender or ownerless tasks.
+    scope = None if ctx.is_admin else ctx.node_id
+    return {"artifacts": Scheduler.list_artifacts_scoped(task_id, owner_node_id=scope, submitted_by=scope), "viewer": ctx.node_id}
 
 
 @router.delete("/artifacts/{artifact_id}")
@@ -179,10 +187,10 @@ async def scheduler_delete_artifact(
     artifact_id: str,
     ctx: AuthContext = Depends(get_alive_context),
 ):
-    # T-005g: non-admin nodes may only delete artifacts of their own or
-    # ownerless tasks — foreign-owned artifacts report as not found.
-    owner_node_id = None if ctx.is_admin else ctx.node_id
-    ok = Scheduler.delete_artifact_scoped(artifact_id, owner_node_id=owner_node_id)
+    # T-005g + T-227: non-admin nodes may only delete artifacts of their
+    # own, sender or ownerless tasks — foreign artifacts report as not found.
+    scope = None if ctx.is_admin else ctx.node_id
+    ok = Scheduler.delete_artifact_scoped(artifact_id, owner_node_id=scope, submitted_by=scope)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
     return {"status": "deleted", "artifact_id": artifact_id}
@@ -242,6 +250,7 @@ async def scheduler_create_simple_task(
         owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
         idempotency_key=body.idempotency_key,
+        submitted_by=ctx.node_id,
     )
 
     task_detail = Scheduler.get_task(result["task_id"])

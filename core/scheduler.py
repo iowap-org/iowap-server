@@ -90,6 +90,7 @@ class Scheduler:
         owner_node_id: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         idempotency_key: Optional[str] = None,
+        submitted_by: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new task and decompose it into stages.
 
@@ -119,9 +120,9 @@ class Scheduler:
                 conn.execute(
                 q("""
                 INSERT INTO tasks (task_id, task_name, status, priority, owner_node_id,
-                                   timeout_seconds, idempotency_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (task_id, task_name, "pending", priority, owner_node_id, default_timeout, idempotency_key, now, now)),
+                                   submitted_by, timeout_seconds, idempotency_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (task_id, task_name, "pending", priority, owner_node_id, submitted_by, default_timeout, idempotency_key, now, now)),
                 )
             except sqlite3.IntegrityError:
                 # Lost a race against a concurrent submit with the same key —
@@ -195,54 +196,61 @@ class Scheduler:
             conn.close()
 
     @staticmethod
-    def list_tasks(status: Optional[str] = None, owner_node_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_tasks(
+        status: Optional[str] = None,
+        owner_node_id: Optional[str] = None,
+        submitted_by: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         conn = get_conn()
         try:
-            # owner_node_id scoping (T-005g): nodes only see their own tasks.
-            # NULL-owner tasks stay visible to everyone — the scheduler routes
-            # ownerless sub-tasks to any capable node (flow fan-out contract).
+            # T-005g + T-227 scoping: with ``owner_node_id`` set (non-admin
+            # caller), a node sees its own tasks, the tasks it submitted
+            # (sender view) and ownerless tasks — the scheduler routes
+            # ownerless sub-tasks to any capable node until the first
+            # claim flips the owner (T-227). ``owner_node_id=None`` is the
+            # admin view (unscoped).
+            where: List[str] = []
+            args: List[Any] = []
             if status:
-                if owner_node_id:
-                    rows = conn.execute(
-                        q(
-                            "SELECT * FROM tasks WHERE status = ? AND (owner_node_id IS NULL OR owner_node_id = ?)"
-                            " ORDER BY priority DESC, created_at ASC",
-                            (status, owner_node_id),
-                        )
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        q("SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC", (status,)),
-                    ).fetchall()
-            elif owner_node_id:
-                rows = conn.execute(
-                    q(
-                        "SELECT * FROM tasks WHERE owner_node_id IS NULL OR owner_node_id = ?"
-                        " ORDER BY priority DESC, created_at ASC",
-                        (owner_node_id,),
-                    )
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    q("SELECT * FROM tasks ORDER BY priority DESC, created_at ASC")
-                ).fetchall()
+                where.append("status = ?")
+                args.append(status)
+            if owner_node_id is not None:
+                clause = "(owner_node_id IS NULL OR owner_node_id = ?"
+                cargs: List[Any] = [owner_node_id]
+                if submitted_by is not None:
+                    clause += " OR submitted_by = ?"
+                    cargs.append(submitted_by)
+                clause += ")"
+                where.append(clause)
+                args.extend(cargs)
+            sql = "SELECT * FROM tasks"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY priority DESC, created_at ASC"
+            rows = conn.execute(q(sql, tuple(args))).fetchall()
             return [_task_row_to_dict(r) for r in rows]
         finally:
             conn.close()
 
     @staticmethod
-    def get_task(task_id: str, owner_node_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_task(
+        task_id: str,
+        owner_node_id: Optional[str] = None,
+        submitted_by: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         conn = get_conn()
         try:
-            # T-005g: with owner scoping, tasks owned by ANOTHER node are
-            # invisible (404 upstream). NULL-owner tasks remain readable —
-            # nodes must poll sub-task results for fan-out aggregation.
+            # T-005g + T-227: tasks owned by ANOTHER node are invisible
+            # (404 upstream) — unless the caller submitted the task (sender
+            # view). NULL-owner tasks remain readable — nodes must poll
+            # sub-task results for fan-out aggregation.
             row = conn.execute(q("SELECT * FROM tasks WHERE task_id = ?", (task_id,))).fetchone()
             if not row:
                 return None
             if owner_node_id is not None:
                 task_owner = row["owner_node_id"]
-                if task_owner is not None and task_owner != owner_node_id:
+                task_sender = row["submitted_by"]
+                if task_owner is not None and task_owner != owner_node_id and task_sender != owner_node_id:
                     return None
             task = _task_row_to_dict(row)
             stage_rows = conn.execute(
@@ -434,6 +442,24 @@ class Scheduler:
                 if result.rowcount == 0:
                     continue
 
+                # T-227: the first claim of an ownerless single-stage task
+                # makes the claimer its owner ("who received the order") —
+                # the broad NULL-owner read ends here and visibility narrows
+                # to owner + sender (submitted_by). Multi-stage fan-out
+                # tasks never flip: mixed-capability stages must stay
+                # claimable by any capable node.
+                stage_total = conn.execute(
+                    q("SELECT COUNT(*) FROM task_stages WHERE task_id = ?", (row["task_id"],)),
+                ).fetchone()[0]
+                if stage_total == 1:
+                    conn.execute(
+                        q(
+                            "UPDATE tasks SET owner_node_id = ?, updated_at = ?"
+                            " WHERE task_id = ? AND owner_node_id IS NULL",
+                            (node_id, now, row["task_id"]),
+                        ),
+                    )
+
                 # Update task status to running if first claim.
                 task_before = conn.execute(
                     q("SELECT status FROM tasks WHERE task_id = ?", (row["task_id"],))
@@ -585,14 +611,37 @@ class Scheduler:
             conn.close()
 
     @staticmethod
-    def delete_artifact_scoped(artifact_id: str, owner_node_id: Optional[str] = None) -> bool:
-        """Delete an artifact with owner scoping (T-005g).
+    def artifact_task_sender(task_id: str) -> Optional[str]:
+        """Return a task's ``submitted_by`` (T-227; None when unset/missing).
 
-        Resolution order mirrors the scoping rule of ``get_task``: the
-        artifact's task must be ownerless (NULL) or owned by
-        ``owner_node_id``; a foreign-owned artifact is reported as
+        Mirrors ``artifact_task_owner`` for the sender side of the T-227
+        visibility predicate: artifact endpoints must serve the sender as
+        well as the owner.
+        """
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                q("SELECT submitted_by FROM tasks WHERE task_id = ?", (task_id,))
+            ).fetchone()
+            if not row:
+                return None
+            return row["submitted_by"]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_artifact_scoped(
+        artifact_id: str,
+        owner_node_id: Optional[str] = None,
+        submitted_by: Optional[str] = None,
+    ) -> bool:
+        """Delete an artifact with owner/sender scoping (T-005g + T-227).
+
+        Resolution order mirrors ``get_task``: the artifact's task must be
+        ownerless (NULL), owned by ``owner_node_id`` or submitted by
+        ``submitted_by``; a foreign task's artifact is reported as
         ``False`` (→ 404 upstream) and left untouched. Admin callers
-        pass ``owner_node_id=None`` and skip the ownership check.
+        pass ``owner_node_id=None`` and skip the scoping check.
         """
         conn = get_conn()
         try:
@@ -602,13 +651,16 @@ class Scheduler:
             if not art:
                 return False
             task_owner: Optional[str] = None
+            task_sender: Optional[str] = None
             if art["task_id"]:
                 trow = conn.execute(
-                    q("SELECT owner_node_id FROM tasks WHERE task_id = ?", (art["task_id"],))
+                    q("SELECT owner_node_id, submitted_by FROM tasks WHERE task_id = ?", (art["task_id"],))
                 ).fetchone()
                 if trow:
                     task_owner = trow["owner_node_id"]
-            if owner_node_id is not None and task_owner is not None and task_owner != owner_node_id:
+                    task_sender = trow["submitted_by"]
+            if (owner_node_id is not None and task_owner is not None
+                    and task_owner != owner_node_id and task_sender != owner_node_id):
                 return False
         finally:
             conn.close()
@@ -618,19 +670,25 @@ class Scheduler:
     def list_artifacts_scoped(
         task_id: str,
         owner_node_id: Optional[str] = None,
+        submitted_by: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List a task's artifacts with owner scoping (T-005g).
+        """List a task's artifacts with owner/sender scoping (T-005g + T-227).
 
         When ``owner_node_id`` is given (non-admin caller), the task must
-        be ownerless or owned by this node — otherwise the artifact list
-        is reported as missing (empty result → 404 upstream), mirroring
-        ``get_task``'s scoping semantics for foreign-owned tasks.
+        be ownerless, owned by this node or submitted by the caller —
+        otherwise the artifact list is reported as missing (empty result
+        → 404 upstream), mirroring ``get_task``'s scoping semantics.
         """
         if owner_node_id is not None:
             task_owner = Scheduler.artifact_task_owner(task_id)
+            task_sender = Scheduler.artifact_task_sender(task_id)
             # A missing task and a foreign-owned task both yield a scoped
             # empty result (404 upstream) — no existence oracle.
-            if task_owner is not None and task_owner != owner_node_id:
+            if (
+                task_owner is not None
+                and task_owner != owner_node_id
+                and task_sender != owner_node_id
+            ):
                 return []
         return list_artifacts(task_id=task_id)
 
@@ -643,18 +701,24 @@ class Scheduler:
         stage_id: Optional[str] = None,
         created_by: Optional[str] = None,
         owner_node_id: Optional[str] = None,
+        submitted_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Store an artifact attached to a task with owner scoping (T-005g).
+        """Store an artifact attached to a task with owner/sender scoping.
 
-        Non-admin callers (``owner_node_id`` set) may only attach
-        artifacts to ownerless or own tasks — a foreign-owned task yields
-        ``None`` (→ 404 upstream) and nothing is written to disk or DB.
-        Admin callers pass ``owner_node_id=None`` and only get the plain
-        existence check (task must exist).
+        T-005g + T-227: non-admin callers (``owner_node_id`` set) may only
+        attach artifacts to ownerless, own or sender tasks — a foreign
+        task yields ``None`` (→ 404 upstream) and nothing is written to
+        disk or DB. Admin callers pass ``owner_node_id=None`` and only
+        get the plain existence check (task must exist).
         """
-        if owner_node_id is not None:
-            task_owner = Scheduler.artifact_task_owner(task_id) if task_id else None
-            if task_owner is not None and task_owner != owner_node_id:
+        if owner_node_id is not None and task_id:
+            task_owner = Scheduler.artifact_task_owner(task_id)
+            task_sender = Scheduler.artifact_task_sender(task_id)
+            if (
+                task_owner is not None
+                and task_owner != owner_node_id
+                and task_sender != owner_node_id
+            ):
                 return None
         return store_artifact(
             name=name,
