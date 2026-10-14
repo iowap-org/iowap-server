@@ -232,7 +232,12 @@ def test_simple_task_with_available_provider():
     assert r.status_code == 200, r.text
     assert r.json().get("task_id")
 
-    # Negative guard: sole provider unavailable -> 503 (unchanged semantics).
+    # T-229 (T-228 decision, Ronny 2026-10-15): the 503 gate is RETIRED —
+    # a capability whose only provider is unavailable now also queues
+    # (200 + pending stage) instead of rejecting the submit. Queued work
+    # waits until a provider appears; the task stays pending (or hits its
+    # timeout). The original F-07 point — an unavailable provider must not
+    # create a false negative for tasks that ARE servable — is unchanged.
     _seed_node("n-dead", "D", available=False, load=0.05,
                caps=[{"name": "cap.dead", "available": True}])
     r2 = client.post(
@@ -240,4 +245,5 @@ def test_simple_task_with_available_provider():
         headers={"Authorization": f"Bearer {admin_token}"},
         json={"capability": "cap.dead", "payload": {}},
     )
-    assert r2.status_code == 503, r2.text
+    assert r2.status_code == 200, r2.text
+    assert r2.json().get("status") == "pending"

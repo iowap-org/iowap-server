@@ -16,6 +16,7 @@ from relay_server.models import (
     CompleteRequest,
     NoteRequest,
     NoteResponse,
+    PRIORITY_TOP,
     SimpleTaskRequest,
     SimpleTaskResponse,
     StageSummary,
@@ -215,8 +216,12 @@ async def scheduler_create_simple_task(
     """
     Submit a single-stage task.
 
-    Creates a task with a single stage that is routed
-    immediately to a node with a matching capability.
+    Creates a task whose single stage awaits a node with a matching
+    capability. T-229: the task is stored pending even while the
+    capability is busy/unavailable (queued instead of hard 503) and
+    defaults to the top priority (10) — claimed first, equal-priority
+    ties resolve FIFO by creation order (see claim ordering in core).
+    With an explicitly pinned ``priority`` (0–10) that value wins.
     """
     from relay_server.core.discovery import get_capability_by_name
 
@@ -226,11 +231,14 @@ async def scheduler_create_simple_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Capability '{body.capability}' not found",
         )
-    if not cap.get("available", False):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Capability '{body.capability}' is not available",
-        )
+
+    # T-229 (T-228 decision, Ronny 2026-10-15): a busy/unavailable
+    # capability no longer hard-503s the submit — the task is stored
+    # pending and claimed as soon as the capability frees up.
+    # task-simple means "do it NOW", so it queues at the TOP priority
+    # (10) unless the consumer pins one explicitly; equal-priority ties
+    # resolve FIFO by creation order (claim ordering in core).
+    priority = body.priority if body.priority is not None else PRIORITY_TOP
 
     task_name = body.name or f"simple-{body.capability}"
     stages = [
@@ -246,7 +254,7 @@ async def scheduler_create_simple_task(
     result = Scheduler.create_task(
         task_name=task_name,
         stages=stages,
-        priority=body.priority,
+        priority=priority,
         owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
         idempotency_key=body.idempotency_key,

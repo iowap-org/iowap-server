@@ -376,12 +376,20 @@ class Scheduler:
                     return None
 
             # Find pending stages whose capability matches and dependencies are completed.
+            # T-229: order candidates by task priority DESC, then creation
+            # order (FIFO), then per-task stage sequence — tasks.priority was
+            # display-only before; it now drives the claim order.
+            # JOIN excludes orphan stages (no task row) and provides the
+            # priority fields.
             rows = conn.execute(
                 q(
-                    "SELECT * FROM task_stages WHERE status = 'pending' AND capability IN ({}) ORDER BY sequence ASC".format(
+                    "SELECT s.* FROM task_stages s "
+                    "JOIN tasks t ON t.task_id = s.task_id "
+                    "WHERE s.status = 'pending' AND s.capability IN ({}) ".format(
                         ",".join("?" for _ in cap_names)
-                    ),
-                    cap_names,
+                    )
+                    + "ORDER BY t.priority DESC, t.created_at ASC, s.sequence ASC",
+                    tuple(cap_names),
                 )
             ).fetchall()
 

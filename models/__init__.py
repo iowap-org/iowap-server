@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from relay_server.config import settings
 
+# T-229: top of the claim order — claim ordering is priority DESC,
+# created_at ASC, sequence ASC (FIFO among equal priority).
+PRIORITY_TOP = 10
+
 # ── Capability (server-side, for API requests/responses) ──────
 
 class Capability(BaseModel):
@@ -321,7 +325,12 @@ class SimpleTaskRequest(BaseModel):
     capability: str = Field(..., min_length=1)
     payload: Dict[str, Any] = Field(default_factory=dict)
     name: str = ""
-    priority: int = Field(default=0, ge=0, le=10)
+    # T-229: None (absent) = TOP priority (PRIORITY_TOP) — task-simple
+    # means "do it NOW", so it is claimed ahead of queued lower-priority
+    # work; explicit 0–10 wins. Ties FIFO by creation order.
+    priority: int | None = Field(
+        default=None, ge=0, le=10, description="None = TOP priority (10); explicit value wins"
+    )
     timeout_seconds: Optional[int] = None
     owner_node_id: Optional[str] = Field(None, min_length=1)
     idempotency_key: Optional[str] = Field(
