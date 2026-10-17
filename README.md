@@ -42,6 +42,13 @@ docker run -d --name iowap-server --restart unless-stopped \
 
 Compose files live in [iowap-org/iowap-docker](https://github.com/iowap-org/iowap-docker) (`server/docker-compose.yml`).
 
+**From PyPI**:
+
+```bash
+pip install "iowap-server"      # import namespace: relay_server
+relay-server --host 0.0.0.0 --port 8788
+```
+
 **Manual (source)**:
 
 ```bash
