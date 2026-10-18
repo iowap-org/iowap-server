@@ -150,6 +150,7 @@ class Scheduler:
                         "sequence": idx,
                         "timeout_seconds": stage.get("timeout_seconds", default_timeout),
                         "payload": _serialize(stage.get("payload")),
+                        "forward_slot": stage.get("forward_slot"),
                     }
                 )
 
@@ -163,8 +164,8 @@ class Scheduler:
                     q("""
                     INSERT INTO task_stages
                     (stage_id, task_id, stage_name, capability, depends_on, status,
-                     sequence, timeout_seconds, payload, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     sequence, timeout_seconds, payload, forward_slot, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         rec["stage_id"],
                         task_id,
@@ -175,6 +176,7 @@ class Scheduler:
                         rec["sequence"],
                         rec["timeout_seconds"],
                         rec["payload"],
+                        rec.get("forward_slot"),
                         now,
                         now,
                     )),
@@ -1300,6 +1302,7 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "status": row["status"],
         "priority": row["priority"],
         "owner_node_id": row["owner_node_id"],
+        "submitted_by": row["submitted_by"],
         "timeout_seconds": row["timeout_seconds"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -1318,6 +1321,7 @@ def _stage_row_to_dict(row: Any) -> Dict[str, Any]:
         "sequence": row["sequence"],
         "timeout_seconds": row["timeout_seconds"],
         "payload": _parse(row["payload"]),
+        "forward_slot": row["forward_slot"],
         "claimed_by": row["claimed_by"],
         "claimed_at": row["claimed_at"],
         "claim_expires_at": row["claim_expires_at"],

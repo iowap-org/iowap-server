@@ -249,6 +249,7 @@ task_stages = sa.Table(
     sa.Column("retry_count", sa.Integer, default=0),
     sa.Column("last_note_at", sa.String(64), nullable=True),
     sa.Column("longrun_ttl_expires_at", sa.String(64), nullable=True),
+    sa.Column("forward_slot", sa.String(64), nullable=True),
     sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"]),
     sa.ForeignKeyConstraint(["claimed_by"], ["nodes.node_id"]),
 )
@@ -298,6 +299,18 @@ audit_logs = sa.Table(
     sa.Column("created_at", sa.String(64), nullable=False),
 )
 
+forward_mappings = sa.Table(
+    "forward_mappings", metadata,
+    sa.Column("mapping_id", sa.String(64), primary_key=True),
+    sa.Column("node_id", sa.String(64), nullable=False),
+    sa.Column("slot", sa.String(64), nullable=False),
+    sa.Column("target_capability", sa.String(255), nullable=False),
+    sa.Column("created_at", sa.String(64), nullable=False),
+    sa.Column("updated_at", sa.String(64), nullable=False),
+    sa.UniqueConstraint("node_id", "slot", name="uq_forward_mappings_node_slot"),
+    sa.ForeignKeyConstraint(["node_id"], ["nodes.node_id"]),
+)
+
 # ---------------------------------------------------------------------------
 # INDEXES (portable — ``sa.Index`` resolves per dialect)
 # ---------------------------------------------------------------------------
@@ -318,6 +331,7 @@ sa.Index("idx_task_stages_capability", task_stages.c.capability)
 sa.Index("idx_artifacts_task", artifacts.c.task_id)
 sa.Index("idx_presence_status", presence.c.status)
 sa.Index("idx_node_tokens_lookup", node_tokens.c.token_lookup_hash)
+sa.Index("idx_forward_mappings_node", forward_mappings.c.node_id)
 
 
 def all_table_names() -> set[str]:

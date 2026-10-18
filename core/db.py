@@ -958,6 +958,34 @@ def _m012_tasks_submitted_by(conn: DBConn) -> None:
         _exec(conn, "ALTER TABLE tasks ADD COLUMN submitted_by TEXT")
 
 
+def _m013_forward_mappings_table(conn: DBConn) -> None:
+    """forward_mappings (T-Forward): (node_id, slot) → target_capability."""
+    # Per-node slot identity via UNIQUE; FK to nodes is enforced, the
+    # admin node-delete path cleans the rows up manually (no CASCADE).
+    if "forward_mappings" not in _table_names(conn):
+        _exec(conn, """
+            CREATE TABLE IF NOT EXISTS forward_mappings (
+                mapping_id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL REFERENCES nodes(node_id),
+                slot TEXT NOT NULL,
+                target_capability TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(node_id, slot)
+            )
+        """)
+        _exec(conn,
+            "CREATE INDEX IF NOT EXISTS idx_forward_mappings_node "
+            "ON forward_mappings(node_id)"
+        )
+
+
+def _m014_task_stages_forward_slot(conn: DBConn) -> None:
+    """task_stages: forward_slot provenance for redirected stages (T-Forward)."""
+    cols = _column_names(conn, "task_stages")
+    if "forward_slot" not in cols:
+        _exec(conn, "ALTER TABLE task_stages ADD COLUMN forward_slot TEXT")
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -971,6 +999,8 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (10, "nodes_load_source", _m010_nodes_load_source),
     (11, "node_capabilities_result_paths", _m011_node_capabilities_result_paths),
     (12, "tasks_submitted_by", _m012_tasks_submitted_by),
+    (13, "forward_mappings_table", _m013_forward_mappings_table),
+    (14, "task_stages_forward_slot", _m014_task_stages_forward_slot),
 ]
 
 
