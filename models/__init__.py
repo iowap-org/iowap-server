@@ -171,6 +171,11 @@ class TaskSummary(BaseModel):
     status: str
     priority: int
     owner_node_id: Optional[str] = None
+    submitted_by: Optional[str] = Field(
+        None,
+        description="Node that submitted the task (T-227 sender view; server-derived "
+                    "from the auth context, not client-suppliable). NULL for legacy tasks.",
+    )
     created_at: str
     updated_at: str
 
@@ -186,6 +191,11 @@ class StageSummary(BaseModel):
     claimed_at: Optional[str] = None
     completed_at: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
+    forward_slot: Optional[str] = Field(
+        None,
+        description="T-Forward: normalized forward slot when this stage was a redirected "
+                    "'forward' stage; NULL otherwise.",
+    )
     result: Optional[Dict[str, Any]] = None
     retry_count: int = Field(
         0,
@@ -355,6 +365,29 @@ class SimpleTaskResponse(BaseModel):
     stage_id: str
     status: str  # pending
     capability: str
+
+# ── Forward routing (T-Forward) ────────────────────────────────
+
+class ForwardMappingPut(BaseModel):
+    """Body for PUT /relay/v2/forward-mappings/{node_id}/{slot}."""
+
+    target_capability: str = Field(..., min_length=1, max_length=255)
+
+
+class ForwardMappingEntry(BaseModel):
+    """One (node, slot) → target_capability mapping row."""
+
+    node_id: str
+    slot: str
+    target_capability: str
+    created_at: str
+    updated_at: str
+
+
+class ForwardMappingListResponse(BaseModel):
+    """Response for GET /relay/v2/forward-mappings."""
+
+    mappings: list[ForwardMappingEntry] = Field(default_factory=list)
 
 
 # ── Heartbeat / Status ──────────────────────────────────────────

@@ -9,6 +9,7 @@ from relay_server.api.v2.dashboard import router as dashboard_router
 from relay_server.api.v2.discovery import router as discovery_router
 from relay_server.api.v2.docs import router as docs_router
 from relay_server.api.v2.events import router as events_router
+from relay_server.api.v2.forward import router as forward_router
 from relay_server.api.v2.presence import router as presence_router
 from relay_server.api.v2.scheduler import router as scheduler_router
 from relay_server.api.v2.storage import router as storage_router
@@ -24,3 +25,4 @@ router.include_router(events_router, prefix="/events", tags=["events"])
 router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 router.include_router(cluster_router, prefix="/cluster", tags=["cluster"])
 router.include_router(storage_router, prefix="/storage", tags=["storage"])
+router.include_router(forward_router, prefix="/forward-mappings", tags=["forward"])

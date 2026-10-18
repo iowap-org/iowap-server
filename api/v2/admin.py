@@ -146,6 +146,7 @@ async def admin_delete_node(
         # (foreign keys are enabled, so deleting in the right order is required).
         conn.execute(q("DELETE FROM node_tokens WHERE node_id = ?", (node_id,)))
         conn.execute(q("DELETE FROM presence WHERE node_id = ?", (node_id,)))
+        conn.execute(q("DELETE FROM forward_mappings WHERE node_id = ?", (node_id,)))
         conn.execute(
             q("UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?", (node_id,)),
         )

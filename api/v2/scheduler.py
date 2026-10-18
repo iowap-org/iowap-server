@@ -7,6 +7,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from relay_server.api.v2.security import get_alive_context, get_approved_context
 from relay_server.core.artifacts import store_artifact
 from relay_server.core.db import get_conn, q
+from relay_server.core.events import event_bus
+from relay_server.core.forward import (
+    ForwardRoutingError,
+    is_forward_stage,
+    normalize_slot,
+    resolve_forward_stages,
+)
 from relay_server.core.scheduler import Scheduler
 from relay_server.models import (
     ArtifactUploadResponse,
@@ -28,6 +35,43 @@ from relay_server.models import (
 router = APIRouter()
 
 
+def _apply_forward_redirects(submitter_node_id: str, stages: list[dict[str, Any]]) -> None:
+    """T-Forward: resolve 'forward' stages against forward_mappings, in place.
+
+    Fast-path no-op when no stage targets the 'forward' pseudo-capability.
+    On refusal publishes one 'forward_refused' event (slot-level refusals
+    only) and raises HTTPException with a '<code>: <message>' detail.
+    Contracts: design.md §3.3.
+    """
+    if not any(is_forward_stage(stage) for stage in stages):
+        return
+    try:
+        resolve_forward_stages(submitter_node_id, stages)
+    except ForwardRoutingError as exc:
+        if exc.code in ("forward_mapping_missing", "forward_mapping_invalid"):
+            # Best-effort slot: the forward_slot payload value of the FIRST
+            # forward stage; falls back to the raw value when normalization
+            # fails, and to None when there is no slot at all.
+            slot: Any = None
+            for stage in stages:
+                if not is_forward_stage(stage):
+                    continue
+                payload = stage.get("payload") or {}
+                raw = payload.get("forward_slot") if isinstance(payload, dict) else None
+                try:
+                    slot = normalize_slot(raw)
+                except ForwardRoutingError:
+                    slot = raw
+                break
+            event_bus.publish_sync(
+                "forward_refused",
+                {"node_id": submitter_node_id, "slot": slot, "reason": exc.code},
+            )
+        raise HTTPException(
+            status_code=exc.http_status, detail=f"{exc.code}: {exc.message}"
+        ) from exc
+
+
 @router.post("/tasks", response_model=TaskView)
 async def scheduler_create_task(
     body: TaskRequest,
@@ -35,6 +79,8 @@ async def scheduler_create_task(
 ):
     """Submit a new multi-stage task."""
     stages = [s.model_dump() for s in body.stages]
+    # T-Forward: resolve 'forward' stages against the submitter's mappings.
+    _apply_forward_redirects(ctx.node_id, stages)
     result = Scheduler.create_task(
         task_name=body.task_name,
         stages=stages,
@@ -225,13 +271,6 @@ async def scheduler_create_simple_task(
     """
     from relay_server.core.discovery import get_capability_by_name
 
-    cap = get_capability_by_name(body.capability)
-    if not cap:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Capability '{body.capability}' not found",
-        )
-
     # T-229 (T-228 decision, Ronny 2026-10-15): a busy/unavailable
     # capability no longer hard-503s the submit — the task is stored
     # pending and claimed as soon as the capability frees up.
@@ -250,6 +289,18 @@ async def scheduler_create_simple_task(
             "payload": body.payload,
         }
     ]
+
+    # T-Forward: resolve the 'forward' pseudo-capability against the
+    # submitter's mappings (mutates stages[0] in place on success).
+    _apply_forward_redirects(ctx.node_id, stages)
+
+    capability = stages[0]["capability"]
+    cap = get_capability_by_name(capability)
+    if not cap:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Capability '{capability}' not found",
+        )
 
     result = Scheduler.create_task(
         task_name=task_name,
@@ -272,5 +323,5 @@ async def scheduler_create_simple_task(
         task_id=result["task_id"],
         stage_id=task_detail["stages"][0]["stage_id"],
         status="pending",
-        capability=body.capability,
+        capability=capability,
     )

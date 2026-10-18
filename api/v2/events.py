@@ -19,6 +19,7 @@ KNOWN_EVENT_TYPES = {
     "stage_completed",
     "presence_changed",
     "artifact_created",
+    "forward_refused",
 }
 
 
