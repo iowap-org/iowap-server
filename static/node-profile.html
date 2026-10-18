@@ -30,6 +30,21 @@
     </div>
     <div id="capabilities" class="grid"></div>
 
+    <!-- Forward mappings (T-Forward): the relay resolves a submitter- +
+         slot-numbered 'forward' task to the mapped target capability at
+         submit time. Admin-only management; anonymous visitors see the table
+         read-only or a sign-in note. -->
+    <div class="section">
+      <h2>🔀 Forward mappings</h2>
+    </div>
+    <div class="panel" id="forwardMappings">
+      <table id="forwardMappingsTable">
+        <thead><tr><th>Slot</th><th>Target capability</th><th>Updated at</th><th></th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">loading…</td></tr></tbody>
+      </table>
+      <div id="fwdMsg" class="empty" hidden></div>
+    </div>
+
     <!-- Load chart -->
     <div class="section">
       <h2>📈 Load (recent activity)</h2>

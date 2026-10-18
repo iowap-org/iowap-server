@@ -92,6 +92,7 @@ async function load() {
         .catch(() => ({ events: [] })),
     ]);
     render(n, activityReq.events || []);
+    loadForwardMappings();
   } catch (err) {
     document.getElementById("nodeName").textContent = "Node not found";
     const pill = document.getElementById("statusPill");
@@ -212,6 +213,199 @@ function render(n, events) {
       </div>`;
       })
       .join("") || '<div class="activity-item empty">No activity yet.</div>';
+}
+
+// ===== forward mappings (T-Forward) =====================================
+
+function getCsrfToken() {
+  const m = document.cookie.match(/(?:^|;\s*)relay_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
+function fwdMessage(text, cls) {
+  const el = document.getElementById("fwdMsg");
+  el.hidden = !text;
+  el.textContent = text || "";
+  el.className = "empty " + (cls || "");
+}
+
+function fwdMutedNote(td, note) {
+  td.innerHTML = `<td colspan="4" class="empty">${escHtml(note)}</td>`;
+}
+
+async function loadForwardMappings() {
+  const tbody = document.querySelector("#forwardMappingsTable tbody");
+  if (!tbody || !nodeId) return;
+
+  // Best-effort identity probe: anonymous visitors keep the table read-only.
+  let canManage = false;
+  try {
+    const meReq = await fetch("/relay/v2/dashboard/api/me", {
+      headers: { Accept: "application/json" },
+    });
+    if (meReq.ok) {
+      const me = await meReq.json();
+      canManage = me.is_master === true || me.role === "admin";
+    }
+  } catch (_) {}
+
+  let res;
+  try {
+    res = await fetch(
+      `/relay/v2/forward-mappings?node=${encodeURIComponent(nodeId)}`,
+      { headers: { Accept: "application/json" } },
+    );
+  } catch (_) {
+    fwdMutedNote(tbody, "Forward mappings are unavailable.");
+    return;
+  }
+  if (res.status === 401 || res.status === 403) {
+    fwdMutedNote(tbody, "sign in as admin to manage forward mappings");
+    return;
+  }
+  if (!res.ok) {
+    fwdMutedNote(tbody, "forward mappings are currently unavailable");
+    return;
+  }
+  let mappings;
+  try {
+    mappings = (await res.json()).mappings || [];
+  } catch (_) {
+    fwdMutedNote(tbody, "forward mappings are currently unavailable");
+    return;
+  }
+
+  tbody.innerHTML =
+    mappings.map(
+      (m) => `
+      <tr>
+        <td class="mono">${escHtml(m.slot)}</td>
+        <td><span class="tag info">${escHtml(m.target_capability)}</span></td>
+        <td>${fmt(m.updated_at)}</td>
+        <td>${
+          canManage
+            ? `<button type="button" class="fwd-del" data-slot="${escAttr(m.slot)}">delete</button>`
+            : ""
+        }</td>
+      </tr>`
+    ).join("") || '<tr><td colspan="4" class="empty">No forward mappings.</td></tr>';
+
+  if (canManage) {
+    const panel = document.getElementById("forwardMappings");
+    document
+      .querySelectorAll("#forwardMappingsTable .fwd-del")
+      .forEach((btn) => {
+        btn.addEventListener("click", () => deleteForwardMapping(btn.dataset.slot));
+      });
+    if (!document.getElementById("fwdAddBtn")) {
+      const addRow = document.createElement("div");
+      addRow.innerHTML = `
+        <div style="display:flex;gap:.5rem;align-items:center;margin-top:.75rem;">
+          <input id="fwd-slot" type="text" placeholder="slot (1, a, s-2)" maxlength="64" />
+          <select id="fwd-target"><option value="">target capability…</option></select>
+          <button type="button" id="fwdAddBtn">Add mapping</button>
+        </div>`;
+      panel.appendChild(addRow);
+      document.getElementById("fwdAddBtn").addEventListener("click", addForwardMapping);
+      fillForwardTargetPicker();
+    }
+  }
+}
+
+async function fillForwardTargetPicker() {
+  const select = document.getElementById("fwd-target");
+  if (!select || select.options.length > 1) return;
+  try {
+    const capsReq = await fetch("/relay/v2/dashboard/api/capabilities", {
+      headers: { Accept: "application/json" },
+    });
+    if (!capsReq.ok) return;
+    const names = Array.from(
+      new Set(
+        ((await capsReq.json()).capabilities || [])
+          .map((c) => c && c.name)
+          .filter(
+            (n) => n && n !== "forward" // the pseudo-capability is never a mapping target
+          )
+      ),
+    ).sort();
+    names.forEach((n) => {
+      const opt = document.createElement("option");
+      opt.value = n;
+      opt.textContent = n;
+      select.appendChild(opt);
+    });
+  } catch (_) {}
+}
+
+function validateForwardSlot(slot) {
+  // Mirrors the server rules (^/^[A-Za-z0-9_-]{1,64}$/); server stays authoritative.
+  return /^[A-Za-z0-9_-]{1,64}$/.test(slot);
+}
+
+async function addForwardMapping() {
+  const input = document.getElementById("fwd-slot");
+  const targetEl = document.getElementById("fwd-target");
+  const slot = (input.value || "").trim();
+  if (!validateForwardSlot(slot)) {
+    fwdMessage("Slot must be 1-64 chars: letters, digits, '_' or '-'.", "bad");
+    return;
+  }
+  const target = targetEl.value;
+  if (!target) {
+    fwdMessage("Pick a target capability.", "bad");
+    return;
+  }
+  const res = await fetch(
+    `/relay/v2/forward-mappings/${encodeURIComponent(nodeId)}/${encodeURIComponent(slot)}`,
+    {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRF-Token": getCsrfToken(),
+      },
+      body: JSON.stringify({ target_capability: target }),
+    },
+  );
+  if (res.status === 401 || res.status === 403) {
+    location.href = "/relay/v2/dashboard/login";
+    return;
+  }
+  if (!res.ok) {
+    fwdMessage(await fwdErrorText(res), "bad");
+    return;
+  }
+  fwdMessage("Forward mapping saved.", "ok");
+  loadForwardMappings();
+}
+
+async function deleteForwardMapping(slot) {
+  const res = await fetch(
+    `/relay/v2/forward-mappings/${encodeURIComponent(nodeId)}/${encodeURIComponent(slot)}`,
+    {
+      method: "DELETE",
+      headers: { Accept: "application/json", "X-CSRF-Token": getCsrfToken() },
+    },
+  );
+  if (res.status === 401 || res.status === 403) {
+    location.href = "/relay/v2/dashboard/login";
+    return;
+  }
+  if (!res.ok) {
+    fwdMessage(await fwdErrorText(res), "bad");
+    return;
+  }
+  fwdMessage(`Forward mapping '${slot}' deleted.`, "ok");
+  loadForwardMappings();
+}
+
+async function fwdErrorText(res) {
+  try {
+    const body = await res.json();
+    return body.detail || `${res.status} ${res.statusText}`;
+  } catch (_) {}
+  return res.statusText || `HTTP ${res.status}`;
 }
 
 document.addEventListener("DOMContentLoaded", load);
