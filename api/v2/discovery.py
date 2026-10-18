@@ -49,6 +49,7 @@ async def discovery_heartbeat(
         status=body.status,
         load_cap=body.load_cap,
         load_source=body.load_source,
+        forward_slots=body.forward_slots,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")
@@ -79,6 +80,7 @@ async def discovery_worker_heartbeat(
         status=body.status,
         load_cap=body.load_cap,
         load_source=body.load_source,
+        forward_slots=body.forward_slots,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="Node not registered")

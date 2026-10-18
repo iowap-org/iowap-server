@@ -19,6 +19,7 @@ from relay_server.core.forward import (
     ForwardRoutingError,
     delete_forward_mapping,
     list_forward_mappings,
+    list_forward_slots,
     normalize_slot,
     upsert_forward_mapping,
 )
@@ -55,6 +56,20 @@ async def list_forward_mappings_endpoint(
     except ForwardRoutingError as exc:
         raise _to_http(exc) from exc
     return ForwardMappingListResponse(mappings=[ForwardMappingEntry(**m) for m in rows])
+
+
+@router.get("/slots")
+async def list_forward_slots_endpoint(
+    node: Optional[str] = Query(None, description="Optional submitter node id filter"),  # noqa: UP045  (frozen signature)
+    ctx: AuthContext = Depends(require_admin_or_dashboard_user),  # noqa: B008  (api/v2 idiom)
+) -> dict[str, Any]:
+    """List node-declared forward slots (T-Forward-2) — metadata from node.yaml."""
+    _require_forward_admin(ctx)
+    try:
+        rows = list_forward_slots(node)
+    except ForwardRoutingError as exc:
+        raise _to_http(exc) from exc
+    return {"slots": rows}
 
 
 @router.put("/{node_id}/{slot}")

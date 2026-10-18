@@ -230,7 +230,7 @@ function fwdMessage(text, cls) {
 }
 
 function fwdMutedNote(td, note) {
-  td.innerHTML = `<td colspan="4" class="empty">${escHtml(note)}</td>`;
+  td.innerHTML = `<td colspan="5" class="empty">${escHtml(note)}</td>`;
 }
 
 async function loadForwardMappings() {
@@ -275,20 +275,57 @@ async function loadForwardMappings() {
     return;
   }
 
-  tbody.innerHTML =
-    mappings.map(
-      (m) => `
+  // T-Forward-2: node-declared forward slots (node.yaml) from the relay.
+  // Optional — a relay without the table/endpoint returns 404/401 and the
+  // mapping table falls back to the pre-T2 shape (slot → target only).
+  let slots = [];
+  try {
+    const slotsRes = await fetch(
+      `/relay/v2/forward-mappings/slots?node=${encodeURIComponent(nodeId)}`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (slotsRes.ok) {
+      slots = (await slotsRes.json()).slots || [];
+    }
+  } catch (_) {}
+
+  const bySlot = new Map(slots.map((s) => [String(s.slot), s]));
+  const mappedSlots = new Set(mappings.map((m) => String(m.slot)));
+  const declaredOnly = slots.filter((s) => !mappedSlots.has(String(s.slot)));
+
+  const rowsHtml = mappings.map(
+      (m) => {
+        const declared = bySlot.get(String(m.slot));
+        return `
       <tr>
         <td class="mono">${escHtml(m.slot)}</td>
+        <td>${declared?.label ? escHtml(declared.label) : "—"}</td>
         <td><span class="tag info">${escHtml(m.target_capability)}</span></td>
         <td>${fmt(m.updated_at)}</td>
-        <td>${
+        <td>${(
           canManage
             ? `<button type="button" class="fwd-del" data-slot="${escAttr(m.slot)}">delete</button>`
             : ""
-        }</td>
-      </tr>`
-    ).join("") || '<tr><td colspan="4" class="empty">No forward mappings.</td></tr>';
+        )}</td>
+      </tr>`;
+      }
+    )
+    .concat(
+      declaredOnly.map(
+        (s) => `
+      <tr>
+        <td class="mono">${escHtml(s.slot)}</td>
+        <td>${s.label ? escHtml(s.label) : "—"}</td>
+        <td><span class="tag">unset</span></td>
+        <td>${fmt(s.updated_at)}</td>
+        <td>${canManage
+          ? `<button type="button" class="fwd-add-declared" data-slot="${escAttr(s.slot)}" data-label="${escAttr(s.label || "")}">map…</button>`
+          : ""}</td>
+      </tr>`,
+      ),
+    );
+
+  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="5" class="empty">No forward mappings or declared slots.</td></tr>';
 
   if (canManage) {
     const panel = document.getElementById("forwardMappings");
@@ -296,6 +333,17 @@ async function loadForwardMappings() {
       .querySelectorAll("#forwardMappingsTable .fwd-del")
       .forEach((btn) => {
         btn.addEventListener("click", () => deleteForwardMapping(btn.dataset.slot));
+      });
+    document
+      .querySelectorAll("#forwardMappingsTable .fwd-add-declared")
+      .forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const input = document.getElementById("fwd-slot");
+          const targetEl = document.getElementById("fwd-target");
+          if (input) input.value = btn.dataset.slot || "";
+          if (!targetEl || !targetEl.options.length) fillForwardTargetPicker();
+          input?.focus?.();
+        });
       });
     if (!document.getElementById("fwdAddBtn")) {
       const addRow = document.createElement("div");

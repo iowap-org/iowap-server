@@ -445,6 +445,10 @@ class HeartbeatRequest(BaseModel):
     # ``load`` stays at or above this value for N consecutive
     # heartbeats the node is transitioned to "busy" automatically.
     load_cap: Optional[float] = Field(None, ge=0.0, le=1000000.0)
+    # T-Forward-2: node-declared forward slots from node.yaml
+    # (``[{slot: "1", label: ..., description: ...}, ...]``). Optional;
+    # when present the relay replaces the node's declared rows.
+    forward_slots: Optional[List[Dict[str, Any]]] = None
 
 
 class NodeHeartbeatRequest(BaseModel):
@@ -463,6 +467,9 @@ class NodeHeartbeatRequest(BaseModel):
     # T-081: explicit node status request + load ceiling (see HeartbeatRequest).
     status: Optional[str] = Field(None, max_length=64)
     load_cap: Optional[float] = Field(None, ge=0.0, le=1000000.0)
+    # T-Forward-2: node-declared forward slots (same shape/semantics as
+    # HeartbeatRequest).
+    forward_slots: Optional[List[Dict[str, Any]]] = None
 
 
 # ── Presence ────────────────────────────────────────────────────

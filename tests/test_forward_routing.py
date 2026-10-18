@@ -604,3 +604,80 @@ class TestSchema:
         }
         assert {13, 14} <= versions
         conn.close()
+
+def _declare_and_list_slots(admin_token: str, node_id: str, token: str) -> list:
+    slots = [
+        {"slot": "1", "label": "Maintenance Decision", "description": "LLM-Entscheidung"},
+        {"slot": "2", "label": "Image Classification", "description": "classify.ai"},
+    ]
+    r = client.post(
+        "/relay/v2/discovery/worker-heartbeat",
+        json={"forward_slots": slots},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+
+    listed = client.get(
+        f"/relay/v2/forward-mappings/slots?node={node_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert listed.status_code == 200, listed.text
+    return listed.json()["slots"]
+
+
+def test_forward_slots_declared_in_heartbeat_roundtrip():
+    admin_token = _admin()
+    node_id, token = _register_and_approve(
+        admin_token, "fwd-slots-node", [{"name": "capx", "version": "1.0.0"}]
+    )
+
+    slots = _declare_and_list_slots(admin_token, node_id, token)
+    assert [s["slot"] for s in slots] == ["1", "2"]
+    assert slots[0]["label"] == "Maintenance Decision"
+    assert slots[1]["label"] == "Image Classification"
+
+
+def test_forward_slots_replace_on_new_heartbeat():
+    admin_token = _admin()
+    node_id, token = _register_and_approve(
+        admin_token, "fwd-slots-repl", [{"name": "capx", "version": "1.0.0"}]
+    )
+
+    _declare_and_list_slots(admin_token, node_id, token)
+
+    r = client.post(
+        "/relay/v2/discovery/worker-heartbeat",
+        json={"forward_slots": [{"slot": "1", "label": "Changed", "description": "new"}]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+
+    listed = client.get(
+        f"/relay/v2/forward-mappings/slots?node={node_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert listed.status_code == 200
+    slots = listed.json()["slots"]
+    assert [s["slot"] for s in slots] == ["1"]
+    assert slots[0]["label"] == "Changed"
+    assert slots[0]["description"] == "new"
+
+
+def test_forward_slots_15_migration_persists():
+    admin_token = _admin()
+    node_id, token = _register_and_approve(
+        admin_token, "fwd-slots-mv", [{"name": "capx", "version": "1.0.0"}]
+    )
+
+    _declare_and_list_slots(admin_token, node_id, token)
+
+    conn = get_conn()
+    table_names = {r[0] for r in conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    assert "forward_slots" in table_names
+    versions = {r["version"] for r in conn.exec_driver_sql(
+        "SELECT version FROM schema_version"
+    ).fetchall()}
+    conn.close()
+    assert 15 in versions

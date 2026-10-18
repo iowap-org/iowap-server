@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from relay_server.config import settings
 from relay_server.core.db import get_conn, q, sync_node_capabilities
 from relay_server.core.events import event_bus
+from relay_server.core.forward import ForwardRoutingError, replace_forward_slots
 from relay_server.core.net_guard import upstream_reject_reason, validate_endpoint
 from relay_server.core.status import (
     node_can_transition,
@@ -119,6 +120,7 @@ def heartbeat(
     status: Optional[str] = None,
     load_cap: Optional[float] = None,
     load_source: Optional[str] = None,
+    forward_slots: Optional[List[Dict[str, Any]]] = None,  # T-Forward-2
 ) -> bool:
     """Process a node heartbeat. Returns True if node was updated.
 
@@ -341,6 +343,19 @@ def heartbeat(
             # T-206: being silently swallowed used to mean "route gone, no trace". The
             # heartbeat may keep running, but the reason has to hit the log.
             logger.warning("route sync failed for node %s", node_id, exc_info=True)
+
+    # T-Forward-2: node-declared slot metadata (node.yaml) — replace mode.
+    # Declared slots are node-owned metadata, not admin config; failures
+    # here reject the heartbeat? No — they are logged, the heartbeat's
+    # main job (presence + capabilities) must not be blocked by a bad
+    # declaration; operator sees the warning.
+    if forward_slots is not None:
+        try:
+            replace_forward_slots(node_id, forward_slots)
+        except ForwardRoutingError as exc:
+            logger.warning(
+                "forward_slots sync failed for node %s: %s", node_id, exc.message
+            )
 
     # Publish event when node comes back from offline or on its first
     # heartbeat after being approved.

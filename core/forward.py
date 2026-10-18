@@ -202,6 +202,104 @@ def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]
         conn.close()
 
 
+def replace_forward_slots(node_id: str, slots: Any) -> int:
+    """Replace the node's declared forward slots (T-Forward-2).
+
+    ``slots`` is a list of dicts (``slot`` + optional ``label`` /
+    ``description``) as the node heartbeats them from ``node.yaml``.
+    Unknown node → 404; malformed rows are rejected with 422 — the
+    declaration is node-owned metadata, not admin config, so errors are
+    loud (operator must fix node.yaml) instead of silently dropping rows.
+    Returns the number of stored rows (0 for an empty declaration).
+    """
+    if not isinstance(slots, list):
+        raise ForwardRoutingError(
+            "forward_slot_invalid",
+            422,
+            f"forward_slots must be a list, got {type(slots).__name__}",
+        )
+
+    parsed: list[tuple[str, Optional[str], Optional[str]]] = []  # noqa: UP006  (frozen signature: List)
+    for entry in slots:
+        if not isinstance(entry, dict):
+            raise ForwardRoutingError(
+                "forward_slot_invalid",
+                422,
+                f"forward_slots entries must be objects, got {type(entry).__name__}",
+            )
+        slot = normalize_slot(entry.get("slot"))
+        label = entry.get("label") if isinstance(entry.get("label"), str) else None
+        description = entry.get("description") if isinstance(entry.get("description"), str) else None
+        parsed.append((slot, (label or "").strip() or None, (description or "").strip() or None))
+
+    conn = get_conn()
+    try:
+        row = conn.execute(q("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,))).fetchone()
+        if not row:
+            raise ForwardRoutingError(
+                "forward_node_unknown",
+                404,
+                f"submitter node '{node_id}' is not registered",
+            )
+        conn.execute(q("DELETE FROM forward_slots WHERE node_id = ?", (node_id,)))
+        if not parsed:
+            conn.commit()
+            return 0
+        now = datetime.now(UTC).isoformat()
+        for slot, label, description in parsed:
+            conn.execute(
+                q(
+                    "INSERT INTO forward_slots (node_id, slot, label, description, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(node_id, slot) DO UPDATE SET"
+                    " label = excluded.label, description = excluded.description,"
+                    " updated_at = excluded.updated_at",
+                    (node_id, slot, label, description, now),
+                )
+            )
+        conn.commit()
+        return len(parsed)
+    finally:
+        conn.close()
+
+
+def list_forward_slots(node_id: Optional[str]) -> list[dict[str, Any]]:  # noqa: UP045  (frozen signature)
+    """List declared forward slots (all, or filtered by ``node_id``).
+
+    Rows carry ``node_id, slot, label, description, updated_at``. Unknown
+    ``node_id`` → 404 ``forward_node_unknown``. These are node-declared
+    metadata rows only — the target capability lives in ``forward_mappings``.
+    """
+    conn = get_conn()
+    try:
+        if node_id is not None:
+            row = conn.execute(q("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,))).fetchone()
+            if not row:
+                raise ForwardRoutingError(
+                    "forward_node_unknown",
+                    404,
+                    f"submitter node '{node_id}' is not registered",
+                )
+            rows = conn.execute(
+                q(
+                    "SELECT node_id, slot, label, description, updated_at"
+                    " FROM forward_slots WHERE node_id = ?"
+                    " ORDER BY node_id ASC, slot ASC",
+                    (node_id,),
+                )
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                q(
+                    "SELECT node_id, slot, label, description, updated_at"
+                    " FROM forward_slots ORDER BY node_id ASC, slot ASC"
+                )
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def upsert_forward_mapping(
     node_id: str,
     slot: Any,

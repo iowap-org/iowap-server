@@ -986,6 +986,30 @@ def _m014_task_stages_forward_slot(conn: DBConn) -> None:
     if "forward_slot" not in cols:
         _exec(conn, "ALTER TABLE task_stages ADD COLUMN forward_slot TEXT")
 
+
+def _m015_forward_slots_table(conn: DBConn) -> None:
+    """forward_slots (T-Forward-2): node-declared slot metadata (label/desc).
+
+    Rows come from the node's ``node.yaml`` heartbeat, NOT from admin
+    config: the node owns which slots it needs and what they mean.
+    Admin config (target capability) stays in ``forward_mappings``.
+    """
+    if "forward_slots" not in _table_names(conn):
+        _exec(conn, """
+            CREATE TABLE IF NOT EXISTS forward_slots (
+                node_id TEXT NOT NULL REFERENCES nodes(node_id),
+                slot TEXT NOT NULL,
+                label TEXT,
+                description TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (node_id, slot)
+            )
+        """)
+        _exec(conn,
+            "CREATE INDEX IF NOT EXISTS idx_forward_slots_node "
+            "ON forward_slots(node_id)"
+        )
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -1001,6 +1025,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (12, "tasks_submitted_by", _m012_tasks_submitted_by),
     (13, "forward_mappings_table", _m013_forward_mappings_table),
     (14, "task_stages_forward_slot", _m014_task_stages_forward_slot),
+    (15, "forward_slots_table", _m015_forward_slots_table),
 ]
 
 
