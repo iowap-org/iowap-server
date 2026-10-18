@@ -47,6 +47,7 @@ Compose files live in [iowap-org/iowap-docker](https://github.com/iowap-org/iowa
 ```bash
 pip install "iowap-server"      # import namespace: relay_server
 relay-server --host 0.0.0.0 --port 8788
+relay-server admin init-master  # bootstrap step only the installer automates
 ```
 
 **Manual (source)**:
@@ -56,7 +57,23 @@ git clone --recursive https://github.com/iowap-org/iowap-server.git
 cd iowap-server
 pip install -e .            # or: pip install -e ".[postgres]"
 relay-server --host 0.0.0.0 --port 8788
+relay-server admin init-master  # prints the adm_ seed once; retry-safe
 ```
+
+The manual paths do NOT run the installer's bootstrap, so run
+`relay-server admin init-master` once before the dashboard login: it applies
+the seed from config/`RELAY_MASTER_SEED` (or generates one) to the database.
+Without a seed row the dashboard has no working login. Then:
+
+1. Open the dashboard login and sign in with **Master seed**.
+2. Complete `/bootstrap` to create your first human admin.
+3. From that point seed login is disabled automatically.
+
+> QA-audit note (2026-10-17): when a master seed row already exists in the DB,
+> `admin init-master` exits with "already exists" and the DB row wins over any
+> (re)generated config seed — do not log in with a seed printed by a re-run
+> installer after its config was wiped. The installer (>= this commit) discards
+> such dead seeds and says so instead.
 
 Server starts on `http://localhost:8788` — the dashboard login is under
 `/relay/v2/dashboard/login` (master seed acts as the bootstrap admin until the
