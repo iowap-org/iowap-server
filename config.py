@@ -206,6 +206,36 @@ def _coerce_path(value):
     return value
 
 
+def purge_master_seed() -> bool:
+    """Remove the plaintext master_seed from config.yaml (bootstrap hardening).
+
+    Seed login closes once the first human admin exists; the plaintext seed in
+    config.yaml is then a dead value that doubles as the recovery credential
+    (enable_master_seed_login=true re-lives it), so it must not stay on disk.
+    The operator keeps their own copy of the seed - it is never shown again
+    (see cli output). Writes the file back without the key, in process order,
+    and clears the in-memory setting. Other keys remain untouched.
+
+    Returns True when the file actually changed; False when there is nothing
+    to purge (no config file, no key, or an unreadable file).
+    """
+    path = settings.config_path
+    if not path or not path.exists():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict) or "master_seed" not in data:
+            return False
+        data.pop("master_seed")
+        with path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+        settings.master_seed = None
+        return True
+    except Exception:
+        return False
+
+
 def _apply_yaml_overrides(base: Settings, path: Optional[Path]) -> Settings:
     """YAML config overrides env-var defaults."""
     yaml_data = _load_yaml_config(path)

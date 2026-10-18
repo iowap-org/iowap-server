@@ -625,19 +625,39 @@ if [ "$MODE" != "update" ]; then
 fi
 
 # ---- Master seed bootstrap ----
+# The DB's admin_seeds row wins over any config seed (core/auth.py
+# init_master_seed returns None -> init-master exits 1 with "already exists").
+# Only print a seed value that init-master actually just applied; after a
+# wiped-config re-install the freshly generated config seed would otherwise
+# be printed although it can never log in (QA-audit finding 2026-10-17).
 if [ "$MODE" != "update" ]; then
   log "Initializing master admin seed..."
-  "$INSTALL_DIR/.venv/bin/relay-server" admin init-master || log "seed init skipped (already exists or DB unreachable)"
+  SEED_INIT_TMP="$(mktemp)"
+  SEED_INIT_RC=0
+  "$INSTALL_DIR/.venv/bin/relay-server" admin init-master 2>"$SEED_INIT_TMP" || SEED_INIT_RC=$?
+  SEED_INIT_MSG="$(cat "$SEED_INIT_TMP" 2>/dev/null || true)"
+  rm -f "$SEED_INIT_TMP"
   SCHEME="http"; [ "$LAB_KIND" = "internet" ] && SCHEME="https"
   LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
   LAN_IP="${LAN_IP:-127.0.0.1}"
   log ""
   log "Dashboard login: $SCHEME://$LAN_IP:$SERVER_PORT/relay/v2/dashboard/login"
   log "  (local: $SCHEME://127.0.0.1:$SERVER_PORT/relay/v2/dashboard/login)"
-  if [ "$SEED_FLAG" = "SEED_GENERATED" ]; then
+  if [ "$SEED_INIT_RC" = "0" ]; then
     log "Master admin seed: $SEED_VALUE"
+  elif [ "$SEED_INIT_RC" = "1" ] && printf '%s' "$SEED_INIT_MSG" | grep -q "already exists"; then
+    if [ "$SEED_FLAG" = "SEED_GENERATED" ]; then
+      "$INSTALL_DIR/.venv/bin/python" - <<PY
+from relay_server.config import purge_master_seed
+purge_master_seed()
+PY
+      log "Master admin seed: already configured in the database (freshly generated config seed discarded - it would not log in)."
+    else
+      log "Master admin seed: already configured in the database."
+    fi
   else
-    log "Master admin seed: already configured (see $RELAY_HOME_DIR/config.yaml)"
+    log "Seed init could not verify against the database (rc=$SEED_INIT_RC). Config seed kept, verify manually before trusting it:"
+    log "Master admin seed: $SEED_VALUE"
   fi
   log "Seed login is the bootstrap admin - valid until the first human admin exists"
   log "(recovery afterwards: set enable_master_seed_login=true in config)."

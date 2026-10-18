@@ -366,6 +366,11 @@ async def dashboard_bootstrap_create_admin(
         created_by="master_seed",
         force_password_change=True,
     )
+    # Bootstrap hardening: the first human admin now exists, so the plaintext
+    # master_seed in config.yaml is dead weight and a latent recovery
+    # credential — purge it (operator keeps their own copy, see install.sh).
+    from relay_server.config import purge_master_seed
+    purge_master_seed()
     # Chain: the response REPLACES the master session with the created
     # admin's session (force_password_change stays set) so bootstrap.js
     # goes straight into POST /api/me/password with the temp password as
