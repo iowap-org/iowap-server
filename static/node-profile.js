@@ -73,9 +73,9 @@ function eventIcon(type) {
 
 // ===== bootstrap ========================================================
 
-const nodeId =
-  new URLSearchParams(location.search).get("id") ||
-  (location.pathname.split("/").pop() || "");
+let nodeId =
+    new URLSearchParams(location.search).get("id") ||
+    (location.pathname.split("/").pop() || "");
 
 async function load() {
   if (!nodeId) {
@@ -91,6 +91,9 @@ async function load() {
         .then((r) => (r.ok ? r.json() : { events: [] }))
         .catch(() => ({ events: [] })),
     ]);
+    // Forward-mapping endpoints resolve by node_id only — canonicalize here
+    // so name-based URLs (node profile opens via /node/<name>) don't 404.
+    nodeId = n.node_id || nodeId;
     render(n, activityReq.events || []);
     loadForwardMappings();
   } catch (err) {
