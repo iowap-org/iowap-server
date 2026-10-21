@@ -299,10 +299,15 @@ async function loadForwardMappings() {
   const rowsHtml = mappings.map(
       (m) => {
         const declared = bySlot.get(String(m.slot));
+        const labelCell = declared?.label
+          ? `${escHtml(declared.label)}${declared?.description
+              ? `<br><small class="muted">${escHtml(declared.description)}</small>`
+              : ""}`
+          : "—";
         return `
       <tr>
         <td class="mono">${escHtml(m.slot)}</td>
-        <td>${declared?.label ? escHtml(declared.label) : "—"}</td>
+        <td>${labelCell}</td>
         <td><span class="tag info">${escHtml(m.target_capability)}</span></td>
         <td>${fmt(m.updated_at)}</td>
         <td>${(
@@ -318,7 +323,9 @@ async function loadForwardMappings() {
         (s) => `
       <tr>
         <td class="mono">${escHtml(s.slot)}</td>
-        <td>${s.label ? escHtml(s.label) : "—"}</td>
+        <td>${s.label ? escHtml(s.label) : "—"}${s.description
+          ? `<br><small class="muted">${escHtml(s.description)}</small>`
+          : ""}</td>
         <td><span class="tag">unset</span></td>
         <td>${fmt(s.updated_at)}</td>
         <td>${canManage
