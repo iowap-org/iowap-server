@@ -22,6 +22,11 @@ function fmt(d) {
 function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+// Capability-Descriptions sind einzeilig; die Marker Parameter:/notable: werden visuell als Zeilenanfang gerendert.
+function richDesc(s) {
+  return String(s).replace(/ (Parameter|notable): /g, "<br>$1: ");
+}
 function escAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -648,7 +653,7 @@ function renderCapabilityCard(c) {
   return `
     <div class="cap-card">
       <div class="cap-name">${escHtml(c.name)}</div>
-      <p class="cap-desc">${escHtml(c.description || "No description")}</p>
+      <p class="cap-desc">${richDesc(escHtml(c.description || "No description"))}</p>
       <div class="node-caps">
         <span class="tag info">${escHtml(c.type || "unknown")}</span>
         <span class="tag muted">${nodeCount} node(s)</span>

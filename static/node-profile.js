@@ -8,6 +8,10 @@
 
 // ===== helpers ==========================================================
 
+// Capability-Descriptions sind einzeilig; die Marker Parameter:/notable: werden visuell als Zeilenanfang gerendert.
+function richDesc(s) {
+  return String(s).replace(/ (Parameter|notable): /g, "<br>$1: ");
+}
 function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -146,7 +150,7 @@ function render(n, events) {
       <div class="card">
         <div class="card-title">${escHtml(c.name)}${c.available === false ? ' <span class="tag bad">unavailable</span>' : ""}</div>
         <div class="card-sub">${escHtml(c.type || "unknown")} · v${escHtml(c.version || "1.0.0")}</div>
-        <p class="card-sub">${escHtml(c.description || "No description")}</p>
+        <p class="card-sub">${richDesc(escHtml(c.description || "No description"))}</p>
         ${
           c.input_schema
             ? `<pre>${escHtml(JSON.stringify(c.input_schema, null, 2))}</pre>`
