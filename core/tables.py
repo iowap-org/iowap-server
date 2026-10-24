@@ -311,6 +311,24 @@ forward_mappings = sa.Table(
     sa.ForeignKeyConstraint(["node_id"], ["nodes.node_id"]),
 )
 
+forward_slots = sa.Table(
+    "forward_slots", metadata,
+    sa.Column("node_id", sa.String(64), nullable=False),
+    sa.Column("slot", sa.String(64), nullable=False),
+    sa.Column("label", sa.Text, nullable=True),
+    sa.Column("description", sa.Text, nullable=True),
+    sa.Column("updated_at", sa.String(64), nullable=False),
+    # T-245: typed slots — nullable so pre-T245 rows read as
+    # ``type: forward`` (DEFAULT_SLOT_TYPE is read-side semantics).
+    sa.Column("slot_type", sa.String(16), nullable=True),
+    sa.Column("value", sa.Text, nullable=True),
+    sa.Column("ref_slot", sa.String(64), nullable=True),
+    sa.Column("ref_field", sa.String(64), nullable=True),
+    sa.Column("input_schema", sa.Text, nullable=True),
+    sa.PrimaryKeyConstraint("node_id", "slot"),
+    sa.ForeignKeyConstraint(["node_id"], ["nodes.node_id"]),
+)
+
 # ---------------------------------------------------------------------------
 # INDEXES (portable — ``sa.Index`` resolves per dialect)
 # ---------------------------------------------------------------------------
@@ -332,6 +350,7 @@ sa.Index("idx_artifacts_task", artifacts.c.task_id)
 sa.Index("idx_presence_status", presence.c.status)
 sa.Index("idx_node_tokens_lookup", node_tokens.c.token_lookup_hash)
 sa.Index("idx_forward_mappings_node", forward_mappings.c.node_id)
+sa.Index("idx_forward_slots_node", forward_slots.c.node_id)
 
 
 def all_table_names() -> set[str]:

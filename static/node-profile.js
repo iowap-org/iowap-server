@@ -233,7 +233,34 @@ function fwdMessage(text, cls) {
 }
 
 function fwdMutedNote(td, note) {
-  td.innerHTML = `<td colspan="5" class="empty">${escHtml(note)}</td>`;
+  td.innerHTML = `<td colspan="6" class="empty">${escHtml(note)}</td>`;
+}
+
+// T-245: typed forward slots — the Type column renders the declared slot
+// type with a compact value/ref indicator (read-only; the binding editor
+// is T-247). Slot rows from an old relay carry no slot_type → neutral
+// "forward". Display rules (design.md §8): forward → neutral badge;
+// text → badge + the value truncated to 80 chars; bool → "true"/"false"
+// badge; declared ref → muted "→ <ref_slot>.<ref_field>".
+function fwdTypeCell(decl) {
+  if (!decl) return "<td>—</td>";
+  const t = String(decl.slot_type || "forward");
+  let badge;
+  if (t === "text") {
+    const v = String(decl.value ?? "");
+    badge = `<span class="tag info">text</span>`
+      + (v ? ` <small class="muted mono">${escHtml(v.slice(0, 80))}</small>` : "");
+  } else if (t === "bool") {
+    badge = typeof decl.value === "boolean"
+      ? `<span class="tag info">${decl.value ? "true" : "false"}</span>`
+      : `<small class="muted">—</small>`;
+  } else {
+    badge = `<span class="tag">forward</span>`;
+  }
+  const ref = decl.ref_slot
+    ? ` <small class="muted">→ ${escHtml(String(decl.ref_slot))}.${escHtml(String(decl.ref_field || ""))}</small>`
+    : "";
+  return `<td>${badge}${ref}</td>`;
 }
 
 async function loadForwardMappings() {
@@ -304,10 +331,12 @@ async function loadForwardMappings() {
               ? `<br><small class="muted">${escHtml(declared.description)}</small>`
               : ""}`
           : "—";
+        const typeCell = fwdTypeCell(declared);
         return `
       <tr>
         <td class="mono">${escHtml(m.slot)}</td>
         <td>${labelCell}</td>
+        ${typeCell}
         <td><span class="tag info">${escHtml(m.target_capability)}</span></td>
         <td>${fmt(m.updated_at)}</td>
         <td>${(
@@ -320,22 +349,26 @@ async function loadForwardMappings() {
     )
     .concat(
       declaredOnly.map(
-        (s) => `
+        (s) => {
+          const typeCell = fwdTypeCell(s);
+          return `
       <tr>
         <td class="mono">${escHtml(s.slot)}</td>
         <td>${s.label ? escHtml(s.label) : "—"}${s.description
           ? `<br><small class="muted">${escHtml(s.description)}</small>`
           : ""}</td>
+        ${typeCell}
         <td><span class="tag">unset</span></td>
         <td>${fmt(s.updated_at)}</td>
         <td>${canManage
           ? `<button type="button" class="fwd-add-declared" data-slot="${escAttr(s.slot)}" data-label="${escAttr(s.label || "")}">map…</button>`
           : ""}</td>
-      </tr>`,
+      </tr>`;
+        },
       ),
     );
 
-  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="5" class="empty">No forward mappings or declared slots.</td></tr>';
+  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="6" class="empty">No forward mappings or declared slots.</td></tr>';
 
   if (canManage) {
     const panel = document.getElementById("forwardMappings");

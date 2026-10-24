@@ -1010,6 +1010,27 @@ def _m015_forward_slots_table(conn: DBConn) -> None:
             "ON forward_slots(node_id)"
         )
 
+
+def _m016_forward_slot_types(conn: DBConn) -> None:
+    """forward_slots (T-245): typed slots — slot_type/value/ref_slot/ref_field/input_schema.
+
+    All columns nullable: pre-existing rows keep working as ``type: forward``
+    (the code reads NULL as DEFAULT_SLOT_TYPE). No backfill needed — a
+    destructive UPDATE would rewrite node-owned history for no gain.
+    """
+    cols = _column_names(conn, "forward_slots")
+    if "slot_type" not in cols:
+        _exec(conn, "ALTER TABLE forward_slots ADD COLUMN slot_type TEXT")
+    if "value" not in cols:
+        _exec(conn, "ALTER TABLE forward_slots ADD COLUMN value TEXT")
+    if "ref_slot" not in cols:
+        _exec(conn, "ALTER TABLE forward_slots ADD COLUMN ref_slot TEXT")
+    if "ref_field" not in cols:
+        _exec(conn, "ALTER TABLE forward_slots ADD COLUMN ref_field TEXT")
+    if "input_schema" not in cols:
+        _exec(conn, "ALTER TABLE forward_slots ADD COLUMN input_schema TEXT")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -1026,6 +1047,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (13, "forward_mappings_table", _m013_forward_mappings_table),
     (14, "task_stages_forward_slot", _m014_task_stages_forward_slot),
     (15, "forward_slots_table", _m015_forward_slots_table),
+    (16, "forward_slot_types", _m016_forward_slot_types),
 ]
 
 
