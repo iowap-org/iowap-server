@@ -43,15 +43,16 @@ DEFAULT_SLOT_TYPE: Final[str] = SLOT_TYPE_FORWARD
 
 DEFAULT_BINDING_SEPARATOR: Final[str] = "\n\n"
 
-# T-247 §10: the known Flow prompt fields — verbatim mirror of the live
-# handler chain PROMPT_KEYS = ("task", "prompt", "question", "message",
-# "input") (iowap-flow/handlers/agent_ai.py:44, "D6 order"); server-owned
-# copy, flow repo untouched (Server-only card). These fields survive the
-# unbound-fields sweep at submit (apply_binding, design §3.3) so a
-# handler's prompt channel cannot be eaten by an unbinding rewrite; the
-# full rationale + rejection of alternatives lives in design.md §10.
+# T-247 §10: the known Flow prompt fields — the reserved set mirrors the live
+# handler prompt channel: the D6 PROMPT_KEYS of
+# iowap-flow/handlers/agent_ai.py:44 verbatim ("task", "prompt", "question",
+# "message", "input") PLUS the T-235 plan-split channel ("systemprompt",
+# "taskprompt"). These fields survive the unbound-fields sweep at submit
+# (apply_binding, design §3.3) so a handler's prompt channel cannot be eaten
+# by an unbinding rewrite; the full rationale + rejection of alternatives
+# lives in design.md §10.
 KNOWN_FLOW_PROMPT_FIELDS: Final[frozenset[str]] = frozenset(
-    {"task", "prompt", "question", "message", "input"}
+    {"task", "prompt", "question", "message", "input", "systemprompt", "taskprompt"}
 )
 
 BINDING_STRING_MAX_CHARS: Final[int] = 255  # per source/target name; parity with target_capability cap
