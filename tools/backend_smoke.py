@@ -163,6 +163,37 @@ final = scheduler.Scheduler.get_task(task_id)
 check("task completed", lambda: final["status"] == "completed"
       or (_ for _ in ()).throw(AssertionError(f"task status={final['status']} stages={[s['status'] for s in final['stages']]}")))
 
+# --- 6b. T-246 pin leg: pinned mapping → stage pin → gated claims ---------
+# (design §11.4, FROZEN leg; two mechanical corrections vs. the fenced body,
+# both verified against its own stated semantics:
+#  1. the fenced resolve-transfer expression `(resolve(), cond) and None or
+#     throw` evaluates the throw arm ALWAYS (truthy tuple `and None` stays
+#     falsy) — rewritten to this lifecycle's own `cond or throw` idiom;
+#  2. the leg never created a task, so the claim below had nothing pending —
+#     create_task now inserts the resolved stage (with its pin), which is
+#     what "the pin node claiming after the gate filtered" (caveat) requires.
+# Full gate semantics stay covered by the pytest suite, design §8 test 18.)
+from relay_server.core.forward import (  # noqa: E402
+    upsert_forward_mapping, resolve_forward_stages)
+pin_node = check("register pin node", lambda: register_pending_node(
+    "smoke_pin_worker", "http://localhost:0", caps))
+check("approve pin node", lambda: approve_node(pin_node[0]))
+check("T-246 pin upsert", lambda: upsert_forward_mapping(
+    reg[0], "1", "smoke.cap", pin_node[0]))
+fwd = [{"stage_name": "s1", "capability": "forward",
+        "payload": {"forward_slot": "1"}}]
+check("T-246 resolve transfer", lambda: resolve_forward_stages(reg[0], fwd) or (
+    (fwd[0].get("target_node_id") == pin_node[0]) or (_ for _ in ()).throw(
+    AssertionError(f"stage pin = {fwd[0].get('target_node_id')}"))))
+check("T-246 pinned task create", lambda: scheduler.Scheduler.create_task(
+    reg[0], fwd)["task_id"])
+claim2 = check("T-246 pin node claims", lambda: scheduler.Scheduler.claim_stage(pin_node[0]))
+check("T-246 claim honors pin", lambda: claim2 and claim2["stage_id"] or
+      (_ for _ in ()).throw(AssertionError("pin node did not claim")))
+check("T-246 stage pin recorded", lambda: (lambda row: row and row[0] == pin_node[0]
+      or (_ for _ in ()).throw(AssertionError(f"stage pin row = {dict(row._mapping) if row is not None else None}")))(
+      sql("SELECT target_node_id FROM task_stages WHERE stage_name='s1'").fetchone()))
+
 # --- 7. Restart-Sweep on the SAME database -----------------------------------
 #    a) plain re-init (idempotent schema + migrations)
 check("restart init_db", db.init_db)

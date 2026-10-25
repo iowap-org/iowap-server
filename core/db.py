@@ -1031,6 +1031,35 @@ def _m016_forward_slot_types(conn: DBConn) -> None:
         _exec(conn, "ALTER TABLE forward_slots ADD COLUMN input_schema TEXT")
 
 
+def _m017_forward_mapping_pins(conn: DBConn) -> None:
+    """forward_mappings/task_stages (T-246): optional execution-address pins.
+
+    ``target_node_id`` pins a mapping (the admin's "this exact node" address)
+    resp. a submitted stage (the submit-time copy of the mapping pin) to one
+    concrete node; NULL = no pin = legacy "any capable provider" (no backfill:
+    existing mappings/stages stay unpinned by definition). Both columns are
+    nullable FKs to nodes, declared like ``task_stages.claimed_by``
+    (core/tables.py:243/254); the idempotent ``_column_names`` guard follows
+    the migration-16 pattern (core/db.py:1021-1031). In-place inline FK on the
+    ALTER is valid on both dialects; ``nodes`` deletes are FK-enforced
+    (core/db.py:242).
+    """
+    cols = _column_names(conn, "forward_mappings")
+    if "target_node_id" not in cols:
+        _exec(
+            conn,
+            "ALTER TABLE forward_mappings ADD COLUMN target_node_id"
+            " TEXT REFERENCES nodes(node_id)",
+        )
+    cols = _column_names(conn, "task_stages")
+    if "target_node_id" not in cols:
+        _exec(
+            conn,
+            "ALTER TABLE task_stages ADD COLUMN target_node_id"
+            " TEXT REFERENCES nodes(node_id)",
+        )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -1048,6 +1077,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (14, "task_stages_forward_slot", _m014_task_stages_forward_slot),
     (15, "forward_slots_table", _m015_forward_slots_table),
     (16, "forward_slot_types", _m016_forward_slot_types),
+    (17, "forward_mapping_pins", _m017_forward_mapping_pins),
 ]
 
 

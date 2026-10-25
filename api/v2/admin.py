@@ -152,6 +152,31 @@ async def admin_delete_node(
         # the dashboard delete button reports "Delete failed" (live hit with
         # the T-245 probe node, 2026-10-25).
         conn.execute(q("DELETE FROM forward_slots WHERE node_id = ?", (node_id,)))
+        # T-246: mappings pinned AT this node survive as "provider variabel"
+        # — unpin (NULL) instead of deleting the mapping (plan C5: the admin
+        # keeps the routing definition; only the pin reference is voided).
+        conn.execute(
+            q(
+                "UPDATE forward_mappings SET target_node_id = NULL"
+                " WHERE target_node_id = ?",
+                (node_id,),
+            )
+        )
+        # T-246: stage-level pins pointing at this node MUST be cleared
+        # before the nodes DELETE — task_stages.target_node_id carries an FK
+        # to nodes (core/db.py:242, foreign_keys=ON), so leaving them would
+        # 500 the delete (T-249 precedent, api/v2/admin.py:150-154). Pending
+        # stages continue as unpinned ("variabel") — the owner-delete
+        # reference-clearing precedent is tasks.owner_node_id = NULL
+        # (:155-157); the T-067-analog sweep (design §6.2) is the backstop
+        # for anything that escaped.
+        conn.execute(
+            q(
+                "UPDATE task_stages SET target_node_id = NULL"
+                " WHERE target_node_id = ?",
+                (node_id,),
+            )
+        )
         conn.execute(
             q("UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?", (node_id,)),
         )

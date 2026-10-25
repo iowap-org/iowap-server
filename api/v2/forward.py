@@ -83,7 +83,9 @@ async def upsert_forward_mapping_endpoint(
     _require_forward_admin(ctx)
     try:
         normalized = normalize_slot(slot)
-        row = upsert_forward_mapping(node_id, slot, body.target_capability)
+        row = upsert_forward_mapping(
+            node_id, slot, body.target_capability, body.target_node_id
+        )
     except ForwardRoutingError as exc:
         raise _to_http(exc) from exc
     log_audit_event(
@@ -92,7 +94,10 @@ async def upsert_forward_mapping_endpoint(
         action="forward.mapping_upsert",
         resource_type="node",
         resource_id=node_id,
-        details=f"slot={normalized} target={body.target_capability}",
+        details=(
+            f"slot={normalized} target={body.target_capability}"
+            f" pin={getattr(body, 'target_node_id', None) or 'variabel'}"
+        ),
     )
     return ForwardMappingEntry(**row)
 

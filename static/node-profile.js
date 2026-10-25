@@ -239,7 +239,49 @@ function fwdMessage(text, cls) {
 }
 
 function fwdMutedNote(td, note) {
-  td.innerHTML = `<td colspan="6" class="empty">${escHtml(note)}</td>`;
+  td.innerHTML = `<td colspan="7" class="empty">${escHtml(note)}</td>`;
+}
+
+// ===== T-246: provider pin (mapping target_node_id) =====================
+// The capabilities payload is fetched ONCE per page load and shared by the
+// target picker (fillForwardTargetPicker), the pin picker
+// (fillForwardPinPicker) and the pin column's node-name resolution — no new
+// endpoint, no per-change refetch (design.md §7.2.2).
+let fwdCapabilities = null;
+const nodeNames = new Map(); // node_id → node_name (fallback: raw id)
+
+async function fetchCapabilitiesPayload() {
+  if (fwdCapabilities) return fwdCapabilities;
+  try {
+    const capsReq = await fetch("/relay/v2/dashboard/api/capabilities", {
+      headers: { Accept: "application/json" },
+    });
+    if (!capsReq.ok) return null;
+    fwdCapabilities = (await capsReq.json()).capabilities || [];
+    for (const c of fwdCapabilities) {
+      for (const n of c.nodes || []) {
+        if (n && n.node_id) nodeNames.set(n.node_id, n.node_name || n.node_id);
+      }
+    }
+  } catch (_) {}
+  return fwdCapabilities;
+}
+
+// T-246: fill the pin picker from the CACHED capabilities payload — one
+// option per node advertising `target` (offline nodes included: the pin is
+// an address, availability is runtime — design D-10). Resets the selection.
+function fillForwardPinPicker(target) {
+  const pin = document.getElementById("fwd-pin");
+  if (!pin) return;
+  while (pin.options.length > 1) pin.remove(1);
+  const cap = (fwdCapabilities || []).find((c) => c && c.name === target);
+  ((cap && cap.nodes) || []).forEach((n) => {
+    if (!n || !n.node_id) return;
+    const opt = document.createElement("option");
+    opt.value = n.node_id;
+    opt.textContent = n.node_name || n.node_id;
+    pin.appendChild(opt);
+  });
 }
 
 // T-245: typed forward slots — the Type column renders the declared slot
@@ -329,6 +371,11 @@ async function loadForwardMappings() {
   const mappedSlots = new Set(mappings.map((m) => String(m.slot)));
   const declaredOnly = slots.filter((s) => !mappedSlots.has(String(s.slot)));
 
+  // T-246: the Provider column resolves pin node ids to names — one shared
+  // capabilities GET per page load (cached; anonymous visitors keep the
+  // raw-id fallback).
+  await fetchCapabilitiesPayload();
+
   const rowsHtml = mappings.map(
       (m) => {
         const declared = bySlot.get(String(m.slot));
@@ -338,12 +385,18 @@ async function loadForwardMappings() {
               : ""}`
           : "—";
         const typeCell = fwdTypeCell(declared);
+        // T-246: the pin as node NAME (raw id fallback = deleted node);
+        // unpinned shows the visible "Provider variabel" badge.
+        const pinCell = m.target_node_id
+          ? `<span class="tag info">${escHtml(nodeNames.get(m.target_node_id) || m.target_node_id)}</span>`
+          : `<span class="tag">variabel</span>`;
         return `
       <tr>
         <td class="mono">${escHtml(m.slot)}</td>
         <td>${labelCell}</td>
         ${typeCell}
         <td><span class="tag info">${escHtml(m.target_capability)}</span></td>
+        <td>${pinCell}</td>
         <td>${fmt(m.updated_at)}</td>
         <td>${(
           canManage
@@ -365,6 +418,7 @@ async function loadForwardMappings() {
           : ""}</td>
         ${typeCell}
         <td><span class="tag">unset</span></td>
+        <td>—</td>
         <td>${fmt(s.updated_at)}</td>
         <td>${canManage
           ? `<button type="button" class="fwd-add-declared" data-slot="${escAttr(s.slot)}" data-label="${escAttr(s.label || "")}">map…</button>`
@@ -374,7 +428,7 @@ async function loadForwardMappings() {
       ),
     );
 
-  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="6" class="empty">No forward mappings or declared slots.</td></tr>';
+  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="7" class="empty">No forward mappings or declared slots.</td></tr>';
 
   if (canManage) {
     const panel = document.getElementById("forwardMappings");
@@ -389,7 +443,10 @@ async function loadForwardMappings() {
         btn.addEventListener("click", () => {
           const input = document.getElementById("fwd-slot");
           const targetEl = document.getElementById("fwd-target");
+          const pinEl = document.getElementById("fwd-pin");
           if (input) input.value = btn.dataset.slot || "";
+          // T-246: a prefilled mapping starts unpinned (Provider variabel).
+          if (pinEl) pinEl.value = "";
           if (!targetEl || !targetEl.options.length) fillForwardTargetPicker();
           input?.focus?.();
         });
@@ -400,10 +457,16 @@ async function loadForwardMappings() {
         <div style="display:flex;gap:.5rem;align-items:center;margin-top:.75rem;">
           <input id="fwd-slot" type="text" placeholder="slot (1, a, s-2)" maxlength="64" />
           <select id="fwd-target"><option value="">target capability…</option></select>
+          <select id="fwd-pin"><option value="">Provider variabel…</option></select>
           <button type="button" id="fwdAddBtn">Add mapping</button>
         </div>`;
       panel.appendChild(addRow);
       document.getElementById("fwdAddBtn").addEventListener("click", addForwardMapping);
+      // T-246: repopulate the pin picker whenever the capability changes —
+      // cached payload, no refetch, selection resets to "variabel".
+      document.getElementById("fwd-target").addEventListener("change", (e) => {
+        fillForwardPinPicker(e.target.value);
+      });
       fillForwardTargetPicker();
     }
   }
@@ -412,27 +475,23 @@ async function loadForwardMappings() {
 async function fillForwardTargetPicker() {
   const select = document.getElementById("fwd-target");
   if (!select || select.options.length > 1) return;
-  try {
-    const capsReq = await fetch("/relay/v2/dashboard/api/capabilities", {
-      headers: { Accept: "application/json" },
-    });
-    if (!capsReq.ok) return;
-    const names = Array.from(
-      new Set(
-        ((await capsReq.json()).capabilities || [])
-          .map((c) => c && c.name)
-          .filter(
-            (n) => n && n !== "forward" // the pseudo-capability is never a mapping target
-          )
-      ),
-    ).sort();
-    names.forEach((n) => {
-      const opt = document.createElement("option");
-      opt.value = n;
-      opt.textContent = n;
-      select.appendChild(opt);
-    });
-  } catch (_) {}
+  const caps = await fetchCapabilitiesPayload();
+  if (!caps) return;
+  const names = Array.from(
+    new Set(
+      caps
+        .map((c) => c && c.name)
+        .filter(
+          (n) => n && n !== "forward" // the pseudo-capability is never a mapping target
+        )
+    ),
+  ).sort();
+  names.forEach((n) => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    select.appendChild(opt);
+  });
 }
 
 function validateForwardSlot(slot) {
@@ -462,7 +521,13 @@ async function addForwardMapping() {
         "Content-Type": "application/json",
         "X-CSRF-Token": getCsrfToken(),
       },
-      body: JSON.stringify({ target_capability: target }),
+      body: JSON.stringify({
+        target_capability: target,
+        // T-246: the pin ALWAYS rides explicitly ("" = Provider variabel) —
+        // the PUT is a full-row replace (design D-02: omitting the pin
+        // would unpin).
+        target_node_id: document.getElementById("fwd-pin")?.value || "",
+      }),
     },
   );
   if (res.status === 401 || res.status === 403) {

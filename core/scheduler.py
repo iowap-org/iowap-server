@@ -151,6 +151,7 @@ class Scheduler:
                         "timeout_seconds": stage.get("timeout_seconds", default_timeout),
                         "payload": _serialize(stage.get("payload")),
                         "forward_slot": stage.get("forward_slot"),
+                        "target_node_id": stage.get("target_node_id"),
                     }
                 )
 
@@ -164,8 +165,9 @@ class Scheduler:
                     q("""
                     INSERT INTO task_stages
                     (stage_id, task_id, stage_name, capability, depends_on, status,
-                     sequence, timeout_seconds, payload, forward_slot, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     sequence, timeout_seconds, payload, forward_slot, target_node_id,
+                     created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         rec["stage_id"],
                         task_id,
@@ -177,6 +179,7 @@ class Scheduler:
                         rec["timeout_seconds"],
                         rec["payload"],
                         rec.get("forward_slot"),
+                        rec.get("target_node_id"),
                         now,
                         now,
                     )),
@@ -334,6 +337,24 @@ class Scheduler:
             if not node_row or not node_can_claim(node_row["status"]):
                 return None
 
+            now = _format_time(_now())
+
+            # T-246 (§1 plan C4): pending stages pinned to a node that no
+            # longer exists are failed here, T-067-style (owner-deleted →
+            # fail, :417-438) — but as a PRE-SELECT sweep, not in the loop:
+            # the SQL pin gate EXCLUDES dead-pinned rows from every
+            # claimer's candidate list, so the loop would never see them.
+            conn.execute(
+                q(
+                    "UPDATE task_stages SET status = 'failed', updated_at = ? "
+                    "WHERE status = 'pending' AND target_node_id IS NOT NULL "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM nodes n WHERE n.node_id = task_stages.target_node_id)",
+                    (now,),
+                )
+            )
+            conn.commit()
+
             # Determine capabilities of the node if not provided.
             if not capability:
                 # Use the normalized index for capability names. Fall back
@@ -390,8 +411,13 @@ class Scheduler:
                     "WHERE s.status = 'pending' AND s.capability IN ({}) ".format(
                         ",".join("?" for _ in cap_names)
                     )
+                    # T-246 pin gate (plan C4): a pinned stage claims only
+                    # from its pin target; NULL = unpinned = legacy "any
+                    # capable provider" (param is LAST — all capability
+                    # placeholders first).
+                    + "AND (s.target_node_id IS NULL OR s.target_node_id = ?) "
                     + "ORDER BY t.priority DESC, t.created_at ASC, s.sequence ASC",
-                    tuple(cap_names),
+                    tuple(cap_names) + (node_id,),
                 )
             ).fetchall()
 

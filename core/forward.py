@@ -244,7 +244,12 @@ def resolve_forward_stages(
     the error must name the real cause, design.md §7). On success each
     forward stage gets ``stage["capability"] = target``,
     ``stage["forward_slot"] = slot`` and the ``forward_slot`` key is removed
-    from its payload. Read-only SELECTs —
+    from its payload. T-246: a mapping pin (``target_node_id``) travels with
+    the resolution — the rewrite pass sets ``stage["target_node_id"]``
+    (None = unpinned) next to ``capability``/``forward_slot``; the T-245 type
+    gate still runs BEFORE the mapping SELECT, so a value-declared slot
+    refuses with ``forward_slot_not_routable`` regardless of any pin.
+    Read-only SELECTs —
     the task write happens in ``Scheduler.create_task``. Contracts:
     design.md §3.1.c + §7.
     """
@@ -292,7 +297,8 @@ def resolve_forward_stages(
                 )
             mrow = conn.execute(
                 q(
-                    "SELECT target_capability FROM forward_mappings"
+                    "SELECT target_capability, target_node_id"
+                    " FROM forward_mappings"
                     " WHERE node_id = ? AND slot = ?",
                     (submitter_node_id, slot),
                 )
@@ -312,7 +318,14 @@ def resolve_forward_stages(
                     422,
                     "mapping points at the forward pseudo-capability",
                 )
-            resolved.append({"stage": stage, "slot": slot, "target": target})
+            resolved.append(
+                {
+                    "stage": stage,
+                    "slot": slot,
+                    "target": target,
+                    "pin": mrow["target_node_id"],
+                }
+            )
     finally:
         conn.close()
 
@@ -321,6 +334,9 @@ def resolve_forward_stages(
         stage = entry["stage"]
         stage["capability"] = entry["target"]
         stage["forward_slot"] = entry["slot"]
+        # T-246: execution address copied from the mapping pin — set ALWAYS
+        # (None = unpinned, deterministic over absence-of-key, design D-08).
+        stage["target_node_id"] = entry["pin"]
         payload = stage.get("payload")
         if not isinstance(payload, dict):
             payload = {}
@@ -333,10 +349,10 @@ def resolve_forward_stages(
 def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]:  # noqa: UP045  (frozen signature)
     """List mappings (all, or filtered by ``node_id``).
 
-    Rows carry exactly ``node_id, slot, target_capability, created_at,
-    updated_at`` (no internal ``mapping_id``), ordered by node_id, slot.
-    Unknown ``node_id`` → 404 ``forward_node_unknown``. Contracts:
-    design.md §3.1.d.
+    Rows carry exactly ``node_id, slot, target_capability, target_node_id,
+    created_at, updated_at`` (no internal ``mapping_id``), ordered by node_id,
+    slot. Unknown ``node_id`` → 404 ``forward_node_unknown``. Contracts:
+    design.md §3.1.d + T-246 design §3.3.
     """
     conn = get_conn()
     try:
@@ -352,7 +368,8 @@ def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]
                 )
             rows = conn.execute(
                 q(
-                    "SELECT node_id, slot, target_capability, created_at, updated_at"
+                    "SELECT node_id, slot, target_capability, target_node_id,"
+                    " created_at, updated_at"
                     " FROM forward_mappings WHERE node_id = ?"
                     " ORDER BY node_id ASC, slot ASC",
                     (node_id,),
@@ -361,7 +378,8 @@ def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]
         else:
             rows = conn.execute(
                 q(
-                    "SELECT node_id, slot, target_capability, created_at, updated_at"
+                    "SELECT node_id, slot, target_capability, target_node_id,"
+                    " created_at, updated_at"
                     " FROM forward_mappings ORDER BY node_id ASC, slot ASC"
                 )
             ).fetchall()
@@ -582,14 +600,23 @@ def upsert_forward_mapping(
     node_id: str,
     slot: Any,
     target_capability: Any,
+    target_node_id: Any = None,
 ) -> dict[str, Any]:
     """Create or update a (node, slot) mapping after full validation.
 
-    Validation ladder (design.md §3.1.e): slot normalization (422 invalid) →
-    target strip/shape (422 invalid) → target == forward (400 redirect_self)
-    → node existence (404 forward_node_unknown) → target in capability
-    catalog (422 target_unknown_capability) → insert-or-update keeping
-    ``created_at`` + ``mapping_id``. Returns the post-write row (list keys).
+    Validation ladder (design.md §3, T-246): slot normalization (422
+    forward_mapping_invalid) → target strip/shape (422 forward_mapping_invalid)
+    → target == forward (400 redirect_self) → submitter node existence (404
+    forward_node_unknown) → pin form: non-str or >64 chars (422
+    target_node_invalid), strip, ``""`` → ``None`` = unpin → pin path: pin-node
+    existence (422 target_node_unknown) then the node-scoped capability check
+    (422 target_node_lacks_capability — ``node_capabilities WHERE node_id = ?
+    AND capability_name = ?``, the EXACT row query, never the aggregate;
+    core/forward.py:633-644); unpinned path: legacy aggregate catalog check
+    (422 target_unknown_capability, unchanged) → insert-or-update keeping
+    ``created_at`` + ``mapping_id``. The pin is replaced on EVERY PUT
+    (full-row replace, like ``target_capability``); a PUT that omits it
+    unpins. Returns the post-write row (list keys incl. ``target_node_id``).
     """
     slot = normalize_slot(slot)
 
@@ -630,18 +657,69 @@ def upsert_forward_mapping(
                 404,
                 f"submitter node '{node_id}' is not registered",
             )
-        catalog = conn.execute(
-            q(
-                "SELECT 1 FROM node_capabilities WHERE capability_name = ? LIMIT 1",
-                (target,),
-            )
-        ).fetchone()
-        if not catalog:
-            raise ForwardRoutingError(
-                "target_unknown_capability",
-                422,
-                f"target capability '{target}' is not advertised by any node",
-            )
+
+        # ── T-246 pin form (design §3.2 step 5, D-01): string-only + 64 cap;
+        # a bool never coerces (same guard class as normalize_slot), ""
+        # strips to the explicit unpin form. None = field omitted = unpin
+        # (D-02 full-row replace — the guards only bind when a pin is sent).
+        # No mint-regex: a malformed id can never exist in nodes, so
+        # existence IS the validator.
+        if target_node_id is not None:
+            if not isinstance(target_node_id, str):
+                raise ForwardRoutingError(
+                    "target_node_invalid",
+                    422,
+                    f"target_node_id must be a string, got {type(target_node_id).__name__}",
+                )
+            if len(target_node_id) > 64:
+                raise ForwardRoutingError(
+                    "target_node_invalid",
+                    422,
+                    "target_node_id exceeds the 64 character cap",
+                )
+        pin = (target_node_id or "").strip() or None
+
+        if pin is not None:
+            # ── T-246 pin path (design §3.2 step 6, D-03): the pin node must
+            # exist and must advertise the mapping's target capability ITSELF
+            # (node-scoped row query — never the orphan-vulnerable aggregate;
+            # design §10). The aggregate catalog step is SKIPPED on this path.
+            pin_row = conn.execute(
+                q("SELECT 1 FROM nodes WHERE node_id = ?", (pin,))
+            ).fetchone()
+            if not pin_row:
+                raise ForwardRoutingError(
+                    "target_node_unknown",
+                    422,
+                    f"pin target node '{pin}' is not registered",
+                )
+            advertises = conn.execute(
+                q(
+                    "SELECT 1 FROM node_capabilities"
+                    " WHERE node_id = ? AND capability_name = ?",
+                    (pin, target),
+                )
+            ).fetchone()
+            if not advertises:
+                raise ForwardRoutingError(
+                    "target_node_lacks_capability",
+                    422,
+                    f"pin target node '{pin}' does not advertise"
+                    f" capability '{target}'",
+                )
+        else:
+            catalog = conn.execute(
+                q(
+                    "SELECT 1 FROM node_capabilities WHERE capability_name = ? LIMIT 1",
+                    (target,),
+                )
+            ).fetchone()
+            if not catalog:
+                raise ForwardRoutingError(
+                    "target_unknown_capability",
+                    422,
+                    f"target capability '{target}' is not advertised by any node",
+                )
 
         now = datetime.now(UTC).isoformat()
         existing = conn.execute(
@@ -658,9 +736,9 @@ def upsert_forward_mapping(
                     q(
                         "INSERT INTO forward_mappings"
                         " (mapping_id, node_id, slot, target_capability,"
-                        " created_at, updated_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?)",
-                        (mapping_id, node_id, slot, target, now, now),
+                        " target_node_id, created_at, updated_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (mapping_id, node_id, slot, target, pin, now, now),
                     )
                 )
             except (sqlite3.IntegrityError, sa_exc.IntegrityError):
@@ -680,14 +758,16 @@ def upsert_forward_mapping(
         if existing is not None:
             conn.execute(
                 q(
-                    "UPDATE forward_mappings SET target_capability = ?, updated_at = ?"
+                    "UPDATE forward_mappings SET target_capability = ?,"
+                    " target_node_id = ?, updated_at = ?"
                     " WHERE mapping_id = ?",
-                    (target, now, existing["mapping_id"]),
+                    (target, pin, now, existing["mapping_id"]),
                 )
             )
         row = conn.execute(
             q(
-                "SELECT node_id, slot, target_capability, created_at, updated_at"
+                "SELECT node_id, slot, target_capability, target_node_id,"
+                " created_at, updated_at"
                 " FROM forward_mappings WHERE node_id = ? AND slot = ?",
                 (node_id, slot),
             )

@@ -369,17 +369,24 @@ class SimpleTaskResponse(BaseModel):
 # ── Forward routing (T-Forward) ────────────────────────────────
 
 class ForwardMappingPut(BaseModel):
-    """Body for PUT /relay/v2/forward-mappings/{node_id}/{slot}."""
+    """Body for PUT /relay/v2/forward-mappings/{node_id}/{slot} (T-246 adds the pin)."""
 
     target_capability: str = Field(..., min_length=1, max_length=255)
+    target_node_id: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="T-246: pin the mapping to one concrete node;"
+                    " omitted/None/'' = no pin = any capable provider.",
+    )
 
 
 class ForwardMappingEntry(BaseModel):
-    """One (node, slot) → target_capability mapping row."""
+    """One (node, slot) → target_capability mapping row (T-246 adds the pin)."""
 
     node_id: str
     slot: str
     target_capability: str
+    target_node_id: Optional[str] = None
     created_at: str
     updated_at: str
 

@@ -250,8 +250,11 @@ task_stages = sa.Table(
     sa.Column("last_note_at", sa.String(64), nullable=True),
     sa.Column("longrun_ttl_expires_at", sa.String(64), nullable=True),
     sa.Column("forward_slot", sa.String(64), nullable=True),
+    # T-246: execution-address pin copied from the mapping at submit time.
+    sa.Column("target_node_id", sa.String(64), nullable=True),
     sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"]),
     sa.ForeignKeyConstraint(["claimed_by"], ["nodes.node_id"]),
+    sa.ForeignKeyConstraint(["target_node_id"], ["nodes.node_id"]),
 )
 
 artifacts = sa.Table(
@@ -307,8 +310,11 @@ forward_mappings = sa.Table(
     sa.Column("target_capability", sa.String(255), nullable=False),
     sa.Column("created_at", sa.String(64), nullable=False),
     sa.Column("updated_at", sa.String(64), nullable=False),
+    # T-246: admin pin — the mapping resolves to exactly this node.
+    sa.Column("target_node_id", sa.String(64), nullable=True),
     sa.UniqueConstraint("node_id", "slot", name="uq_forward_mappings_node_slot"),
     sa.ForeignKeyConstraint(["node_id"], ["nodes.node_id"]),
+    sa.ForeignKeyConstraint(["target_node_id"], ["nodes.node_id"]),
 )
 
 forward_slots = sa.Table(
