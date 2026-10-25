@@ -178,7 +178,7 @@ function render(n, events) {
     chart.innerHTML = bars.join("");
   }
 
-  // Recent tasks
+  // Recent tasks (T-248: sender + worker nodes by NAME, no raw IDs).
   const tasks = n.recent_tasks || [];
   document.querySelector("#tasks tbody").innerHTML =
     tasks
@@ -189,11 +189,13 @@ function render(n, events) {
         <td>${escHtml(t.task_name)}</td>
         <td><span class="tag ${statusColor(t)}">${escHtml(t.status)}</span></td>
         <td>${t.priority}</td>
+        <td>${escHtml(t.sender_node_name || "—")}</td>
+        <td>${escHtml((t.worker_node_names || []).join(", ") || "—")}</td>
         <td>${fmt(t.created_at)}</td>
         <td>${fmt(t.completed_at)}</td>
       </tr>`
       )
-      .join("") || '<tr><td colspan="6" class="empty">No tasks.</td></tr>';
+      .join('') || '<tr><td colspan="8" class="empty">No tasks.</td></tr>';
 
   // Activity feed (cluster-wide; node-scoped filter is best-effort).
   const nodeEvents = events.filter((e) => {

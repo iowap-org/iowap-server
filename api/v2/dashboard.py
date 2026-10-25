@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from relay_server.api.v2.cluster import _GROUP_SEP_CH, _agg
 from relay_server.api.v2.security import (
     check_dashboard_permission,
     require_dashboard_user,
@@ -463,12 +464,34 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
                 online_count += 1
 
         task_rows = conn.execute(
-            q("SELECT task_id, task_name, status, priority, created_at, completed_at "
-            "FROM tasks ORDER BY created_at DESC LIMIT 50")
+            q("SELECT t.task_id, t.task_name, t.status, t.priority, t.created_at, t.completed_at, "
+            "t.submitted_by, t.owner_node_id, "
+            + _agg("s.claimed_by") + " AS claimed_bys "
+            "FROM tasks t "
+            "LEFT JOIN task_stages s ON s.task_id = t.task_id "
+            "GROUP BY t.task_id ORDER BY t.created_at DESC LIMIT 50")
         ).fetchall()
+        # T-248: sender + worker NAMES for the admin task table — nodes, not
+        # raw IDs. Names resolve from the node rows already loaded above;
+        # sender follows T-227 (tasks.submitted_by), worker = every DISTINCT
+        # claimer across the task's stages, falling back to owner_node_id.
+        name_map: dict = {r["node_id"]: (r["node_name"] or "") for r in node_rows}
+
+        def _display(node_id_or_none) -> str | None:
+            if not node_id_or_none:
+                return None
+            return name_map.get(node_id_or_none) or node_id_or_none
+
         tasks = []
         for r in task_rows:
             cat = get_category(r["status"])
+            worker_ids: list[str] = []
+            if r["claimed_bys"]:
+                worker_ids = sorted(
+                    {x for x in r["claimed_bys"].split(_GROUP_SEP_CH) if x}
+                )
+            elif r["owner_node_id"]:
+                worker_ids = [r["owner_node_id"]]
             tasks.append(
                 {
                     "task_id": r["task_id"],
@@ -479,6 +502,10 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
                     "priority": r["priority"],
                     "created_at": r["created_at"],
                     "completed_at": r["completed_at"],
+                    "sender_node_id": r["submitted_by"],
+                    "sender_node_name": _display(r["submitted_by"]),
+                    "worker_node_ids": worker_ids,
+                    "worker_node_names": [_display(w) for w in worker_ids],
                 }
             )
 

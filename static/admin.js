@@ -281,6 +281,7 @@ function renderNodeCard(n) {
 }
 
 function renderTasks(tasks) {
+  // T-248: sender + worker node columns — NAMES, not raw IDs.
   document.querySelector("#tasks tbody").innerHTML =
     (tasks || [])
       .map(
@@ -290,10 +291,12 @@ function renderTasks(tasks) {
         <td>${escHtml(t.task_name)}</td>
         <td><span class="tag ${statusColor(t)}">${escHtml(t.status)}</span></td>
         <td>${t.priority}</td>
+        <td>${escHtml(t.sender_node_name || "—")}</td>
+        <td>${escHtml((t.worker_node_names || []).join(", ") || "—")}</td>
         <td>${fmt(t.created_at)}</td>
       </tr>`
       )
-      .join("") || '<tr><td colspan="5" class="empty">No tasks.</td></tr>';
+      .join("") || '<tr><td colspan="7" class="empty">No tasks.</td></tr>';
 }
 
 function renderStages(stages) {
