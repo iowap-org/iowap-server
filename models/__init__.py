@@ -368,8 +368,29 @@ class SimpleTaskResponse(BaseModel):
 
 # ── Forward routing (T-Forward) ────────────────────────────────
 
+class BindingRule(BaseModel):
+    """One binding rule (T-247): copy (1 source) or join (>1 sources)
+    submitter payload fields into one target field."""
+
+    sources: list[str] = Field(..., min_length=1)
+    target: str = Field(..., min_length=1, max_length=255)
+
+
+class BindingRules(BaseModel):
+    """Payload binding of one forward mapping (T-247, Ronny form):
+    ``{"rules": [{sources, target}, …], "separator": "…"}``. Transport
+    shape only (types/lengths) — ALL semantic form rules (distinct
+    sources, disjoint targets, padding, separator type) live in
+    core/forward.py validate_binding_form (single authority, design §3.1);
+    the PUT endpoint hands body.binding over for re-validation."""
+
+    rules: list[BindingRule] = Field(..., min_length=1)
+    separator: str = "\n\n"
+
+
 class ForwardMappingPut(BaseModel):
-    """Body for PUT /relay/v2/forward-mappings/{node_id}/{slot} (T-246 adds the pin)."""
+    """Body for PUT /relay/v2/forward-mappings/{node_id}/{slot}
+    (T-246 adds the pin, T-247 adds binding)."""
 
     target_capability: str = Field(..., min_length=1, max_length=255)
     target_node_id: Optional[str] = Field(
@@ -378,15 +399,22 @@ class ForwardMappingPut(BaseModel):
         description="T-246: pin the mapping to one concrete node;"
                     " omitted/None/'' = no pin = any capable provider.",
     )
+    binding: Optional[BindingRules] = Field(
+        None,
+        description="T-247: payload binding (Ronny form); omitted/null ="
+                    " legacy passthrough (full-row replace, pin D-02 analog).",
+    )
 
 
 class ForwardMappingEntry(BaseModel):
-    """One (node, slot) → target_capability mapping row (T-246 adds the pin)."""
+    """One (node, slot) → target_capability mapping row (T-246 pin,
+    T-247 binding)."""
 
     node_id: str
     slot: str
     target_capability: str
     target_node_id: Optional[str] = None
+    binding: Optional[dict[str, Any]] = None
     created_at: str
     updated_at: str
 

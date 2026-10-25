@@ -84,7 +84,7 @@ async def upsert_forward_mapping_endpoint(
     try:
         normalized = normalize_slot(slot)
         row = upsert_forward_mapping(
-            node_id, slot, body.target_capability, body.target_node_id
+            node_id, slot, body.target_capability, body.target_node_id, body.binding
         )
     except ForwardRoutingError as exc:
         raise _to_http(exc) from exc
@@ -97,6 +97,7 @@ async def upsert_forward_mapping_endpoint(
         details=(
             f"slot={normalized} target={body.target_capability}"
             f" pin={getattr(body, 'target_node_id', None) or 'variabel'}"
+            f" binding={'on' if body.binding is not None else 'legacy'}"
         ),
     )
     return ForwardMappingEntry(**row)

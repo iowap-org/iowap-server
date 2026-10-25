@@ -459,7 +459,7 @@ def test_put_pin_roundtrip_and_response_shape():
     assert row["target_node_id"] == provider_id, "PUT response row carries the pin"
     assert set(row) == {
         "node_id", "slot", "target_capability", "target_node_id",
-        "created_at", "updated_at",
+        "binding", "created_at", "updated_at",
     }
 
     got = _get_mappings(admin_token, node_id=submitter_id)
@@ -469,7 +469,7 @@ def test_put_pin_roundtrip_and_response_shape():
     assert rows[0] == row, "GET rows identical to the PUT response row"
     assert set(rows[0]) == {
         "node_id", "slot", "target_capability", "target_node_id",
-        "created_at", "updated_at",
+        "binding", "created_at", "updated_at",
     }
 
 
@@ -1097,7 +1097,7 @@ def test_forward_mapping_entry_model_carries_pin():
     assert dumped["target_node_id"] == "P", "the pin round-trips through model_dump"
     assert set(dumped) == {
         "node_id", "slot", "target_capability", "target_node_id",
-        "created_at", "updated_at",
+        "binding", "created_at", "updated_at",
     }
 
 
@@ -1116,7 +1116,7 @@ def test_get_mappings_rows_carry_pin_field():
     assert len(rows) == 1
     assert set(rows[0]) == {
         "node_id", "slot", "target_capability", "target_node_id",
-        "created_at", "updated_at",
+        "binding", "created_at", "updated_at",
     }
     assert rows[0]["target_node_id"] is None
 

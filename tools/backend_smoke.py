@@ -194,6 +194,53 @@ check("T-246 stage pin recorded", lambda: (lambda row: row and row[0] == pin_nod
       or (_ for _ in ()).throw(AssertionError(f"stage pin row = {dict(row._mapping) if row is not None else None}")))(
       sql("SELECT target_node_id FROM task_stages WHERE stage_name='s1'").fetchone()))
 
+# --- 6c. T-247 binding leg: rule projection → JSON-string stage readback ----
+# (design §11.4, FROZEN leg; the same lifecycle-idiom corrections as 6b:
+# `cond or throw` instead of the always-throwing fenced tuple form. The
+# fenced "pin_node[0]" upsert is corrected to a dedicated schema-carrying
+# provider per the leg's own stated semantics — the pin row must declare
+# input_schema, or the hard PUT refuses with requires_schema; pin_node's
+# capability was registered bare (T-246 leg) and stays untouched.)
+bind_caps = [{"name": "smoke.cap", "available": True,
+              "input_schema": {"fields": {"task": {"type": "string", "required": False}}}}]
+bind_node = check("register binding provider", lambda: register_pending_node(
+    "smoke_bind_worker", "http://localhost:0", bind_caps))
+check("approve binding provider", lambda: approve_node(bind_node[0]))
+check("T-247 schema declared", lambda: (lambda row: row and json.loads(row[0])
+      == {"fields": {"task": {"type": "string", "required": False}}} or
+      (_ for _ in ()).throw(AssertionError(f"cap schema = {row}")))(
+      sql("SELECT input_schema FROM node_capabilities WHERE node_id = ?"
+          " AND capability_name = 'smoke.cap'", (bind_node[0],)).fetchone()))
+check("T-247 binding upsert", lambda: upsert_forward_mapping(
+    reg[0], "1", "smoke.cap", bind_node[0],
+    {"rules": [{"sources": ["task"], "target": "task"}]}))
+def _binding_row():
+    with db.get_conn() as c:
+        raw = c.execute(db.q("SELECT binding FROM forward_mappings"
+                             " WHERE node_id = ? AND slot = '1'", (reg[0],))).scalar()
+        c.commit()
+        return json.loads(raw) if raw is not None else None
+check("T-247 binding stored", lambda: _binding_row() ==
+      {"rules": [{"sources": ["task"], "target": "task"}], "separator": "\n\n"}
+      or (_ for _ in ()).throw(AssertionError(f"binding row = {_binding_row()}")))
+fwd_bind = [{"stage_name": "s2", "capability": "forward",
+            "payload": {"forward_slot": "1", "task": "T", "drift": "D"}}]
+check("T-247 resolve projects", lambda: resolve_forward_stages(reg[0], fwd_bind) or (
+    (fwd_bind[0]["payload"] == {"task": "T"}) or (_ for _ in ()).throw(
+    AssertionError(f"projected payload = {fwd_bind[0]['payload']}"))))
+check("T-247 bound task create", lambda: scheduler.Scheduler.create_task(
+    reg[0], fwd_bind)["task_id"])
+check("T-247 stage payload JSON-string", lambda: (lambda row: row and
+    json.loads(row[0]) == {"task": "T"} or (_ for _ in ()).throw(
+    AssertionError(f"stage payload = {row[0] if row else None}")))(
+    sql("SELECT payload FROM task_stages WHERE stage_name='s2'").fetchone()))
+claim3 = check("T-247 provider claims", lambda: scheduler.Scheduler.claim_stage(bind_node[0]))
+check("T-247 claim honors pin", lambda: claim3 and claim3["stage_id"] or
+      (_ for _ in ()).throw(AssertionError("binding provider did not claim")))
+check("T-247 claim sees projected payload", lambda: claim3["payload"] ==
+      {"task": "T"} or (_ for _ in ()).throw(
+      AssertionError(f"claim payload = {claim3['payload']}")))
+
 # --- 7. Restart-Sweep on the SAME database -----------------------------------
 #    a) plain re-init (idempotent schema + migrations)
 check("restart init_db", db.init_db)

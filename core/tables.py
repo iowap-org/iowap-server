@@ -312,6 +312,8 @@ forward_mappings = sa.Table(
     sa.Column("updated_at", sa.String(64), nullable=False),
     # T-246: admin pin — the mapping resolves to exactly this node.
     sa.Column("target_node_id", sa.String(64), nullable=True),
+    # T-247: optional payload binding — JSON text; NULL = legacy passthrough.
+    sa.Column("binding", sa.Text, nullable=True),
     sa.UniqueConstraint("node_id", "slot", name="uq_forward_mappings_node_slot"),
     sa.ForeignKeyConstraint(["node_id"], ["nodes.node_id"]),
     sa.ForeignKeyConstraint(["target_node_id"], ["nodes.node_id"]),

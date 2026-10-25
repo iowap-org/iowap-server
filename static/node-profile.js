@@ -239,7 +239,7 @@ function fwdMessage(text, cls) {
 }
 
 function fwdMutedNote(td, note) {
-  td.innerHTML = `<td colspan="7" class="empty">${escHtml(note)}</td>`;
+  td.innerHTML = `<td colspan="8" class="empty">${escHtml(note)}</td>`;
 }
 
 // ===== T-246: provider pin (mapping target_node_id) =====================
@@ -249,6 +249,9 @@ function fwdMutedNote(td, note) {
 // endpoint, no per-change refetch (design.md §7.2.2).
 let fwdCapabilities = null;
 const nodeNames = new Map(); // node_id → node_name (fallback: raw id)
+// T-247: the submitter's declared slot rows (input_schema rides parsed) —
+// the binding editor's SOURCE chip universe (§7.4.2, D-09 cache form).
+let fwdSlotRows = [];
 
 async function fetchCapabilitiesPayload() {
   if (fwdCapabilities) return fwdCapabilities;
@@ -368,6 +371,9 @@ async function loadForwardMappings() {
   } catch (_) {}
 
   const bySlot = new Map(slots.map((s) => [String(s.slot), s]));
+  // T-247: the binding editor reads the submitter's DECLARED slot schema
+  // (source chip universe — §7.4.2) from the same rows.
+  fwdSlotRows = slots;
   const mappedSlots = new Set(mappings.map((m) => String(m.slot)));
   const declaredOnly = slots.filter((s) => !mappedSlots.has(String(s.slot)));
 
@@ -390,6 +396,16 @@ async function loadForwardMappings() {
         const pinCell = m.target_node_id
           ? `<span class="tag info">${escHtml(nodeNames.get(m.target_node_id) || m.target_node_id)}</span>`
           : `<span class="tag">variabel</span>`;
+        // T-247: the binding state is VISIBLE per row (C7 §7.4.1) — a stale
+        // binding shows up as "N rule(s)" and the dashboard editor is the
+        // correction path (no auto-unbind). Rules count display-only; a
+        // surprising shape falls back to "1+".
+        const ruleCount = m.binding && Array.isArray(m.binding.rules)
+          ? m.binding.rules.length
+          : 0;
+        const bindingCell = m.binding
+          ? `<span class="tag info">${ruleCount ? ruleCount + (ruleCount === 1 ? " rule" : " rules") : "1+"}</span>`
+          : `<span class="tag">legacy</span>`;
         return `
       <tr>
         <td class="mono">${escHtml(m.slot)}</td>
@@ -397,6 +413,7 @@ async function loadForwardMappings() {
         ${typeCell}
         <td><span class="tag info">${escHtml(m.target_capability)}</span></td>
         <td>${pinCell}</td>
+        <td>${bindingCell}</td>
         <td>${fmt(m.updated_at)}</td>
         <td>${(
           canManage
@@ -419,6 +436,7 @@ async function loadForwardMappings() {
         ${typeCell}
         <td><span class="tag">unset</span></td>
         <td>—</td>
+        <td>—</td>
         <td>${fmt(s.updated_at)}</td>
         <td>${canManage
           ? `<button type="button" class="fwd-add-declared" data-slot="${escAttr(s.slot)}" data-label="${escAttr(s.label || "")}">map…</button>`
@@ -428,7 +446,7 @@ async function loadForwardMappings() {
       ),
     );
 
-  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="7" class="empty">No forward mappings or declared slots.</td></tr>';
+  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="8" class="empty">No forward mappings or declared slots.</td></tr>';
 
   if (canManage) {
     const panel = document.getElementById("forwardMappings");
@@ -447,6 +465,9 @@ async function loadForwardMappings() {
           if (input) input.value = btn.dataset.slot || "";
           // T-246: a prefilled mapping starts unpinned (Provider variabel).
           if (pinEl) pinEl.value = "";
+          // T-247: re-render the binding editor for the prefilled slot
+          // (programmatic value set fires no change event).
+          fwdRenderBindingEditor();
           if (!targetEl || !targetEl.options.length) fillForwardTargetPicker();
           input?.focus?.();
         });
@@ -461,11 +482,26 @@ async function loadForwardMappings() {
           <button type="button" id="fwdAddBtn">Add mapping</button>
         </div>`;
       panel.appendChild(addRow);
+      // T-247: the binding editor's container (hidden until a target
+      // capability is selected — the change listener builds its rule rows;
+      // design §7.4.2 "the binding section appears when the target
+      // capability is selected").
+      const bindSection = document.createElement("div");
+      bindSection.id = "fwdBindingSection";
+      bindSection.style.display = "none";
+      panel.appendChild(bindSection);
       document.getElementById("fwdAddBtn").addEventListener("click", addForwardMapping);
       // T-246: repopulate the pin picker whenever the capability changes —
       // cached payload, no refetch, selection resets to "variabel".
+      // T-247: the same change also (re)renders the binding editor (the
+      // target chip universe rides the same cached payload).
       document.getElementById("fwd-target").addEventListener("change", (e) => {
         fillForwardPinPicker(e.target.value);
+        fwdRenderBindingEditor();
+      });
+      // T-247: the source chips follow the declared slot's input_schema.
+      document.getElementById("fwd-slot").addEventListener("change", () => {
+        fwdRenderBindingEditor();
       });
       fillForwardTargetPicker();
     }
@@ -499,6 +535,182 @@ function validateForwardSlot(slot) {
   return /^[A-Za-z0-9_-]{1,64}$/.test(slot);
 }
 
+// ===== T-247: payload binding editor (C6, design §7.4) =====================
+// One section under the mapping add-row: per-rule SOURCE chips (from the
+// submitter's declared slot input_schema) + a target field (datalist of the
+// selected capability's aggregate schema field names) + the binding-level
+// separator. One source chip in a rule = getrennt (copy); several = 
+// zusammengeführt (join) — THE rule-row shape IS the modes (plan C6).
+// No new endpoint: both chip universes come from the page's existing GETs
+// (the capabilities cache + forward-mappings/slots, D-09/T-246 form). The
+// aggregate is a DISPLAY source only — the server PUT validates against
+// the exact pin/slot branch (§4.2) and divergence fails loud in the editor
+// via fwdErrorText.
+
+// Both canonical schema forms (models/capability.py from_dict: nested
+// {"fields": {name: spec}} and flat {name: spec}; list-valued field sets
+// keyed by an explicit name attr or their position) → the field NAMES.
+function fwdSchemaFieldNames(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
+  const raw = schema.fields !== undefined ? schema.fields : schema;
+  if (!raw || typeof raw !== "object") return [];
+  const names = [];
+  if (Array.isArray(raw)) {
+    raw.forEach((entry, i) => {
+      const nm = entry && typeof entry === "object" && entry.name
+        ? entry.name
+        : "field_" + i;
+      names.push(nm);
+    });
+    return names;
+  }
+  for (const [key, entry] of Object.entries(raw)) {
+    names.push(entry && typeof entry === "object" && entry.name ? entry.name : key);
+  }
+  return names;
+}
+
+function fwdSlotSchemaNames(slotVal) {
+  const declared = (fwdSlotRows || []).find((s) => String(s.slot) === slotVal);
+  return fwdSchemaFieldNames(declared && declared.input_schema);
+}
+
+function fwdCapabilitySchemaNames(target) {
+  const cap = (fwdCapabilities || []).find((c) => c && c.name === target);
+  return fwdSchemaFieldNames(cap ? cap.input_schema : null);
+}
+
+// One rule row: source chips (a declared slot schema exists — click = select)
+// or a free text input (no declared schema — the unvalidated-sources branch
+// of §4.2 is a supported form), the target field with the capability schema
+// datalist, and the remove button.
+function fwdAddRuleRow(rule) {
+  const rulesBox = document.getElementById("fwdRules");
+  if (!rulesBox) return;
+  const slotVal = (document.getElementById("fwd-slot")?.value || "").trim();
+  const sourceNames = fwdSlotSchemaNames(slotVal);
+  const hasSourceChips = sourceNames.length > 0;
+  const sources = (rule && rule.sources) || [];
+  const chips = hasSourceChips
+    ? sourceNames
+        .map((n) => {
+          const on = sources.includes(n) ? " on" : "";
+          return `<button type="button" class="fwd-chip${on}" data-name="${escAttr(n)}">${escHtml(n)}</button>`;
+        })
+        .join(" ")
+    : `<input type="text" class="fwd-sources-free" placeholder="source fields (comma-separated)" value="${escAttr(sources.join(", "))}" />`;
+  const hasSlotsSchema = hasSourceChips
+    ? ""
+    : `<small class="muted">slot '${escHtml(slotVal || "…")}' declares no input_schema — sources free-typed (payload is the universe at submit)</small>`;
+  const div = document.createElement("div");
+  div.className = "fwd-rule";
+  div.style.cssText = "display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.4rem;";
+  div.innerHTML = `
+    <span class="muted">rule ${rulesBox.querySelectorAll(".fwd-rule").length + 1}</span>
+    <span class="fwd-chips" style="display:inline-flex;gap:.25rem;flex-wrap:wrap;">${chips}</span>
+    <span class="muted">→</span>
+    <input type="text" class="fwd-rule-target" list="fwdTargetFields" placeholder="target field…" style="width:16ch;" value="${escAttr((rule && rule.target) || "")}" />
+    <button type="button" class="fwd-rule-del" title="remove rule">✕</button>
+    <br>${hasSlotsSchema}`;
+  rulesBox.appendChild(div);
+  div.querySelectorAll(".fwd-chip").forEach((b) => {
+    b.addEventListener("click", () => b.classList.toggle("on"));
+  });
+  div.querySelector(".fwd-rule-del")?.addEventListener("click", () => div.remove());
+}
+
+// The "match by name" helper (board T-247): 1:1 rules from the intersection
+// of the declared source names and the target field names — the Specialist
+// case without hand work. No other wizard logic.
+function fwdMatchByName() {
+  const slotVal = (document.getElementById("fwd-slot")?.value || "").trim();
+  const target = document.getElementById("fwd-target")?.value || "";
+  const sourceNames = fwdSlotSchemaNames(slotVal);
+  const targetNames = fwdCapabilitySchemaNames(target);
+  const box = document.getElementById("fwdRules");
+  if (!box) return;
+  if (!sourceNames.length || !targetNames.length) {
+    fwdMessage("match by name needs a declared slot schema AND a target schema.", "bad");
+    return;
+  }
+  const targetSet = new Set(targetNames);
+  const matched = Array.from(new Set(sourceNames.filter((n) => targetSet.has(n))));
+  if (!matched.length) {
+    fwdMessage("No 1:1 overlap between the slot schema fields and the target's fields.", "bad");
+    return;
+  }
+  box.innerHTML = "";
+  matched.forEach((n) => fwdAddRuleRow({ sources: [n], target: n }));
+}
+
+// Rebuild the whole binding section for the CURRENT slot + target pair
+// (the rule rows reset — the chip universes change with both).
+function fwdRenderBindingEditor() {
+  const section = document.getElementById("fwdBindingSection");
+  if (!section) return;
+  const target = document.getElementById("fwd-target")?.value || "";
+  if (!target) {
+    section.style.display = "none";
+    section.innerHTML = "";
+    return;
+  }
+  const targetNames = fwdCapabilitySchemaNames(target);
+  section.style.display = "";
+  section.innerHTML = `
+    <div style="margin-top:.75rem;padding:.5rem;border:1px solid rgba(127,127,127,.35);border-radius:.5rem;">
+      <div class="muted" style="font-size:.9rem;">
+        Payload binding — per rule: select the source field(s) → one target field
+        (1 source = getrennt/copy, several = zusammengeführt/join). No rules = legacy passthrough
+        (unbound fields fly except the reserved prompt fields task/prompt/question/message/input).
+      </div>
+      <div id="fwdRules"></div>
+      <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem;flex-wrap:wrap;">
+        <button type="button" id="fwdAddRule">add rule</button>
+        <button type="button" id="fwdMatchName">match by name</button>
+        <label>separator
+          <input type="text" id="fwd-separator" value="\\n\\n" style="width:10ch;"
+                 title="\\n = newline (the default two-newline join); empty = adjacent join" />
+        </label>
+      </div>
+      <datalist id="fwdTargetFields">${targetNames.map((n) => `<option value="${escAttr(n)}"></option>`).join("")}</datalist>
+      <small class="muted">${targetNames.length
+        ? "Target fields from the capability schema (" + escHtml(targetNames.join(", ")) + ") — display source: the aggregate; the pinned node's own schema decides the PUT."
+        : "The capability declares no input_schema — target free-typed (the PUT validates hard; unpinned bindings need the slot schema)."}</small>
+    </div>`;
+  document.getElementById("fwdAddRule").addEventListener("click", () => fwdAddRuleRow());
+  document.getElementById("fwdMatchName").addEventListener("click", fwdMatchByName);
+  fwdAddRuleRow();
+}
+
+// Harvest the editor's rule rows (DOM is the state while editing). Every rule
+// with a target AND ≥1 source is sendable; half-filled rules are surfaced,
+// never silently skipped.
+function fwdHarvestBinding() {
+  const rules = [];
+  let incomplete = false;
+  document.querySelectorAll("#fwdRules .fwd-rule").forEach((div) => {
+    const freeInput = div.querySelector(".fwd-sources-free");
+    const sources = freeInput
+      ? freeInput.value.split(",").map((s) => s.trim()).filter(Boolean)
+      : Array.from(div.querySelectorAll(".fwd-chip.on")).map((b) => b.dataset.name);
+    const target = (div.querySelector(".fwd-rule-target")?.value || "").trim();
+    if ((target && !sources.length) || (!target && sources.length)) {
+      incomplete = true;
+    }
+    if (target && sources.length) {
+      rules.push({ sources, target });
+    }
+  });
+  return { rules, incomplete };
+}
+
+// The editor's separator value: "\n\n" shown as the escape text (input
+// values cannot hold raw newlines) is de-escaped on send; empty = adjacent
+// join (§7.4.2).
+function fwdSeparatorValue() {
+  return (document.getElementById("fwd-separator")?.value || "").replace(/\\n/g, "\n");
+}
+
 async function addForwardMapping() {
   const input = document.getElementById("fwd-slot");
   const targetEl = document.getElementById("fwd-target");
@@ -510,6 +722,11 @@ async function addForwardMapping() {
   const target = targetEl.value;
   if (!target) {
     fwdMessage("Pick a target capability.", "bad");
+    return;
+  }
+  const { rules, incomplete } = fwdHarvestBinding();
+  if (incomplete) {
+    fwdMessage("Each binding rule needs a target and at least one source field.", "bad");
     return;
   }
   const res = await fetch(
@@ -527,6 +744,10 @@ async function addForwardMapping() {
         // the PUT is a full-row replace (design D-02: omitting the pin
         // would unpin).
         target_node_id: document.getElementById("fwd-pin")?.value || "",
+        // T-247: the binding rides ALWAYS explicitly (D-02 analog) —
+        // completed rules or null (legacy passthrough = the editor's
+        // "remove binding" path).
+        binding: rules.length ? { rules, separator: fwdSeparatorValue() } : null,
       }),
     },
   );

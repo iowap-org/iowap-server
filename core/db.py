@@ -1060,6 +1060,26 @@ def _m017_forward_mapping_pins(conn: DBConn) -> None:
         )
 
 
+def _m018_forward_binding(conn: DBConn) -> None:
+    """forward_mappings (T-247): optional payload binding as a JSON TEXT column.
+
+    ``binding`` stores the Ronny form ``{"rules": [{"sources": [str, …],
+    "target": str}, …], "separator": "…"}`` as a ``json.dumps`` string;
+    NULL = no binding = legacy passthrough 1:1 (no backfill: the 6 live
+    mappings stay binding-NULL by definition, plan risk row 5). NOT a
+    foreign key — it carries field NAMES, not references to any row; no
+    index (lookups are the row's own UNIQUE(node_id, slot) reads; no
+    query filters by binding content). The idempotent
+    ``_column_names`` guard follows the migration-17 pattern
+    (core/db.py:1047-1053). ``_schema()`` stays untouched — fresh DBs get
+    the column via the baseline migration replay (core/db.py:1111-1133).
+    Contracts: design.md §2.
+    """
+    cols = _column_names(conn, "forward_mappings")
+    if "binding" not in cols:
+        _exec(conn, "ALTER TABLE forward_mappings ADD COLUMN binding TEXT")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -1078,6 +1098,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (15, "forward_slots_table", _m015_forward_slots_table),
     (16, "forward_slot_types", _m016_forward_slot_types),
     (17, "forward_mapping_pins", _m017_forward_mapping_pins),
+    (18, "forward_binding", _m018_forward_binding),
 ]
 
 

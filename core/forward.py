@@ -26,6 +26,7 @@ from typing import (  # noqa: UP035  (frozen contract: stub imports kept verbati
 )
 
 from relay_server.core.db import DBConn, get_conn, q
+from relay_server.models.capability import CapabilityInputSchema
 from sqlalchemy import exc as sa_exc
 
 FORWARD_CAPABILITY: Final[str] = "forward"
@@ -39,6 +40,21 @@ SLOT_TYPES: Final[frozenset[str]] = frozenset(
     {SLOT_TYPE_FORWARD, SLOT_TYPE_TEXT, SLOT_TYPE_BOOL}
 )
 DEFAULT_SLOT_TYPE: Final[str] = SLOT_TYPE_FORWARD
+
+DEFAULT_BINDING_SEPARATOR: Final[str] = "\n\n"
+
+# T-247 §10: the known Flow prompt fields — verbatim mirror of the live
+# handler chain PROMPT_KEYS = ("task", "prompt", "question", "message",
+# "input") (iowap-flow/handlers/agent_ai.py:44, "D6 order"); server-owned
+# copy, flow repo untouched (Server-only card). These fields survive the
+# unbound-fields sweep at submit (apply_binding, design §3.3) so a
+# handler's prompt channel cannot be eaten by an unbinding rewrite; the
+# full rationale + rejection of alternatives lives in design.md §10.
+KNOWN_FLOW_PROMPT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"task", "prompt", "question", "message", "input"}
+)
+
+BINDING_STRING_MAX_CHARS: Final[int] = 255  # per source/target name; parity with target_capability cap
 
 
 class ForwardRoutingError(Exception):
@@ -204,6 +220,223 @@ def normalize_slot_ref(entry: Mapping[str, Any], slot_type: str) -> Optional[tup
     return (ref_slot, raw_field)
 
 
+def validate_binding_form(binding: Any) -> Optional[dict[str, Any]]:  # noqa: UP045  (frozen signature: Optional)
+    """Validate the FORM of a forward-mapping binding (T-247 C1/C2).
+
+    ``None`` (field omitted / explicit null) returns ``None`` = legacy
+    passthrough — callers short-circuit on falsy before the semantic
+    checks below. Otherwise the value must be a dict exactly of the
+    Ronny form: ``{"rules": [{"sources": [str, …], "target": str}, …],
+    "separator": str}`. Rules: 1..N entries; each rule a dict with
+    exactly the keys ``sources`` + ``target``; ``sources`` a non-empty
+    list of distinct strings, each 1..BINDING_STRING_MAX_CHARS chars
+    with NO leading/trailing whitespace (a padded name could never match
+    an exact payload key — loud at PUT instead of a silent dead rule);
+    ``target`` the same string rules; ``target`` names are DISJOINT
+    across rules (a duplicate would make the projection order-dependent,
+    plan C2); an optional ``separator`` must be a str (any content,
+    incl. "" — adjacent join is a legitimate form; payload bloat is
+    bounded by the task payload cap at submit, models/task.py:34-41).
+    The normalized form is returned as
+    ``{"rules": [{"sources": […], "target": …}, …], "separator": str}``
+    with an absent ``separator`` defaulted to DEFAULT_BINDING_SEPARATOR.
+    Shared by the PUT ladder (core/forward.py, design §4 step 8) and the
+    submit-time stored-JSON re-parse (design §6) — single semantic
+    authority. Violations raise ``ForwardRoutingError(
+    "forward_binding_invalid", 422, …)``. Contracts: design.md §3/§4.
+    """
+    def _bad(msg: str) -> ForwardRoutingError:
+        return ForwardRoutingError("forward_binding_invalid", 422, msg)
+
+    if binding is None:
+        return None
+    if not isinstance(binding, dict):
+        raise _bad(f"binding must be an object, got {type(binding).__name__}")
+
+    rules = binding.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise _bad(
+            "binding 'rules' must be a non-empty list, got"
+            f" {type(rules).__name__ if rules is not None else 'nothing'}"
+        )
+
+    separator = DEFAULT_BINDING_SEPARATOR
+    if "separator" in binding:
+        raw_separator = binding["separator"]
+        if not isinstance(raw_separator, str):
+            raise _bad(
+                "binding 'separator' must be a string, got"
+                f" {type(raw_separator).__name__}"
+            )
+        separator = raw_separator
+
+    def _name_violation(name: Any, what: str) -> str | None:
+        """String rules for source/target names, or the first-offender msg."""
+        if not isinstance(name, str):
+            return f"{what} must be a string, got {type(name).__name__}"
+        if not 1 <= len(name) <= BINDING_STRING_MAX_CHARS:
+            return (
+                f"{what} must be 1..{BINDING_STRING_MAX_CHARS} chars,"
+                f" got a {len(name)}-char name"
+            )
+        if name.strip() != name:
+            return f"{what} must not carry leading/trailing whitespace"
+        return None
+
+    normalized_rules: list[dict[str, Any]] = []
+    targets_seen: set[str] = set()
+    for i, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise _bad(f"rule {i}: must be an object, got {type(rule).__name__}")
+        if set(rule) != {"sources", "target"}:
+            raise _bad(
+                f"rule {i}: must carry exactly 'sources' and 'target', got"
+                f" {sorted(str(k) for k in rule)}"
+            )
+        sources = rule["sources"]
+        if not isinstance(sources, list) or not sources:
+            raise _bad(
+                f"rule {i}: 'sources' must be a non-empty list, got"
+                f" {type(sources).__name__ if sources is not None else 'nothing'}"
+            )
+        seen_sources: set[str] = set()
+        for j, source in enumerate(sources):
+            violation = _name_violation(source, f"rule {i} source {j}")
+            if violation:
+                raise _bad(violation)
+            if source in seen_sources:
+                raise _bad(f"rule {i}: duplicate source '{source}'")
+            seen_sources.add(source)
+        target = rule["target"]
+        violation = _name_violation(target, f"rule {i} target")
+        if violation:
+            raise _bad(violation)
+        if target in targets_seen:
+            raise _bad(
+                f"rule {i}: duplicate target '{target}' across rules (targets"
+                " must be disjoint — a duplicate would make the projection"
+                " order-dependent)"
+            )
+        targets_seen.add(target)
+        normalized_rules.append({"sources": list(sources), "target": target})
+
+    return {"rules": normalized_rules, "separator": separator}
+
+
+def schema_field_names(
+    schema: Any, origin: str, code: str = "forward_binding_invalid"
+) -> frozenset[str]:
+    """Extract the field names an ``input_schema`` declares (T-247 C3/D-09).
+
+    ``schema`` is the PARSED native dict (the caller has already
+    json.loads'd the DB text and rejected None). Both canonical
+    ``CapabilityInputSchema.from_dict`` forms are accepted — nested
+    ``{"fields": {name: spec}}`` and flat ``{name: spec}``
+    (models/capability.py:83) — plus list-valued field sets handled by
+    ``_iter_raw_fields`` (models/capability.py:71-76, entries keyed by an
+    explicit ``name`` attr or their position). Minimal detail-grad
+    (design D-06): ONLY names are extracted; ``type``/``required``
+    entry contents are not additionally validated (from_dict supplies
+    defaults, models/capability.py:89-90). Failure classes:
+    non-dict schema → ForwardRoutingError(code, 422, f"{origin}: …");
+    from_dict raising (a scalar field spec crashes ``raw.get``,
+    models/capability.py:86-95 — AttributeError/TypeError/JSONDecodeError
+    class) → wrapped to the SAME (code, 422) with the origin named — loud,
+    never a 500. ``origin`` is a human label used verbatim in the message
+    (e.g. "pin node 'P' capability 'agent.ai'", "slot 'plan' of node 'S'",
+    "referenced slot 'plan'"). Contracts: design.md §4/§6.
+    """
+    if not isinstance(schema, dict):
+        raise ForwardRoutingError(
+            code,
+            422,
+            f"{origin}: input_schema must be an object, got"
+            f" {type(schema).__name__}",
+        )
+    try:
+        parsed = CapabilityInputSchema.from_dict(schema)
+    except Exception as exc:  # deliberate D-07 wrap → loud 422 with the origin
+        raise ForwardRoutingError(
+            code,
+            422,
+            f"{origin}: unparseable input_schema: {exc}",
+        ) from exc
+    return frozenset(parsed.fields.keys())
+
+
+def apply_binding(
+    payload: Mapping[str, Any],
+    rules: List[Mapping[str, Any]],  # noqa: UP006  (frozen signature: List)
+    separator: str = DEFAULT_BINDING_SEPARATOR,
+) -> dict[str, Any]:
+    """Apply binding rules to a stage payload; returns the rewritten dict (T-247 C4).
+
+    Rules are applied IN ORDER over a working copy of ``payload``:
+
+    1. A rule "fires" when ≥1 of its ``sources`` is a key of the working
+       copy. With one present source the value is COPIED verbatim (native
+       type, no stringify); with several present sources the values are
+       joined — each non-str value is rendered with ``json.dumps`` (object/
+       bool round-trip; str values join unquoted) — using ``separator``
+       (list order = join order), and written as ``payload[target]``.
+    2. A fired rule CONSUMES its matched sources: they are removed from the
+       working copy, except a source that is the rule's own ``target``
+       (write-then-sweep would otherwise delete the value). A DORMANT rule
+       (zero present sources) writes and consumes nothing.
+    3. Chaining is allowed: a later rule may read a field an earlier rule
+       wrote (targets are disjoint — PUT form, design §3.1); consumption is
+       deterministic (later consumption wins over an earlier target write
+       in the final projection).
+    4. After the last rule the UNBOUND-FIELDS rule applies (plan C2, T-245
+       Decision-6 anti-drift): every surviving key must be a written
+       ``target`` OR a member of ``KNOWN_FLOW_PROMPT_FIELDS`` (the design
+       §10 reserved set); everything else is dropped.
+
+    Pure: the caller assigns the result to ``stage["payload"]``. No
+    claim/owner/gate field is touched here (C4: payload-only — the pin
+    transfer and capability rewrite are separate assignments in
+    resolve_forward_stages, design §6). Contracts: design.md §3/§6.
+    """
+    working: dict[str, Any] = dict(payload)
+    written_targets: set[str] = set()
+    for rule in rules:
+        # The caller passes VALIDATED form rules (design §3.1) — direct
+        # access, missing keys are loud at the form boundary.
+        sources = list(rule["sources"])
+        target = rule["target"]
+        present = [s for s in sources if s in working]
+        if not present:
+            # A DORMANT rule (zero present sources) writes and consumes
+            # nothing — but the final projection below still applies
+            # ("kein stillem Passthrough", plan Architecture).
+            continue
+        if len(present) == 1:
+            # Copy the field value verbatim (native type, no stringify).
+            value = working[present[0]]
+        else:
+            # Join: str values unquoted, every other value json.dumps'd
+            # (object/bool round-trip); list order = join order.
+            parts = [
+                working[s] if isinstance(working[s], str) else json.dumps(working[s])
+                for s in present
+            ]
+            value = separator.join(parts)
+        working[target] = value
+        written_targets.add(target)
+        # A fired rule CONSUMES its matched sources — except a source that
+        # is the rule's own target (write-then-sweep would delete it).
+        for s in present:
+            if s != target:
+                del working[s]
+    # Unbound-fields sweep (T-245 Decision-6 anti-drift): written targets
+    # and the §10 reserved prompt set survive; everything else flies.
+    return {
+        key: value
+        for key, value in working.items()
+        if key in written_targets or key in KNOWN_FLOW_PROMPT_FIELDS
+    }
+
+
 def load_slot_declaration(conn: DBConn, node_id: str, slot: str) -> Optional[str]:  # noqa: UP045  (frozen signature: Optional)
     """Load a declared slot's stored ``slot_type`` (T-245 C5 submit gate).
 
@@ -249,6 +482,14 @@ def resolve_forward_stages(
     (None = unpinned) next to ``capability``/``forward_slot``; the T-245 type
     gate still runs BEFORE the mapping SELECT, so a value-declared slot
     refuses with ``forward_slot_not_routable`` regardless of any pin.
+    T-247: a mapping's stored ``binding`` (Ronny form: rules + separator)
+    is parsed and form-validated in the VALIDATION pass — corrupt/
+    shape-broken rows refuse the submit with 422 ``forward_binding_invalid``
+    (never a silent passthrough, never a 500), and the rewrite pass
+    projects the payload (copy/join per rules; unbound non-reserved fields
+    dropped; the ``KNOWN_FLOW_PROMPT_FIELDS`` reserved set survives —
+    design.md §10). No schema re-check at submit (Consumer-Zwang rejected,
+    D-09); claim gates/owner semantics are untouched (payload-only).
     Read-only SELECTs —
     the task write happens in ``Scheduler.create_task``. Contracts:
     design.md §3.1.c + §7.
@@ -297,7 +538,7 @@ def resolve_forward_stages(
                 )
             mrow = conn.execute(
                 q(
-                    "SELECT target_capability, target_node_id"
+                    "SELECT target_capability, target_node_id, binding"
                     " FROM forward_mappings"
                     " WHERE node_id = ? AND slot = ?",
                     (submitter_node_id, slot),
@@ -318,12 +559,31 @@ def resolve_forward_stages(
                     422,
                     "mapping points at the forward pseudo-capability",
                 )
+            # T-247: parse + form-validate the stored binding in the VALIDATION
+            # pass (all-or-nothing); corrupt/shape-broken rows refuse the submit
+            # LOUD (forward_binding_invalid) — never a silent passthrough, never a
+            # 500 (D-07: the guarded-parse class here overrides the unguarded
+            # legacy idiom intentionally; the message names node+slot).
+            raw_binding = mrow["binding"]
+            if raw_binding is None:
+                bound_form = None
+            else:
+                try:
+                    bound_form = validate_binding_form(json.loads(raw_binding))
+                except json.JSONDecodeError as exc:
+                    raise ForwardRoutingError(
+                        "forward_binding_invalid",
+                        422,
+                        f"corrupt binding JSON on mapping (node"
+                        f" '{submitter_node_id}', slot '{slot}'): {exc}",
+                    ) from exc
             resolved.append(
                 {
                     "stage": stage,
                     "slot": slot,
                     "target": target,
                     "pin": mrow["target_node_id"],
+                    "binding": bound_form,
                 }
             )
     finally:
@@ -343,15 +603,27 @@ def resolve_forward_stages(
         # The claiming node receives a payload shaped for the real target —
         # slot provenance lives on the stage column, not in the payload.
         payload.pop("forward_slot", None)
-        stage["payload"] = payload
+        # T-247: binding projects the payload (Copy/join per rules,
+        # unbound fields fly except the reserved prompt fields, §3.3/
+        # §10). Payload-only — capability/pin/claim fields are already
+        # set and are NOT touched here (C4).
+        if entry["binding"] is not None:
+            payload = apply_binding(
+                payload,
+                entry["binding"]["rules"],
+                entry["binding"]["separator"],
+            )
+        stage["payload"] = payload  # still a dict here; JSON-string at storage
 
 
 def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]:  # noqa: UP045  (frozen signature)
     """List mappings (all, or filtered by ``node_id``).
 
     Rows carry exactly ``node_id, slot, target_capability, target_node_id,
-    created_at, updated_at`` (no internal ``mapping_id``), ordered by node_id,
-    slot. Unknown ``node_id`` → 404 ``forward_node_unknown``. Contracts:
+    binding, created_at, updated_at`` (no internal ``mapping_id``; ``binding``
+    = parsed native dict or None — writer-validated parse — the upsert is
+    the only writer), ordered by node_id, slot. Unknown ``node_id`` → 404
+    ``forward_node_unknown``. Contracts:
     design.md §3.1.d + T-246 design §3.3.
     """
     conn = get_conn()
@@ -369,7 +641,7 @@ def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]
             rows = conn.execute(
                 q(
                     "SELECT node_id, slot, target_capability, target_node_id,"
-                    " created_at, updated_at"
+                    " binding, created_at, updated_at"
                     " FROM forward_mappings WHERE node_id = ?"
                     " ORDER BY node_id ASC, slot ASC",
                     (node_id,),
@@ -379,11 +651,22 @@ def list_forward_mappings(node_id: Optional[str] = None) -> list[dict[str, Any]]
             rows = conn.execute(
                 q(
                     "SELECT node_id, slot, target_capability, target_node_id,"
-                    " created_at, updated_at"
+                    " binding, created_at, updated_at"
                     " FROM forward_mappings ORDER BY node_id ASC, slot ASC"
                 )
             ).fetchall()
-        return [dict(r) for r in rows]
+        # D-06 readback: only the validating upsert writes the TEXT — the
+        # parse is unguarded; a hand-corrupted row fails loud (design §2.3).
+        out: List[dict[str, Any]] = []  # noqa: UP006  (frozen signature: List)
+        for r in rows:
+            out_row = dict(r)
+            out_row["binding"] = (
+                json.loads(out_row["binding"])
+                if out_row["binding"] is not None
+                else None
+            )
+            out.append(out_row)
+        return out
     finally:
         conn.close()
 
@@ -400,6 +683,11 @@ def replace_forward_slots(node_id: str, slots: Any) -> int:
     declaration — and only a fully valid declaration reaches the
     DELETE/INSERT write, so a rejected declaration leaves the previous rows
     intact (the heartbeat stays 200 via core/discovery.py swallow-and-log).
+    T-247 (D-09 fulfillment): a declared ref is ALSO content-checked in
+    Phase A2 — ``ref_field`` must be a field of the referenced slot's
+    ``input_schema`` (schema-gated refs: a referenced slot without
+    ``input_schema`` → 422 ``forward_slot_invalid``; unparseable referenced
+    schema → 422 ditto, origin named).
     An absent ``type`` resolves to ``forward`` and is persisted resolved
     (never NULL, D-08); ``value`` and ``input_schema`` are persisted as
     ``json.dumps`` strings (read back as native JSON by ``list_forward_slots``).
@@ -466,6 +754,7 @@ def replace_forward_slots(node_id: str, slots: Any) -> int:
     # last-wins like the upsert below). A ref must target a forward slot;
     # cycles are structurally impossible (value slots are not referable).
     type_map: dict[str, str] = {row["slot"]: row["slot_type"] for row in parsed}
+    schema_map: dict[str, Any] = {row["slot"]: row["input_schema"] for row in parsed}
     for row in parsed:
         if row["ref_slot"] is None:
             continue
@@ -475,6 +764,33 @@ def replace_forward_slots(node_id: str, slots: Any) -> int:
                 422,
                 f"slot '{row['slot']}': ref_slot '{row['ref_slot']}' must"
                 " reference a forward slot declared in the same request",
+            )
+        # T-247 (D-09 fulfillment): a declared ref is content-checked —
+        # schema-gated (a referenced slot WITHOUT input_schema is refused)
+        # and the ref_field must be one of the referenced slot's declared
+        # field names. Unparseable schema → the same loud wrap (origin
+        # named). Heartbeats stay 200 via the swallow-and-log caller; the
+        # two-phase order keeps the previous valid rows intact.
+        referenced = schema_map.get(row["ref_slot"])
+        if referenced is None:
+            raise ForwardRoutingError(
+                "forward_slot_invalid",
+                422,
+                f"slot '{row['slot']}': ref_field '{row['ref_field']}'"
+                f" requires the referenced slot '{row['ref_slot']}'"
+                " to declare an input_schema",
+            )
+        names = schema_field_names(
+            referenced,
+            f"referenced slot '{row['ref_slot']}'",
+            code="forward_slot_invalid",
+        )
+        if row["ref_field"] not in names:
+            raise ForwardRoutingError(
+                "forward_slot_invalid",
+                422,
+                f"slot '{row['slot']}': ref_field '{row['ref_field']}'"
+                f" is not a field of slot '{row['ref_slot']}'" + "'s input_schema",
             )
 
     # ── Phase B — persistence, only after full validation.
@@ -601,22 +917,33 @@ def upsert_forward_mapping(
     slot: Any,
     target_capability: Any,
     target_node_id: Any = None,
+    binding: Any = None,
 ) -> dict[str, Any]:
     """Create or update a (node, slot) mapping after full validation.
 
-    Validation ladder (design.md §3, T-246): slot normalization (422
-    forward_mapping_invalid) → target strip/shape (422 forward_mapping_invalid)
-    → target == forward (400 redirect_self) → submitter node existence (404
-    forward_node_unknown) → pin form: non-str or >64 chars (422
-    target_node_invalid), strip, ``""`` → ``None`` = unpin → pin path: pin-node
-    existence (422 target_node_unknown) then the node-scoped capability check
-    (422 target_node_lacks_capability — ``node_capabilities WHERE node_id = ?
-    AND capability_name = ?``, the EXACT row query, never the aggregate;
-    core/forward.py:633-644); unpinned path: legacy aggregate catalog check
-    (422 target_unknown_capability, unchanged) → insert-or-update keeping
-    ``created_at`` + ``mapping_id``. The pin is replaced on EVERY PUT
-    (full-row replace, like ``target_capability``); a PUT that omits it
-    unpins. Returns the post-write row (list keys incl. ``target_node_id``).
+    Validation ladder (design.md §4, T-247): slot normalization (422
+    forward_mapping_invalid) → target strip/shape (422
+    forward_mapping_invalid) → target == forward (400 redirect_self) →
+    submitter node existence (404 forward_node_unknown) → pin form
+    (422 target_node_invalid) → pin path (422 target_node_unknown /
+    target_node_lacks_capability) → unpinned aggregate check (422
+    target_unknown_capability) — steps 1-7 byte-identical to T-246 —
+    then T-247 steps 8-9 (design.md §4): binding FORM validation
+    (validate_binding_form; None/omitted = legacy passthrough, full-row
+    replace like the pin; 422 forward_binding_invalid) and binding FIELD
+    checks on the same conn — SOURCES against the submitter's
+    forward_slots.input_schema when the slot declares one (422
+    forward_binding_unknown_source_field; undeclared = free names, D-02);
+    TARGETS against the pin node's capability row input_schema
+    (``SELECT input_schema FROM node_capabilities WHERE node_id = ? AND
+    capability_name = ?`` — the exact T-246 row query, never the aggregate,
+    D-03) on the pin path, resp. the slot's input_schema on the unpinned
+    path (plan C3; 422 forward_binding_unknown_target_field when the
+    schema lacks the target, 422 forward_binding_requires_schema when no
+    usable schema exists in the branch). The binding is stored as
+    ``json.dumps`` of the normalized form; the readback carries it as the
+    parsed native dict (or None). Returns the post-write row (list keys
+    incl. ``target_node_id`` + ``binding``).
     """
     slot = normalize_slot(slot)
 
@@ -721,6 +1048,124 @@ def upsert_forward_mapping(
                     f"target capability '{target}' is not advertised by any node",
                 )
 
+        # ── T-247 step 8 — binding FORM validation (design.md §4, ladder
+        # step 8): pure/DB-free, runs on both pin/unpinned paths. None /
+        # omitted = legacy passthrough — no check, full-row replace like
+        # the pin (D-05). Transport tolerance: the endpoint passes the
+        # parsed pydantic ``binding``; ``model_dump()`` is exactly the
+        # canonical dict form (models BindingRules, test 32) — the form
+        # authority below stays dict-only (design §3.1).
+        form = None
+        if binding is not None:
+            if not isinstance(binding, dict) and hasattr(binding, "model_dump"):
+                binding = binding.model_dump()
+            form = validate_binding_form(binding)
+
+        # ── T-247 step 9 — binding FIELD checks (design.md §4.2 branch
+        # table), on the SAME conn as steps 4-7. SOURCES validate against
+        # the submitter's slot declaration ONLY when it declares an
+        # input_schema (D-02); TARGETS are hard in both branches.
+        if form is not None:
+            slot_row = conn.execute(
+                q(
+                    "SELECT input_schema FROM forward_slots"
+                    " WHERE node_id = ? AND slot = ?",
+                    (node_id, slot),
+                )
+            ).fetchone()
+            raw_slot_schema = slot_row["input_schema"] if slot_row is not None else None
+            slot_names: frozenset[str] | None = None
+            if raw_slot_schema is not None:
+                try:
+                    slot_schema = json.loads(raw_slot_schema)
+                except json.JSONDecodeError as exc:
+                    raise ForwardRoutingError(
+                        "forward_binding_invalid",
+                        422,
+                        f"slot '{slot}' of node '{node_id}': corrupt"
+                        f" input_schema JSON: {exc}",
+                    ) from exc
+                # A slot that declares NO schema stores json.dumps(None) =
+                # "null" (T-245 writer) — semantically the NULL schema:
+                # sources pass unvalidated, the targets branch decides
+                # requires_schema (the caller rejects None — design §3.2).
+                if slot_schema is not None:
+                    slot_names = schema_field_names(
+                        slot_schema, f"slot '{slot}' of node '{node_id}'"
+                    )
+                    for rule in form["rules"]:
+                        for source_name in rule["sources"]:
+                            if source_name not in slot_names:
+                                raise ForwardRoutingError(
+                                    "forward_binding_unknown_source_field",
+                                    422,
+                                    f"slot '{slot}' of node '{node_id}':"
+                                    f" binding source '{source_name}' is not a"
+                                    " field of the slot's input_schema",
+                                )
+            if pin is not None:
+                # Pinned targets = the EXACT (pin, target_capability) row's
+                # input_schema (D-03) — never the aggregate. Two distinct
+                # absences, two codes: no contract row → requires_schema;
+                # a present-but-∅ schema → unknown_target_field.
+                cap_row = conn.execute(
+                    q(
+                        "SELECT input_schema FROM node_capabilities"
+                        " WHERE node_id = ? AND capability_name = ?",
+                        (pin, target),
+                    )
+                ).fetchone()
+                if cap_row is None or cap_row["input_schema"] is None:
+                    raise ForwardRoutingError(
+                        "forward_binding_requires_schema",
+                        422,
+                        f"pin node '{pin}' capability '{target}': no"
+                        " input_schema declared — a binding requires the"
+                        " provider's declared contract",
+                    )
+                try:
+                    pin_schema = json.loads(cap_row["input_schema"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise ForwardRoutingError(
+                        "forward_binding_invalid",
+                        422,
+                        f"pin node '{pin}' capability '{target}': corrupt"
+                        f" input_schema JSON: {exc}",
+                    ) from exc
+                pin_names = schema_field_names(
+                    pin_schema, f"pin node '{pin}' capability '{target}'"
+                )
+                for rule in form["rules"]:
+                    if rule["target"] not in pin_names:
+                        raise ForwardRoutingError(
+                            "forward_binding_unknown_target_field",
+                            422,
+                            f"pin node '{pin}' capability '{target}':"
+                            f" binding target '{rule['target']}' is not a"
+                            " field of the capability's input_schema",
+                        )
+            else:
+                # Unpinned: the SAME slot schema as the sources step (plan
+                # C3 — never the orphan-vulnerable aggregate, D-04). The
+                # binding path is only allowed WITH a declared schema.
+                if slot_names is None:
+                    raise ForwardRoutingError(
+                        "forward_binding_requires_schema",
+                        422,
+                        f"slot '{slot}' of node '{node_id}': no input_schema"
+                        " declared — an unpinned binding requires the"
+                        " slot's declared contract",
+                    )
+                for rule in form["rules"]:
+                    if rule["target"] not in slot_names:
+                        raise ForwardRoutingError(
+                            "forward_binding_unknown_target_field",
+                            422,
+                            f"slot '{slot}' of node '{node_id}':"
+                            f" binding target '{rule['target']}' is not a"
+                            " field of the slot's input_schema",
+                        )
+
         now = datetime.now(UTC).isoformat()
         existing = conn.execute(
             q(
@@ -736,9 +1181,18 @@ def upsert_forward_mapping(
                     q(
                         "INSERT INTO forward_mappings"
                         " (mapping_id, node_id, slot, target_capability,"
-                        " target_node_id, created_at, updated_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (mapping_id, node_id, slot, target, pin, now, now),
+                        " target_node_id, binding, created_at, updated_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            mapping_id,
+                            node_id,
+                            slot,
+                            target,
+                            pin,
+                            json.dumps(form) if form is not None else None,
+                            now,
+                            now,
+                        ),
                     )
                 )
             except (sqlite3.IntegrityError, sa_exc.IntegrityError):
@@ -759,21 +1213,33 @@ def upsert_forward_mapping(
             conn.execute(
                 q(
                     "UPDATE forward_mappings SET target_capability = ?,"
-                    " target_node_id = ?, updated_at = ?"
+                    " target_node_id = ?, binding = ?, updated_at = ?"
                     " WHERE mapping_id = ?",
-                    (target, pin, now, existing["mapping_id"]),
+                    (
+                        target,
+                        pin,
+                        json.dumps(form) if form is not None else None,
+                        now,
+                        existing["mapping_id"],
+                    ),
                 )
             )
         row = conn.execute(
             q(
                 "SELECT node_id, slot, target_capability, target_node_id,"
-                " created_at, updated_at"
+                " binding, created_at, updated_at"
                 " FROM forward_mappings WHERE node_id = ? AND slot = ?",
                 (node_id, slot),
             )
         ).fetchone()
         conn.commit()
-        return dict(row)
+        # D-06 readback: the validating upsert is the only writer of this
+        # TEXT — unguarded parse, a corrupt row fails loud (design §2.3).
+        out = dict(row)
+        out["binding"] = (
+            json.loads(out["binding"]) if out["binding"] is not None else None
+        )
+        return out
     finally:
         conn.close()
 

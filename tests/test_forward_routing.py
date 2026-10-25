@@ -440,7 +440,7 @@ class TestMappingApi:
         )
         assert set(created) == {
             "node_id", "slot", "target_capability", "target_node_id",
-            "created_at", "updated_at",
+            "binding", "created_at", "updated_at",
         }
         assert created["node_id"] == submitter_id
         assert created["slot"] == "a"
@@ -548,6 +548,7 @@ class TestMappingApi:
 class TestSchema:
     def test_migration_creates_forward_mappings_and_forward_slot(self):
         # T-246: target_node_id column included (migration 17).
+        # T-247: binding column included (migration 18).
         conn = get_conn()
         cols = [
             r[1]
@@ -557,7 +558,7 @@ class TestSchema:
         ]
         assert set(cols) == {
             "mapping_id", "node_id", "slot", "target_capability",
-            "target_node_id", "created_at", "updated_at",
+            "target_node_id", "binding", "created_at", "updated_at",
         }
 
         _seed_node("mnode", capabilities=["agent.ai"])
