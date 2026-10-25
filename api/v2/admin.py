@@ -147,6 +147,11 @@ async def admin_delete_node(
         conn.execute(q("DELETE FROM node_tokens WHERE node_id = ?", (node_id,)))
         conn.execute(q("DELETE FROM presence WHERE node_id = ?", (node_id,)))
         conn.execute(q("DELETE FROM forward_mappings WHERE node_id = ?", (node_id,)))
+        # T-249: declared forward slots carry an FK to nodes — without this
+        # cleanup the delete fails with IntegrityError (foreign_keys ON) and
+        # the dashboard delete button reports "Delete failed" (live hit with
+        # the T-245 probe node, 2026-10-25).
+        conn.execute(q("DELETE FROM forward_slots WHERE node_id = ?", (node_id,)))
         conn.execute(
             q("UPDATE tasks SET owner_node_id = NULL WHERE owner_node_id = ?", (node_id,)),
         )
