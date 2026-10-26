@@ -789,8 +789,7 @@ function fwdRenderBindingEditor() {
         ? "Target = dropdown (capability schema). Sources: chips (slot schema) or datalist-suggested free text (known prompt fields)."
         : "The capability declares no input_schema — target free-typed (the PUT validates hard; unpinned bindings need the slot schema)."}</small>
       <div id="fwdPreviewCard" style="margin-top:.6rem;padding:.5rem;border:1px dashed rgba(127,127,127,.4);border-radius:.4rem;">
-        <span class="muted" style="font-size:.9rem;">selected capability — the schema form the server PUT validates against</span>
-        <div id="fwdCapSpec" style="font-size:.82rem;margin-top:.3rem;max-height:9rem;overflow:auto;"></div>
+        <div id="fwdCapSpec"></div>
         <span class="muted" style="font-size:.9rem;">preview — flow submit → node payload (live simulator, mirrors <code>apply_binding</code>)</span>
         <div style="display:flex;gap:.7rem;align-items:stretch;flex-wrap:wrap;margin-top:.35rem;">
           <div style="flex:1 1 21rem;min-width:18rem;">
@@ -887,38 +886,27 @@ const FWD_PREVIEW_SAMPLE_DEFAULT = JSON.stringify(
   2
 );
 
-// T-251/T-250: render the SELECTED capability's spec — the server's
-// input_schema form (name, type, required, description) — the same rows
-// the hard PUT check validates against. Display-only.
+// T-251/T-250: render the SELECTED capability **so wie immer** (Ronny
+// 2026-10-26) — the IDENTICAL card form the node profile renders for
+// every capability (card-title / card-sub type·version / card-sub
+// description via richDesc incl. the Parameter:/notable: line markers /
+// the full input_schema <pre> — the same rows the hard PUT validates
+// against). Display-only, no re-styling of its own.
 function fwdRenderCapSpec(capName) {
   const el = document.getElementById("fwdCapSpec");
   if (!el) return;
   const cap = (fwdCapabilities || []).find((c) => c && c.name === capName);
-  if (!cap || !cap.input_schema) {
-    el.innerHTML = `<span class="muted">${escHtml(capName)}: no input_schema declared (target free-typed)</span>`;
+  if (!cap) {
+    el.innerHTML = `<p class="empty">Capability not in the cluster catalog.</p>`;
     return;
   }
-  const schema = cap.input_schema;
-  const fields =
-    schema && schema.fields && typeof schema.fields === "object"
-      ? schema.fields
-      : schema;
-  if (!fields || typeof fields !== "object") {
-    el.innerHTML = `<span class="muted">${escHtml(capName)}: schema unreadable</span>`;
-    return;
-  }
-  const rows = Object.entries(fields)
-    .map(([n, spec]) => {
-      const s = (spec && typeof spec === "object" && "type" in spec) || (spec && typeof spec === "object")
-        ? spec || {}
-        : {};
-      const type = s.type || "—";
-      const req = s.required ? "required" : "optional";
-      const desc = s.description ? ` — ${escHtml(String(s.description).slice(0, 110))}` : "";
-      return `<div><b>${escHtml(n)}</b> <span class="muted">(${escHtml(String(type))}, ${escHtml(req)})</span>${desc}</div>`;
-    })
-    .join("");
-  el.innerHTML = `<div><b>${escHtml(capName)}</b> <span class="muted">v${escHtml(String(cap.version || "?"))} — ${Object.keys(fields).length} fields</span></div>${rows}`;
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-title">${escHtml(cap.name || capName)}${cap.available === false ? ' <span class="tag bad">unavailable</span>' : ""}</div>
+      <div class="card-sub">${escHtml(cap.type || "unknown")} · v${escHtml(cap.version || "1.0.0")}</div>
+      <p class="card-sub">${richDesc(escHtml(cap.description || "No description"))}</p>
+      ${cap.input_schema ? `<pre>${escHtml(JSON.stringify(cap.input_schema, null, 2))}</pre>` : ""}
+    </div>`;
 }
 
 function fwdUpdatePreview() {
