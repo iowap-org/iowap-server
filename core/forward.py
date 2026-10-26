@@ -633,6 +633,40 @@ def resolve_forward_stages(
                 f"submitter node '{submitter_node_id}' is not registered",
             )
 
+        # ── T-253: the submitter's DECLARED VALUE slots (slot_type
+        # text/bool with a stored value) ride as payload DEFAULTS for
+        # every forward stage of the SAME submitter. ``ref_slot`` names
+        # the routing slot the default belongs to (``ref_field`` the
+        # payload field; default = the value slot's own name). Payload
+        # wins: a field the runner actually submits is NEVER
+        # overwritten. Booleans arrive natively (JSON text at storage,
+        # parsed here); the writer's "null" text = no default.
+        value_defaults: dict[str, dict[str, Any]] = {}
+        vrows = conn.execute(
+            q(
+                "SELECT slot, value, ref_slot, ref_field FROM forward_slots"
+                " WHERE node_id = ? AND slot_type != 'forward'"
+                " AND value IS NOT NULL",
+                (submitter_node_id,),
+            )
+        ).fetchall()
+        for vrow in vrows:
+            raw = vrow["value"]
+            value = None
+            if raw is not None and raw != "null":
+                try:
+                    value = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    value = str(raw)  # the T-245 writer's fallback form
+            if value is None:
+                continue
+            field_name = vrow["ref_field"] or vrow["slot"]
+            forms = value_defaults.setdefault(vrow["ref_slot"] or "*", {})
+            forms[field_name] = value
+        for _k in list(value_defaults):
+            if value_defaults[_k] == {}:
+                del value_defaults[_k]
+
         # Validation pass — resolve EVERY forward stage before any mutation.
         resolved: List[dict[str, Any]] = []  # noqa: UP006  (frozen signature: List)
         for stage in stages:
@@ -713,7 +747,9 @@ def resolve_forward_stages(
     finally:
         conn.close()
 
-    # Rewrite pass — only after full validation (§3.1.c step 4/5).
+    # T-253 (Ronny's original slot-vision, deferred from T-247 D-15):
+    # collected INSIDE the conn scope — see the defaults build above the
+    # validation loop. (The rewrite pass uses only the collected dict.)
     for entry in resolved:
         stage = entry["stage"]
         stage["capability"] = entry["target"]
@@ -727,6 +763,14 @@ def resolve_forward_stages(
         # The claiming node receives a payload shaped for the real target —
         # slot provenance lives on the stage column, not in the payload.
         payload.pop("forward_slot", None)
+        # T-253: value-slot defaults inject BEFORE the binding —
+        # ``setdefault`` form (the submitted payload WINS over every
+        # default; the binding then projects exactly what it is told).
+        form_key = entry["slot"]
+        for def_name, def_value in (value_defaults.get(form_key) or {}).items():
+            payload.setdefault(def_name, def_value)
+        for def_name, def_value in (value_defaults.get("*") or {}).items():
+            payload.setdefault(def_name, def_value)
         # T-247: binding projects the payload (Copy/join per rules,
         # unbound fields fly except the reserved prompt fields, §3.3/
         # §10). Payload-only — capability/pin/claim fields are already
