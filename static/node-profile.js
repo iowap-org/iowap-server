@@ -595,7 +595,9 @@ function fwdAddRuleRow(rule) {
   const rulesBox = document.getElementById("fwdRules");
   if (!rulesBox) return;
   const slotVal = (document.getElementById("fwd-slot")?.value || "").trim();
+  const targetVal = document.getElementById("fwd-target")?.value || "";
   const sourceNames = fwdSlotSchemaNames(slotVal);
+  const targetNames = fwdCapabilitySchemaNames(targetVal);
   const hasSourceChips = sourceNames.length > 0;
   const sources = (rule && rule.sources) || [];
   const chips = hasSourceChips
@@ -623,7 +625,7 @@ function fwdAddRuleRow(rule) {
               `<option value="${escAttr(n)}"${(rule && rule.target) === n ? " selected" : ""}>${escHtml(n)}</option>`
           )
           .join("")}
-        <option value=""${ !(rule && rule.target) ? " selected" : ""} disabled hidden>target…</option></select>`
+        <option value=""${ !(rule && rule.target) ? " selected" : ""}>target…</option></select>`
       : `<input type="text" class="fwd-rule-target" list="fwdTargetFields" placeholder="target field…" style="width:16ch;" value="${escAttr((rule && rule.target) || "")}" />`}
     <button type="button" class="fwd-rule-del" title="remove rule">✕</button>
     <br>${hasSlotsSchema}`;
