@@ -839,6 +839,13 @@ function fwdApplyBindingPreview(payload, rules, separator) {
   const working = Object.assign({}, payload || {});
   const written = new Set();
   for (const rule of rules || []) {
+    // T-252 const-rule: no 'sources' key → write the fixed value natively,
+    // consume nothing (mirror of core/forward.py apply_binding).
+    if (!("sources" in (rule || {}))) {
+      working[rule.target] = rule.value;
+      written.add(rule.target);
+      continue;
+    }
     const sources = rule.sources || [];
     const present = sources.filter((s) =>
       Object.prototype.hasOwnProperty.call(working, s)
