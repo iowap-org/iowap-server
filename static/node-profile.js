@@ -695,10 +695,124 @@ function fwdRenderBindingEditor() {
       <small class="muted">${targetNames.length
         ? "Target = dropdown (capability schema). Sources: chips (slot schema) or datalist-suggested free text (known prompt fields)."
         : "The capability declares no input_schema — target free-typed (the PUT validates hard; unpinned bindings need the slot schema)."}</small>
+      <div id="fwdPreviewCard" style="margin-top:.6rem;padding:.5rem;border:1px dashed rgba(127,127,127,.4);border-radius:.4rem;">
+        <span class="muted" style="font-size:.9rem;">preview — flow submit → node payload (live simulator, mirrors <code>apply_binding</code>)</span>
+        <div style="display:flex;gap:.7rem;align-items:stretch;flex-wrap:wrap;margin-top:.35rem;">
+          <div style="flex:1 1 21rem;min-width:18rem;">
+            <small class="muted">flow submits (edit freely):</small>
+            <textarea id="fwdPreviewSample" spellcheck="false"
+              style="width:100%;min-height:6rem;font-family:var(--mono,monospace);font-size:.85rem;"></textarea>
+          </div>
+          <div style="flex:1 1 21rem;min-width:18rem;">
+            <small class="muted">node receives:</small>
+            <div id="fwdPreviewOut" style="font-size:.85rem;"></div>
+          </div>
+        </div>
+      </div>
     </div>`;
-  document.getElementById("fwdAddRule").addEventListener("click", () => fwdAddRuleRow());
-  document.getElementById("fwdMatchName").addEventListener("click", fwdMatchByName);
+  document.getElementById("fwdAddRule").addEventListener("click", () => {
+    fwdAddRuleRow();
+    fwdUpdatePreview();
+  });
+  document.getElementById("fwdMatchName").addEventListener("click", () => {
+    fwdMatchByName();
+    fwdUpdatePreview();
+  });
+  document.getElementById("fwdPreviewSample").value = FWD_PREVIEW_SAMPLE_DEFAULT;
+  // T-251: delegated live re-render — any typing/chip-toggle/target change
+  // inside the section refreshes the preview (remove buttons included).
+  section.addEventListener("input", (e) => {
+    if (e.target.id === "fwd-separator" || e.target.closest("#fwdPreviewCard") || e.target.closest("#fwdRules")) {
+      fwdUpdatePreview();
+    }
+  });
+  section.addEventListener("click", (e) => {
+    if (e.target.closest("#fwdRules")) fwdUpdatePreview();
+  });
   fwdAddRuleRow();
+  fwdUpdatePreview();
+}
+
+// T-251: client mirror of core/forward.py apply_binding (\u00a73-4, T-247) \u2014 the
+// live preview simulator. Byte-order-faithful: rules in order over a working
+// copy; \u22651 present source fires (1 = copy verbatim natively; several = join
+// with separator, non-str \u2192 json.dumps); fired rule consumes sources except
+// its own target; dormant rule writes/consumes nothing; final sweep keeps
+// written targets + the \u00a710 reserved prompt set, everything else flies.
+function fwdApplyBindingPreview(payload, rules, separator) {
+  const working = Object.assign({}, payload || {});
+  const written = new Set();
+  for (const rule of rules || []) {
+    const sources = rule.sources || [];
+    const present = sources.filter((s) =>
+      Object.prototype.hasOwnProperty.call(working, s)
+    );
+    if (!present.length) continue;
+    let value;
+    if (present.length === 1) {
+      value = working[present[0]];
+    } else {
+      value = present
+        .map((s) =>
+          typeof working[s] === "string" ? working[s] : JSON.stringify(working[s])
+        )
+        .join(separator);
+    }
+    working[rule.target] = value;
+    written.add(rule.target);
+    present.forEach((s) => {
+      if (s !== rule.target) delete working[s];
+    });
+  }
+  const out = {};
+  Object.keys(working).forEach((k) => {
+    if (written.has(k) || FWD_KNOWN_PROMPT_FIELDS.includes(k)) out[k] = working[k];
+  });
+  return out;
+}
+
+// T-251 preview-state helpers: the sample payload (editable) + the live
+// before/after render. Parser is lenient: broken JSON surfaces as a message,
+// never as a dead panel.
+const FWD_PREVIEW_SAMPLE_DEFAULT = JSON.stringify(
+  {
+    systemprompt: "Answer ONLY with the plan JSON (schema below).",
+    taskprompt: "Plan the task; capabilities snapshot follows.",
+    original_request: "the user's original request",
+  },
+  null,
+  2
+);
+
+function fwdUpdatePreview() {
+  const outEl = document.getElementById("fwdPreviewOut");
+  if (!outEl) return;
+  let sample;
+  try {
+    sample = JSON.parse(document.getElementById("fwdPreviewSample")?.value || "{}");
+  } catch (e) {
+    outEl.innerHTML = `<span class="bad">sample JSON invalid: ${escHtml(String(e.message).slice(0, 80))}</span>`;
+    return;
+  }
+  const { rules } = fwdHarvestBinding();
+  const separator = fwdSeparatorValue();
+  const result = fwdApplyBindingPreview(sample, rules, separator);
+  const before = Object.keys(sample).sort();
+  const after = result;
+  const afterKeys = Object.keys(after);
+  const rulesView = (rules || [])
+    .map((r) => {
+      const kind = r.sources.length > 1 ? `join (${separator.length ? "sep" : "adjacent"})` : "copy";
+      return `&nbsp;&nbsp;${escHtml(r.sources.join(" + "))} \u2192 <b>${escHtml(r.target)}</b> (${kind})`;
+    })
+    .join("<br>") || "<i>no rules \u2014 legacy passthrough (reserved fields survive)</i>";
+  const fliesList = before.filter((k) => !(k in after));
+  outEl.innerHTML =
+    `<b>rules in effect:</b><br>${rulesView}<br><br>` +
+    `<b>node receives:</b><pre style="margin:.3rem 0;white-space:pre-wrap;">${escHtml(JSON.stringify(after, null, 2))}</pre>` +
+    (fliesList.length
+      ? `<span class="muted">dropped (unbound): ${escHtml(fliesList.join(", "))}</span>`
+      : `<span class="muted">nothing dropped</span>`);
 }
 
 // Harvest the editor's rule rows (DOM is the state while editing). Every rule
