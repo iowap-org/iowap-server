@@ -587,10 +587,25 @@ function fwdCapabilitySchemaNames(target) {
   return fwdSchemaFieldNames(cap ? cap.input_schema : null);
 }
 
-// One rule row: source chips (a declared slot schema exists — click = select)
-// or a free text input (no declared schema — the unvalidated-sources branch
-// of §4.2 is a supported form), the target field with the capability schema
-// datalist, and the remove button.
+function fwdTargetFieldSpec(target, fieldName) {
+  // T-252: the capability field spec for a const-value field — rides
+  // parsed on the capabilities cache (same form the server PUT checks).
+  const cap = (fwdCapabilities || []).find((c) => c && c.name === target);
+  if (!cap || !cap.input_schema) return null;
+  const schema = cap.input_schema;
+  const fields =
+    schema && schema.fields && typeof schema.fields === "object"
+      ? schema.fields
+      : schema;
+  return fields && typeof fields === "object" ? fields[fieldName] || null : null;
+}
+
+// One rule row: source-side **select** (known prompt fields + slot-schema
+// names + "(konstant)" for a fixed-value rule, + "other…" swaps to free
+// text), the target **dropdown** (capability schema fields), and for
+// const rules the value control typed by the TARGET field spec
+// (boolean→checkbox with its description as title, else text input).
+// 1 source = getrennt (copy); several via "source2+" select = join.
 function fwdAddRuleRow(rule) {
   const rulesBox = document.getElementById("fwdRules");
   if (!rulesBox) return;
@@ -598,25 +613,20 @@ function fwdAddRuleRow(rule) {
   const targetVal = document.getElementById("fwd-target")?.value || "";
   const sourceNames = fwdSlotSchemaNames(slotVal);
   const targetNames = fwdCapabilitySchemaNames(targetVal);
-  const hasSourceChips = sourceNames.length > 0;
-  const sources = (rule && rule.sources) || [];
-  const chips = hasSourceChips
-    ? sourceNames
-        .map((n) => {
-          const on = sources.includes(n) ? " on" : "";
-          return `<button type="button" class="fwd-chip${on}" data-name="${escAttr(n)}">${escHtml(n)}</button>`;
-        })
-        .join(" ")
-    : `<input type="text" class="fwd-sources-free" list="fwdSourceFields" placeholder="sources (suggestions via datalist)" value="${escAttr(sources.join(", "))}" style="width:28ch;" />`;
-  const hasSlotsSchema = hasSourceChips
-    ? ""
-    : `<small class="muted">no slot schema → free sources (suggestions = known prompt fields)</small>`;
+  const rules = (rule && rule.sources && rule.sources.length) ? rule.sources : [];
+  const isConst = rule && rule.sources == null && (rule.target || null);
+  const isFreeText = rule && rule.freeText === true;
+  const options = Array.from(new Set(FWD_KNOWN_PROMPT_FIELDS.concat(sourceNames)));
+  const sourceCell = hasSourceChips(sourceNames) && !isConst
+    ? chipCell(rules, sourceNames)
+    : selectCell(options, isConst, rules, isFreeText);
+  const valueHTML = isConst ? fwdConstValueHTML(rule, targetVal, (rule && rule.target) || "", rules) : "";
   const div = document.createElement("div");
   div.className = "fwd-rule";
   div.style.cssText = "display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.4rem;";
   div.innerHTML = `
     <span class="muted">rule ${rulesBox.querySelectorAll(".fwd-rule").length + 1}</span>
-    <span class="fwd-chips" style="display:inline-flex;gap:.25rem;flex-wrap:wrap;">${chips}</span>
+    <span class="fwd-chips" style="display:inline-flex;gap:.25rem;flex-wrap:wrap;">${sourceCell}</span>
     <span class="muted">→</span>
     ${targetNames.length
       ? `<select class="fwd-rule-target" style="width:auto;">${targetNames
@@ -627,13 +637,96 @@ function fwdAddRuleRow(rule) {
           .join("")}
         <option value=""${ !(rule && rule.target) ? " selected" : ""}>target…</option></select>`
       : `<input type="text" class="fwd-rule-target" list="fwdTargetFields" placeholder="target field…" style="width:16ch;" value="${escAttr((rule && rule.target) || "")}" />`}
-    <button type="button" class="fwd-rule-del" title="remove rule">✕</button>
-    <br>${hasSlotsSchema}`;
+    ${valueHTML}
+    <button type="button" class="fwd-rule-del" title="remove rule">✕</button>`;
   rulesBox.appendChild(div);
   div.querySelectorAll(".fwd-chip").forEach((b) => {
-    b.addEventListener("click", () => b.classList.toggle("on"));
+    b.addEventListener("click", () => { b.classList.toggle("on"); fwdUpdatePreview(); });
   });
-  div.querySelector(".fwd-rule-del")?.addEventListener("click", () => div.remove());
+  div.querySelector(".fwd-rule-del")?.addEventListener("click", () => { div.remove(); fwdUpdatePreview(); });
+  const srcSel = div.querySelector(".fwd-source-select");
+  if (srcSel && !isConst) {
+    srcSel.addEventListener("change", () => {
+      if (srcSel.value === "__const__") {
+        // T-252: const row — source select swaps to the (konstant) marker
+        // and the value control (typed by the picked target's spec) appears.
+        const span = document.createElement("span");
+        span.className = "muted";
+        span.title = "const rule — writes a fixed value";
+        span.textContent = "(konstant)";
+        srcSel.replaceWith(span);
+        const holder = document.createElement("span");
+        holder.className = "fwd-const-value";
+        div.insertBefore(holder, div.querySelector(".fwd-rule-del"));
+        holder.innerHTML = fwdConstValueHTML(null, targetVal, (div.querySelector(".fwd-rule-target")?.value || ""), []);
+        const vInp2 = holder.querySelector("input");
+        if (vInp2) vInp2.addEventListener("input", fwdUpdatePreview);
+        if (div.querySelector(".fwd-rule-target")) constTargetWatch(div);
+        fwdUpdatePreview();
+      } else if (srcSel.value === "__other__") {
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.className = "fwd-sources-free f-source-single";
+        inp.setAttribute("list", "fwdSourceFields"); inp.placeholder = "source field name…";
+        inp.style.width = "20ch"; inp.dataset.role = "extra";
+        srcSel.replaceWith(inp); inp.focus();
+      } else if (srcSel.value !== "") {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "fwd-chip on"; b.dataset.name = srcSel.value;
+        b.textContent = srcSel.value;
+        srcSel.replaceWith(b);
+        b.addEventListener("click", () => { b.classList.toggle("on"); fwdUpdatePreview(); });
+      } else fwdUpdatePreview();
+    });
+  }
+  const tgtSel = div.querySelector(".fwd-rule-target");
+  if (tgtSel) constTargetWatch(div);
+}
+
+// T-252: the target dropdown of a rule row watches for const-value swaps —
+// when the target field changes on a const row, the value control re-types
+// to the new field's spec (checkbox/string/number).
+function constTargetWatch(div) {
+  const tgtSel = div.querySelector(".fwd-rule-target");
+  if (!tgtSel) return;
+  tgtSel.addEventListener("change", () => {
+    const holder = div.querySelector(".fwd-const-value");
+    if (holder) {
+      const capName = (document.getElementById("fwd-target")?.value || "");
+      holder.innerHTML = fwdConstValueHTML(null, capName, tgtSel.value || "", []);
+      const vInp = holder.querySelector("input");
+      if (vInp) vInp.addEventListener("input", fwdUpdatePreview);
+    }
+    fwdUpdatePreview();
+  });
+}
+
+function hasSourceChips(sourceNames) { return Array.isArray(sourceNames) && sourceNames.length > 0; }
+function chipCell(sources, names) {
+  return names.map((n) => {
+    const on = sources.includes(n) ? " on" : "";
+    return `<button type="button" class="fwd-chip${on}" data-name="${escAttr(n)}">${escHtml(n)}</button>`;
+  }).join(" ");
+}
+function selectCell(options, isConst, sources, isFreeText) {
+  const o = options.map((n) => `<option value="${escAttr(n)}"${sources.includes(n) ? " selected" : ""}>${escHtml(n)}</option>`).join("");
+  return isConst
+    ? `<span class="muted" title="const rule — writes a fixed value">(konstant)</span>`
+    : (isFreeText
+      ? `<input type="text" class="fwd-sources-free f-source-single" list="fwdSourceFields" placeholder="source…" style="width:18ch;" value="${escAttr(sources[0] || "")}" />`
+      : `<select class="fwd-source-select">
+           <option value=""${sources.length ? "" : " selected"}>quelle…</option>${o}
+           <option value="__const__">(konstant)</option>
+           <option value="__other__">other…</option>
+         </select>`);
+}
+function fwdConstValueHTML(rule, capName, fieldName, _unused) {
+  const spec = fwdTargetFieldSpec(capName, fieldName);
+  const type = spec && spec.type ? String(spec.type) : "string";
+  const title = spec && spec.description ? ` title="${escAttr(String(spec.description).slice(0, 200))}"` : "";
+  const val = rule && rule.value !== undefined ? rule.value : (type === "boolean" ? false : "");
+  if (type === "boolean")
+    return `<span class="fwd-const-value"><label><input type="checkbox" class="fwd-const" ${val === true || val === "true" ? "checked" : ""}${title} />(const)</label></span>`;
+  return `<span class="fwd-const-value"><input type="${type === "integer" || type === "number" ? "number" : "text"}" class="fwd-const" style="width:12ch;" value="${escAttr(val === null || val === undefined ? "" : String(val))}"${title} placeholder="const…"/></span>`;
 }
 
 // The "match by name" helper (board T-247): 1:1 rules from the intersection
@@ -696,6 +789,8 @@ function fwdRenderBindingEditor() {
         ? "Target = dropdown (capability schema). Sources: chips (slot schema) or datalist-suggested free text (known prompt fields)."
         : "The capability declares no input_schema — target free-typed (the PUT validates hard; unpinned bindings need the slot schema)."}</small>
       <div id="fwdPreviewCard" style="margin-top:.6rem;padding:.5rem;border:1px dashed rgba(127,127,127,.4);border-radius:.4rem;">
+        <span class="muted" style="font-size:.9rem;">selected capability — the schema form the server PUT validates against</span>
+        <div id="fwdCapSpec" style="font-size:.82rem;margin-top:.3rem;max-height:9rem;overflow:auto;"></div>
         <span class="muted" style="font-size:.9rem;">preview — flow submit → node payload (live simulator, mirrors <code>apply_binding</code>)</span>
         <div style="display:flex;gap:.7rem;align-items:stretch;flex-wrap:wrap;margin-top:.35rem;">
           <div style="flex:1 1 21rem;min-width:18rem;">
@@ -730,6 +825,7 @@ function fwdRenderBindingEditor() {
     if (e.target.closest("#fwdRules")) fwdUpdatePreview();
   });
   fwdAddRuleRow();
+  fwdRenderCapSpec(target);
   fwdUpdatePreview();
 }
 
@@ -784,6 +880,40 @@ const FWD_PREVIEW_SAMPLE_DEFAULT = JSON.stringify(
   2
 );
 
+// T-251/T-250: render the SELECTED capability's spec — the server's
+// input_schema form (name, type, required, description) — the same rows
+// the hard PUT check validates against. Display-only.
+function fwdRenderCapSpec(capName) {
+  const el = document.getElementById("fwdCapSpec");
+  if (!el) return;
+  const cap = (fwdCapabilities || []).find((c) => c && c.name === capName);
+  if (!cap || !cap.input_schema) {
+    el.innerHTML = `<span class="muted">${escHtml(capName)}: no input_schema declared (target free-typed)</span>`;
+    return;
+  }
+  const schema = cap.input_schema;
+  const fields =
+    schema && schema.fields && typeof schema.fields === "object"
+      ? schema.fields
+      : schema;
+  if (!fields || typeof fields !== "object") {
+    el.innerHTML = `<span class="muted">${escHtml(capName)}: schema unreadable</span>`;
+    return;
+  }
+  const rows = Object.entries(fields)
+    .map(([n, spec]) => {
+      const s = (spec && typeof spec === "object" && "type" in spec) || (spec && typeof spec === "object")
+        ? spec || {}
+        : {};
+      const type = s.type || "—";
+      const req = s.required ? "required" : "optional";
+      const desc = s.description ? ` — ${escHtml(String(s.description).slice(0, 110))}` : "";
+      return `<div><b>${escHtml(n)}</b> <span class="muted">(${escHtml(String(type))}, ${escHtml(req)})</span>${desc}</div>`;
+    })
+    .join("");
+  el.innerHTML = `<div><b>${escHtml(capName)}</b> <span class="muted">v${escHtml(String(cap.version || "?"))} — ${Object.keys(fields).length} fields</span></div>${rows}`;
+}
+
 function fwdUpdatePreview() {
   const outEl = document.getElementById("fwdPreviewOut");
   if (!outEl) return;
@@ -816,17 +946,51 @@ function fwdUpdatePreview() {
 }
 
 // Harvest the editor's rule rows (DOM is the state while editing). Every rule
-// with a target AND ≥1 source is sendable; half-filled rules are surfaced,
-// never silently skipped.
+// with a target AND (≥1 source OR a const value) is sendable; half-filled
+// rules are surfaced, never silently skipped. Const rows (T-252) carry no
+// source select — their value control is the typing evidence.
 function fwdHarvestBinding() {
   const rules = [];
   let incomplete = false;
-  document.querySelectorAll("#fwdRules .fwd-rule").forEach((div) => {
-    const freeInput = div.querySelector(".fwd-sources-free");
-    const sources = freeInput
-      ? freeInput.value.split(",").map((s) => s.trim()).filter(Boolean)
-      : Array.from(div.querySelectorAll(".fwd-chip.on")).map((b) => b.dataset.name);
+  document.querySelectorAll("#fwdRules .fwd-rule").forEach((div, idx) => {
     const target = (div.querySelector(".fwd-rule-target")?.value || "").trim();
+    const srcSel = div.querySelector(".fwd-source-select");
+    const chipOns = Array.from(div.querySelectorAll(".fwd-chip.on")).map((b) => b.dataset.name);
+    const freeInp = div.querySelector(".fwd-sources-free");
+    let sources = [];
+    let isConst = false;
+    let value = undefined;
+    if (srcSel) {
+      // select form: the picked option (or more, via added chips) — an
+      // empty pick on a fresh row = nothing yet (the placeholder row)
+      if (chipOns.length) sources = chipOns;
+      else if (srcSel.value && srcSel.value !== "__other__") sources = [srcSel.value];
+      if (!chipOns.length && !freeInp && (!srcSel.value || srcSel.value === "__other__")) {
+        return; // empty row — ignore
+      }
+    } else if (chipOns.length) {
+      sources = chipOns;
+    } else if (freeInp) {
+      sources = [freeInp.value].map((s) => s.trim()).filter(Boolean);
+      if (!sources.length) return; // empty free row
+    } else if (div.querySelector(".fwd-const-value")) {
+      isConst = true; // (konstant) row
+    } else {
+      return;
+    }
+    if (isConst) {
+      const box = div.querySelector(".fwd-const");
+      if (!target) { incomplete = true; return; }
+      if (!box) { incomplete = true; return; }
+      if (box.type === "checkbox") value = !!box.checked;
+      else {
+        const raw = (box.value || "").trim();
+        if (raw === "") { incomplete = true; return; }
+        value = box.type === "number" ? Number(raw) : raw;
+      }
+      rules.push({ target, value });
+      return;
+    }
     if ((target && !sources.length) || (!target && sources.length)) {
       incomplete = true;
     }

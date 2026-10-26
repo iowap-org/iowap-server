@@ -289,11 +289,42 @@ def validate_binding_form(binding: Any) -> Optional[dict[str, Any]]:  # noqa: UP
     for i, rule in enumerate(rules):
         if not isinstance(rule, dict):
             raise _bad(f"rule {i}: must be an object, got {type(rule).__name__}")
-        if set(rule) != {"sources", "target"}:
+        # T-252 const-rules: a rule is either the T-247 copy/join form
+        # (exact keys sources+target) or a const rule (target + value,
+        # sources absent). The FORM CLASS is decided first — the
+        # per-form key checks follow; mixing 'sources' AND 'value' is a
+        # form error (which semantic would win is undefined — loud).
+        is_form_const = set(rule) == {"target", "value"}
+        if not is_form_const and set(rule) != {"sources", "target"}:
             raise _bad(
-                f"rule {i}: must carry exactly 'sources' and 'target', got"
+                f"rule {i}: must carry exactly ('sources' and 'target') for a"
+                " copy rule OR ('target' and 'value') for a const rule, got"
                 f" {sorted(str(k) for k in rule)}"
             )
+        if is_form_const:
+            target = rule["target"]
+            violation = _name_violation(target, f"rule {i} target")
+            if violation:
+                raise _bad(violation)
+            if target in targets_seen:
+                raise _bad(
+                    f"rule {i}: duplicate target '{target}' across rules (targets"
+                    " must be disjoint — a duplicate would make the projection"
+                    " order-dependent)"
+                )
+            targets_seen.add(target)
+            # const rule: writes value verbatim, consumes nothing. Value
+            # must be a JSON primitive (str/bool/int/float/None) — the
+            # None case is an EXPLICIT write of null (distinct from
+            # omitting the key), objects/arrays stay out of bindings.
+            value = rule["value"]
+            if value is not None and not isinstance(value, (str, bool, int, float)):
+                raise _bad(
+                    f"rule {i}: constants must be a JSON primitive (str/bool/"
+                    f" int/float or null), got {type(value).__name__}"
+                )
+            normalized_rules.append({"target": target, "value": value})
+            continue
         sources = rule["sources"]
         if not isinstance(sources, list) or not sources:
             raise _bad(
@@ -401,6 +432,13 @@ def apply_binding(
     working: dict[str, Any] = dict(payload)
     written_targets: set[str] = set()
     for rule in rules:
+        # T-252 const-rule: no 'sources' key → write the fixed value,
+        # consume nothing (there is nothing to consume). Native typing is
+        # preserved (bool stays bool — the sweep projection is verbatim).
+        if "sources" not in rule:
+            working[rule["target"]] = rule["value"]
+            written_targets.add(rule["target"])
+            continue
         # The caller passes VALIDATED form rules (design §3.1) — direct
         # access, missing keys are loud at the form boundary.
         sources = list(rule["sources"])
@@ -436,6 +474,91 @@ def apply_binding(
         for key, value in working.items()
         if key in written_targets or key in KNOWN_FLOW_PROMPT_FIELDS
     }
+
+
+def check_binding_schema(parsed_schema: Any, rules: list[dict[str, Any]]) -> None:
+    """Hard PUT check of binding targets against a capability schema (T-252).
+
+    Generic by design (Ronny 2026-10-26): works for EVERY source and EVERY
+    target of the capability — the rule set is checked uniformly.
+    ``parsed_schema`` is the native parsed ``input_schema`` dict (both
+    ``from_dict`` forms — nested ``{"fields": …}`` and flat) or ``None``.
+
+    - The schema is **None** or fieldless → no checks at all (the PUT
+      refuses such bindings earlier only when the binding NEEDS a
+      schema — T-247 form; here we stay permissive-by-absence).
+    - Every rule's ``target`` must name a field in the schema — the same
+      name check ``schema_field_names`` supplies (T-247 form, now moved
+      to this helper as the single authority for the binding ladder).
+    - Const rules (``target`` + ``value``, T-252): when the field spec
+      declares a ``type``, the value must match it NATIVELY —
+      string→str, boolean→bool (never accept the string "true"),
+      integer→int (bool excluded!), number→int/float, null→always ok.
+      Spec without a ``type`` (T-247 minimal-detail form, D-06) →
+      name-only check.
+      Copy/join rules (carry ``sources`` instead) are never type-checked
+      here — their runtime value comes from the submit payload, the
+      submitters's own validation domain (Consumer-Zwang rejected, D-09).
+    Violations raise ``ForwardRoutingError("forward_binding_invalid",
+    422, …)``. Callers: the PUT ladder (mapping upsert); the form is
+    validated separately by ``validate_binding_form``.
+    """
+    def _bad(msg: str) -> ForwardRoutingError:
+        return ForwardRoutingError("forward_binding_invalid", 422, msg)
+
+    if not parsed_schema:
+        return
+    fields = parsed_schema.get("fields") if isinstance(parsed_schema, dict) else None
+    if not isinstance(fields, dict) or not fields:
+        if isinstance(parsed_schema, dict) and parsed_schema:
+            fields = parsed_schema  # flat from_dict form
+        else:
+            return
+    for rule in rules:
+        target = rule["target"]
+        spec = fields.get(target)
+        if spec is not None and not isinstance(spec, dict):
+            spec = {"name": target}  # list-form field entries degrade to name-only
+        if spec is None:
+            raise ForwardRoutingError(
+                "forward_binding_unknown_target_field",
+                422,
+                f"binding target '{target}' is not a field of the target"
+                " capability schema",
+            )
+        if "sources" in rule:
+            continue  # copy/join: runtime value is the submitter's domain
+        if "value" not in rule:
+            continue  # dormant const (form-validated: value present) — inert
+        value = rule["value"]
+        declared = spec.get("type") if isinstance(spec, dict) else None
+        if not isinstance(declared, str) or not declared.strip():
+            continue  # D-06 minimal-detail: name-only check
+        declared = declared.strip()
+        if value is None:
+            # Strict form (T-252 test contract): an explicit null write
+            # against a field that declares a type is a mismatch — the
+            # editor never sends null (unchecked boolean = false), so a
+            # null here is a hand-written API payload: refuse loud.
+            raise _bad(
+                f"const value for target '{target}': null does not match"
+                f" declared type '{declared}'"
+            )
+        type_ok = {
+            "string": isinstance(value, str) and not isinstance(value, bool),
+            "boolean": isinstance(value, bool),
+            "integer": isinstance(value, int) and not isinstance(value, bool),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+            "array": isinstance(value, list),
+            "object": isinstance(value, dict),
+        }.get(declared)
+        if type_ok is None:
+            continue  # unknown declared type: no runtime check (D-06)
+        if not type_ok:
+            raise _bad(
+                f"const value for target '{target}' must match declared type"
+                f" '{declared}' (got {type(value).__name__})"
+            )
 
 
 def load_slot_declaration(conn: DBConn, node_id: str, slot: str) -> Optional[str]:  # noqa: UP045  (frozen signature: Optional)
@@ -1076,6 +1199,8 @@ def upsert_forward_mapping(
             ).fetchone()
             raw_slot_schema = slot_row["input_schema"] if slot_row is not None else None
             slot_names: frozenset[str] | None = None
+            slot_schema: Any = None  # T-252: pre-bound — pyright-clean; the
+            # unpinned branch only reads it when slot_names proves the schema was parsed
             if raw_slot_schema is not None:
                 try:
                     slot_schema = json.loads(raw_slot_schema)
@@ -1094,16 +1219,19 @@ def upsert_forward_mapping(
                     slot_names = schema_field_names(
                         slot_schema, f"slot '{slot}' of node '{node_id}'"
                     )
-                    for rule in form["rules"]:
-                        for source_name in rule["sources"]:
-                            if source_name not in slot_names:
-                                raise ForwardRoutingError(
-                                    "forward_binding_unknown_source_field",
-                                    422,
-                                    f"slot '{slot}' of node '{node_id}':"
-                                    f" binding source '{source_name}' is not a"
-                                    " field of the slot's input_schema",
-                                )
+            for rule in form["rules"]:
+                if "sources" not in rule:
+                    continue  # T-252 const-rule: consumes nothing, sources-free
+                if slot_names is not None:
+                    for source_name in rule["sources"]:
+                        if source_name not in slot_names:
+                            raise ForwardRoutingError(
+                                "forward_binding_unknown_source_field",
+                                422,
+                                f"slot '{slot}' of node '{node_id}':"
+                                f" binding source '{source_name}' is not a"
+                                " field of the slot's input_schema",
+                            )
             if pin is not None:
                 # Pinned targets = the EXACT (pin, target_capability) row's
                 # input_schema (D-03) — never the aggregate. Two distinct
@@ -1133,18 +1261,10 @@ def upsert_forward_mapping(
                         f"pin node '{pin}' capability '{target}': corrupt"
                         f" input_schema JSON: {exc}",
                     ) from exc
-                pin_names = schema_field_names(
-                    pin_schema, f"pin node '{pin}' capability '{target}'"
-                )
-                for rule in form["rules"]:
-                    if rule["target"] not in pin_names:
-                        raise ForwardRoutingError(
-                            "forward_binding_unknown_target_field",
-                            422,
-                            f"pin node '{pin}' capability '{target}':"
-                            f" binding target '{rule['target']}' is not a"
-                            " field of the capability's input_schema",
-                        )
+                # T-252: name + (const-)value-type checks against the pin
+                # node's schema — single authority, generic over every
+                # source and every target field.
+                check_binding_schema(pin_schema, form["rules"])
             else:
                 # Unpinned: the SAME slot schema as the sources step (plan
                 # C3 — never the orphan-vulnerable aggregate, D-04). The
@@ -1157,15 +1277,12 @@ def upsert_forward_mapping(
                         " declared — an unpinned binding requires the"
                         " slot's declared contract",
                     )
-                for rule in form["rules"]:
-                    if rule["target"] not in slot_names:
-                        raise ForwardRoutingError(
-                            "forward_binding_unknown_target_field",
-                            422,
-                            f"slot '{slot}' of node '{node_id}':"
-                            f" binding target '{rule['target']}' is not a"
-                            " field of the slot's input_schema",
-                        )
+                # T-252: name + (const-)value-type checks against the slot
+                # schema — check_binding_schema raises the same code for
+                # unknown targets on this branch.
+                check_binding_schema(
+                    slot_schema, form["rules"] if slot_names is not None else []
+                )
 
         now = datetime.now(UTC).isoformat()
         existing = conn.execute(
