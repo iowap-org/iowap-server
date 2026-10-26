@@ -252,6 +252,13 @@ const nodeNames = new Map(); // node_id → node_name (fallback: raw id)
 // T-247: the submitter's declared slot rows (input_schema rides parsed) —
 // the binding editor's SOURCE chip universe (§7.4.2, D-09 cache form).
 let fwdSlotRows = [];
+// T-235/T-250: mirror of the server's KNOWN_FLOW_PROMPT_FIELDS
+// (core/forward.py:53, incl. the split channel systemprompt/taskprompt) —
+// datalist suggestions for free-typed sources (payload is the universe at
+// submit; the server stays authoritative on every rule).
+const FWD_KNOWN_PROMPT_FIELDS = [
+  "task", "prompt", "question", "message", "input", "systemprompt", "taskprompt",
+];
 
 async function fetchCapabilitiesPayload() {
   if (fwdCapabilities) return fwdCapabilities;
@@ -598,10 +605,10 @@ function fwdAddRuleRow(rule) {
           return `<button type="button" class="fwd-chip${on}" data-name="${escAttr(n)}">${escHtml(n)}</button>`;
         })
         .join(" ")
-    : `<input type="text" class="fwd-sources-free" placeholder="source fields (comma-separated)" value="${escAttr(sources.join(", "))}" />`;
+    : `<input type="text" class="fwd-sources-free" list="fwdSourceFields" placeholder="sources (suggestions via datalist)" value="${escAttr(sources.join(", "))}" style="width:28ch;" />`;
   const hasSlotsSchema = hasSourceChips
     ? ""
-    : `<small class="muted">slot '${escHtml(slotVal || "…")}' declares no input_schema — sources free-typed (payload is the universe at submit)</small>`;
+    : `<small class="muted">no slot schema → free sources (suggestions = known prompt fields)</small>`;
   const div = document.createElement("div");
   div.className = "fwd-rule";
   div.style.cssText = "display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.4rem;";
@@ -609,7 +616,15 @@ function fwdAddRuleRow(rule) {
     <span class="muted">rule ${rulesBox.querySelectorAll(".fwd-rule").length + 1}</span>
     <span class="fwd-chips" style="display:inline-flex;gap:.25rem;flex-wrap:wrap;">${chips}</span>
     <span class="muted">→</span>
-    <input type="text" class="fwd-rule-target" list="fwdTargetFields" placeholder="target field…" style="width:16ch;" value="${escAttr((rule && rule.target) || "")}" />
+    ${targetNames.length
+      ? `<select class="fwd-rule-target" style="width:auto;">${targetNames
+          .map(
+            (n) =>
+              `<option value="${escAttr(n)}"${(rule && rule.target) === n ? " selected" : ""}>${escHtml(n)}</option>`
+          )
+          .join("")}
+        <option value=""${ !(rule && rule.target) ? " selected" : ""} disabled hidden>target…</option></select>`
+      : `<input type="text" class="fwd-rule-target" list="fwdTargetFields" placeholder="target field…" style="width:16ch;" value="${escAttr((rule && rule.target) || "")}" />`}
     <button type="button" class="fwd-rule-del" title="remove rule">✕</button>
     <br>${hasSlotsSchema}`;
   rulesBox.appendChild(div);
@@ -673,8 +688,10 @@ function fwdRenderBindingEditor() {
         </label>
       </div>
       <datalist id="fwdTargetFields">${targetNames.map((n) => `<option value="${escAttr(n)}"></option>`).join("")}</datalist>
+      <datalist id="fwdSourceFields">${Array.from(new Set(FWD_KNOWN_PROMPT_FIELDS.concat(targetNames)))
+        .map((n) => `<option value="${escAttr(n)}"></option>`).join("")}</datalist>
       <small class="muted">${targetNames.length
-        ? "Target fields from the capability schema (" + escHtml(targetNames.join(", ")) + ") — display source: the aggregate; the pinned node's own schema decides the PUT."
+        ? "Target = dropdown (capability schema). Sources: chips (slot schema) or datalist-suggested free text (known prompt fields)."
         : "The capability declares no input_schema — target free-typed (the PUT validates hard; unpinned bindings need the slot schema)."}</small>
     </div>`;
   document.getElementById("fwdAddRule").addEventListener("click", () => fwdAddRuleRow());
