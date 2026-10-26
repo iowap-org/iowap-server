@@ -939,8 +939,10 @@ function fwdUpdatePreview() {
   const afterKeys = Object.keys(after);
   const rulesView = (rules || [])
     .map((r) => {
-      const kind = r.sources.length > 1 ? `join (${separator.length ? "sep" : "adjacent"})` : "copy";
-      return `&nbsp;&nbsp;${escHtml(r.sources.join(" + "))} \u2192 <b>${escHtml(r.target)}</b> (${kind})`;
+      const isConstRule = !("sources" in r);
+      const kind = isConstRule ? "const" : r.sources.length > 1 ? `join (${separator.length ? "sep" : "adjacent"})` : "copy";
+      const left = isConstRule ? `(konstant) ${JSON.stringify(r.value)}` : r.sources.join(" + ");
+      return `&nbsp;&nbsp;${escHtml(left)} \u2192 <b>${escHtml(r.target)}</b> (${kind})`;
     })
     .join("<br>") || "<i>no rules \u2014 legacy passthrough (reserved fields survive)</i>";
   const fliesList = before.filter((k) => !(k in after));
