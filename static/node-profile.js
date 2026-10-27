@@ -472,19 +472,24 @@ async function loadForwardMappings() {
         const m = fwdMappingCache.find(
           (row) => String(row.slot) === String(btn.dataset.slot));
         if (!m) return;
-        const input = document.getElementById("fwd-slot");
-        const targetEl = document.getElementById("fwd-target");
-        const pinEl = document.getElementById("fwd-pin");
-        if (input) input.value = m.slot || "";
-        if (targetEl) targetEl.value = m.target_capability || "";
-        if (pinEl) pinEl.value = m.target_node_id || "";
-        // T-254-r: open the editor preloaded with the EXISTING binding
-        // (rules + separator) — the variable-wiring form, edit not rebuild.
-        fillForwardTargetPicker();
-        targetEl.value = m.target_capability || "";
-        fwdRenderBindingEditor(m.binding && Array.isArray(m.binding.rules)
-          ? m.binding : undefined);
-        input?.focus?.();
+        (async () => {
+          const input = document.getElementById("fwd-slot");
+          const targetEl = document.getElementById("fwd-target");
+          const pinEl = document.getElementById("fwd-pin");
+          // T-254-r3: the picker await FIRST — the value-set on `fwd-target`
+          // is lost when the select has no matching option yet (async fetch
+          // races the assignment; the editor then sees an empty target and
+          // stays hidden = Ronny's "edit opens nothing" case).
+          await fillForwardTargetPicker();
+          if (input) input.value = m.slot || "";
+          if (targetEl) targetEl.value = m.target_capability || "";
+          if (pinEl) pinEl.value = m.target_node_id || "";
+          // T-254-r: open the editor preloaded with the EXISTING binding
+          // (rules + separator) — the variable-wiring form, edit not rebuild.
+          fwdRenderBindingEditor(m.binding && Array.isArray(m.binding.rules)
+            ? m.binding : undefined);
+          input?.focus?.();
+        })();
       });
     document
       .querySelectorAll("#forwardMappingsTable .fwd-add-declared")
