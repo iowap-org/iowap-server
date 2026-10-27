@@ -252,6 +252,7 @@ const nodeNames = new Map(); // node_id → node_name (fallback: raw id)
 // T-247: the submitter's declared slot rows (input_schema rides parsed) —
 // the binding editor's SOURCE chip universe (§7.4.2, D-09 cache form).
 let fwdSlotRows = [];
+let fwdMappingCache = []; // T-254-r: edit-button prefill source (slot/target/pin/binding)
 // T-235/T-250: mirror of the server's KNOWN_FLOW_PROMPT_FIELDS
 // (core/forward.py:53, incl. the split channel systemprompt/taskprompt) —
 // datalist suggestions for free-typed sources (payload is the universe at
@@ -381,6 +382,9 @@ async function loadForwardMappings() {
   // T-247: the binding editor reads the submitter's DECLARED slot schema
   // (source chip universe — §7.4.2) from the same rows.
   fwdSlotRows = slots;
+  // T-254-r: the rows cache for the edit button (the editor prefills from
+  // the exact mapping object: slot/target/pin/binding).
+  fwdMappingCache = mappings;
   const mappedSlots = new Set(mappings.map((m) => String(m.slot)));
   const declaredOnly = slots.filter((s) => !mappedSlots.has(String(s.slot)));
 
@@ -389,7 +393,7 @@ async function loadForwardMappings() {
   // raw-id fallback).
   await fetchCapabilitiesPayload();
 
-  const rowsHtml = mappings.map(
+  const fwdMappingRows = mappings.map(
       (m) => {
         const declared = bySlot.get(String(m.slot));
         const labelCell = declared?.label
@@ -399,10 +403,10 @@ async function loadForwardMappings() {
           : "—";
         const typeCell = fwdTypeCell(declared);
         // T-246: the pin as node NAME (raw id fallback = deleted node);
-        // unpinned shows the visible "Provider variabel" badge.
+        // unpinned shows the visible "variable provider" badge.
         const pinCell = m.target_node_id
           ? `<span class="tag info">${escHtml(nodeNames.get(m.target_node_id) || m.target_node_id)}</span>`
-          : `<span class="tag">variabel</span>`;
+          : `<span class="tag">variable</span>`;
         // T-247: the binding state is VISIBLE per row (C7 §7.4.1) — a stale
         // binding shows up as "N rule(s)" and the dashboard editor is the
         // correction path (no auto-unbind). Rules count display-only; a
@@ -424,7 +428,7 @@ async function loadForwardMappings() {
         <td>${fmt(m.updated_at)}</td>
         <td>${(
           canManage
-            ? `<button type="button" class="fwd-del" data-slot="${escAttr(m.slot)}">delete</button>`
+            ? `<button type="button" class="fwd-edit" data-slot="${escAttr(m.slot)}">edit</button> <button type="button" class="fwd-del" data-slot="${escAttr(m.slot)}">delete</button>`
             : ""
         )}</td>
       </tr>`;
@@ -453,7 +457,7 @@ async function loadForwardMappings() {
       ),
     );
 
-  tbody.innerHTML = rowsHtml.join('') || '<tr><td colspan="8" class="empty">No forward mappings or declared slots.</td></tr>';
+  tbody.innerHTML = fwdMappingRows.join('') || '<tr><td colspan="8" class="empty">No forward mappings or declared slots.</td></tr>';
 
   if (canManage) {
     const panel = document.getElementById("forwardMappings");
@@ -463,6 +467,26 @@ async function loadForwardMappings() {
         btn.addEventListener("click", () => deleteForwardMapping(btn.dataset.slot));
       });
     document
+      .querySelectorAll("#forwardMappingsTable .fwd-edit")
+      .forEach((btn) => {
+        const m = fwdMappingCache.find(
+          (row) => String(row.slot) === String(btn.dataset.slot));
+        if (!m) return;
+        const input = document.getElementById("fwd-slot");
+        const targetEl = document.getElementById("fwd-target");
+        const pinEl = document.getElementById("fwd-pin");
+        if (input) input.value = m.slot || "";
+        if (targetEl) targetEl.value = m.target_capability || "";
+        if (pinEl) pinEl.value = m.target_node_id || "";
+        // T-254-r: open the editor preloaded with the EXISTING binding
+        // (rules + separator) — the variable-wiring form, edit not rebuild.
+        fillForwardTargetPicker();
+        targetEl.value = m.target_capability || "";
+        fwdRenderBindingEditor(m.binding && Array.isArray(m.binding.rules)
+          ? m.binding : undefined);
+        input?.focus?.();
+      });
+    document
       .querySelectorAll("#forwardMappingsTable .fwd-add-declared")
       .forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -470,7 +494,7 @@ async function loadForwardMappings() {
           const targetEl = document.getElementById("fwd-target");
           const pinEl = document.getElementById("fwd-pin");
           if (input) input.value = btn.dataset.slot || "";
-          // T-246: a prefilled mapping starts unpinned (Provider variabel).
+          // T-246: a prefilled mapping starts unpinned (variable provider).
           if (pinEl) pinEl.value = "";
           // T-247: re-render the binding editor for the prefilled slot
           // (programmatic value set fires no change event).
@@ -485,7 +509,7 @@ async function loadForwardMappings() {
         <div style="display:flex;gap:.5rem;align-items:center;margin-top:.75rem;">
           <input id="fwd-slot" type="text" placeholder="slot (1, a, s-2)" maxlength="64" />
           <select id="fwd-target"><option value="">target capability…</option></select>
-          <select id="fwd-pin"><option value="">Provider variabel…</option></select>
+          <select id="fwd-pin"><option value="">variable provider…</option></select>
           <button type="button" id="fwdAddBtn">Add mapping</button>
         </div>`;
       panel.appendChild(addRow);
@@ -499,7 +523,7 @@ async function loadForwardMappings() {
       panel.appendChild(bindSection);
       document.getElementById("fwdAddBtn").addEventListener("click", addForwardMapping);
       // T-246: repopulate the pin picker whenever the capability changes —
-      // cached payload, no refetch, selection resets to "variabel".
+      // cached payload, no refetch, selection resets to "variable".
       // T-247: the same change also (re)renders the binding editor (the
       // target chip universe rides the same cached payload).
       document.getElementById("fwd-target").addEventListener("change", (e) => {
@@ -546,8 +570,7 @@ function validateForwardSlot(slot) {
 // One section under the mapping add-row: per-rule SOURCE chips (from the
 // submitter's declared slot input_schema) + a target field (datalist of the
 // selected capability's aggregate schema field names) + the binding-level
-// separator. One source chip in a rule = getrennt (copy); several = 
-// zusammengeführt (join) — THE rule-row shape IS the modes (plan C6).
+// separator. One source chip in a rule = copy; several = join — THE rule-row shape IS the modes (plan C6).
 // No new endpoint: both chip universes come from the page's existing GETs
 // (the capabilities cache + forward-mappings/slots, D-09/T-246 form). The
 // aggregate is a DISPLAY source only — the server PUT validates against
@@ -601,11 +624,11 @@ function fwdTargetFieldSpec(target, fieldName) {
 }
 
 // One rule row: source-side **select** (known prompt fields + slot-schema
-// names + "(konstant)" for a fixed-value rule, + "other…" swaps to free
+// names + "(const)" for a fixed-value rule, + "other…" swaps to free
 // text), the target **dropdown** (capability schema fields), and for
 // const rules the value control typed by the TARGET field spec
 // (boolean→checkbox with its description as title, else text input).
-// 1 source = getrennt (copy); several via "source2+" select = join.
+// 1 source = copy; several via "source2+" select = join.
 function fwdAddRuleRow(rule) {
   const rulesBox = document.getElementById("fwdRules");
   if (!rulesBox) return;
@@ -648,12 +671,12 @@ function fwdAddRuleRow(rule) {
   if (srcSel && !isConst) {
     srcSel.addEventListener("change", () => {
       if (srcSel.value === "__const__") {
-        // T-252: const row — source select swaps to the (konstant) marker
+        // T-252: const row — source select swaps to the (const) marker
         // and the value control (typed by the picked target's spec) appears.
         const span = document.createElement("span");
         span.className = "muted";
         span.title = "const rule — writes a fixed value";
-        span.textContent = "(konstant)";
+        span.textContent = "(const)";
         srcSel.replaceWith(span);
         const holder = document.createElement("span");
         holder.className = "fwd-const-value";
@@ -710,12 +733,12 @@ function chipCell(sources, names) {
 function selectCell(options, isConst, sources, isFreeText) {
   const o = options.map((n) => `<option value="${escAttr(n)}"${sources.includes(n) ? " selected" : ""}>${escHtml(n)}</option>`).join("");
   return isConst
-    ? `<span class="muted" title="const rule — writes a fixed value">(konstant)</span>`
+    ? `<span class="muted" title="const rule — writes a fixed value">(const)</span>`
     : (isFreeText
       ? `<input type="text" class="fwd-sources-free f-source-single" list="fwdSourceFields" placeholder="source…" style="width:18ch;" value="${escAttr(sources[0] || "")}" />`
       : `<select class="fwd-source-select">
-           <option value=""${sources.length ? "" : " selected"}>quelle…</option>${o}
-           <option value="__const__">(konstant)</option>
+           <option value=""${sources.length ? "" : " selected"}>source…</option>${o}
+           <option value="__const__">(const)</option>
            <option value="__other__">other…</option>
          </select>`);
 }
@@ -755,7 +778,7 @@ function fwdMatchByName() {
 
 // Rebuild the whole binding section for the CURRENT slot + target pair
 // (the rule rows reset — the chip universes change with both).
-function fwdRenderBindingEditor() {
+function fwdRenderBindingEditor(prefillBinding) {
   const section = document.getElementById("fwdBindingSection");
   if (!section) return;
   const target = document.getElementById("fwd-target")?.value || "";
@@ -770,7 +793,7 @@ function fwdRenderBindingEditor() {
     <div style="margin-top:.75rem;padding:.5rem;border:1px solid rgba(127,127,127,.35);border-radius:.5rem;">
       <div class="muted" style="font-size:.9rem;">
         Payload binding — per rule: select the source field(s) → one target field
-        (1 source = getrennt/copy, several = zusammengeführt/join). No rules = legacy passthrough
+        (1 source = copy, several = join). No rules = legacy passthrough
         (unbound fields fly except the reserved prompt fields task/prompt/question/message/input).
       </div>
       <div id="fwdRules"></div>
@@ -823,7 +846,15 @@ function fwdRenderBindingEditor() {
   section.addEventListener("click", (e) => {
     if (e.target.closest("#fwdRules")) fwdUpdatePreview();
   });
-  fwdAddRuleRow();
+  // T-254-r: edit mode — existing binding prefill (rules + separator) or the
+  // empty one-row default (add flow). The rule rows build AFTER the datalists.
+  if (prefillBinding && Array.isArray(prefillBinding.rules)) {
+    document.getElementById("fwd-separator").value =
+      typeof prefillBinding.separator === "string" ? prefillBinding.separator : "\\n\\n";
+    prefillBinding.rules.forEach((r) => fwdAddRuleRow(r));
+  } else {
+    fwdAddRuleRow();
+  }
   fwdRenderCapSpec(target);
   fwdUpdatePreview();
 }
@@ -929,7 +960,7 @@ function fwdUpdatePreview() {
     .map((r) => {
       const isConstRule = !("sources" in r);
       const kind = isConstRule ? "const" : r.sources.length > 1 ? `join (${separator.length ? "sep" : "adjacent"})` : "copy";
-      const left = isConstRule ? `(konstant) ${JSON.stringify(r.value)}` : r.sources.join(" + ");
+      const left = isConstRule ? `(const) ${JSON.stringify(r.value)}` : r.sources.join(" + ");
       return `&nbsp;&nbsp;${escHtml(left)} \u2192 <b>${escHtml(r.target)}</b> (${kind})`;
     })
     .join("<br>") || "<i>no rules \u2014 legacy passthrough (reserved fields survive)</i>";
@@ -971,7 +1002,7 @@ function fwdHarvestBinding() {
       sources = [freeInp.value].map((s) => s.trim()).filter(Boolean);
       if (!sources.length) return; // empty free row
     } else if (div.querySelector(".fwd-const-value")) {
-      isConst = true; // (konstant) row
+      isConst = true; // (const) row
     } else {
       return;
     }
@@ -1034,7 +1065,7 @@ async function addForwardMapping() {
       },
       body: JSON.stringify({
         target_capability: target,
-        // T-246: the pin ALWAYS rides explicitly ("" = Provider variabel) —
+        // T-246: the pin ALWAYS rides explicitly ("" = variable provider) —
         // the PUT is a full-row replace (design D-02: omitting the pin
         // would unpin).
         target_node_id: document.getElementById("fwd-pin")?.value || "",
