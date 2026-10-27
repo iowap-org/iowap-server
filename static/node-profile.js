@@ -649,7 +649,14 @@ function fwdAddRuleRow(rule) {
   div.style.cssText = "display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.4rem;";
   div.innerHTML = `
     <span class="muted">rule ${rulesBox.querySelectorAll(".fwd-rule").length + 1}</span>
-    <span class="fwd-chips" style="display:inline-flex;gap:.25rem;flex-wrap:wrap;">${sourceCell}</span>
+    <span class="fwd-chips" style="display:inline-flex;gap:.25rem;flex-wrap:wrap;">${sourceCell}${
+      // T-254-r2: the (const) option rides the chips case too — the editor
+      // hides the select only when the slot schema provides chips, but a
+      // const rule needs a path from there as well (schema-case).
+      hasSourceChips(sourceNames) && !isConst
+        ? `<button type="button" class="fwd-chip-btn" title="const rule — writes a fixed value">(const)</button>`
+        : ""
+    }</span>
     <span class="muted">→</span>
     ${targetNames.length
       ? `<select class="fwd-rule-target" style="width:auto;">${targetNames
@@ -665,6 +672,23 @@ function fwdAddRuleRow(rule) {
   rulesBox.appendChild(div);
   div.querySelectorAll(".fwd-chip").forEach((b) => {
     b.addEventListener("click", () => { b.classList.toggle("on"); fwdUpdatePreview(); });
+  });
+  // T-254-r2: the (const) chip swaps the row to a const row (the same swap
+  // the select-form "__const__" option makes below): chips vanish, the
+  // (const) marker + a value control appear — then the target dropdown
+  // re-types the value control.
+  div.querySelector(".fwd-chip-btn")?.addEventListener("click", () => {
+    const chips = div.querySelector(".fwd-chips");
+    if (!chips) return;
+    chips.innerHTML = `<span class="muted" title="const rule — writes a fixed value">(const)</span>
+      <span class="fwd-const-value"></span>`;
+    chips.className = "fwd-chips"; // keep the layout hook
+    const holder = chips.querySelector(".fwd-const-value");
+    const tgtVal = (div.querySelector(".fwd-rule-target")?.value || "");
+    holder.innerHTML = fwdConstValueHTML(null, document.getElementById("fwd-target")?.value || "", tgtVal, []);
+    holder.querySelector(".fwd-const")?.addEventListener("input", fwdUpdatePreview);
+    constTargetWatch(div);
+    fwdUpdatePreview();
   });
   div.querySelector(".fwd-rule-del")?.addEventListener("click", () => { div.remove(); fwdUpdatePreview(); });
   const srcSel = div.querySelector(".fwd-source-select");
@@ -749,6 +773,11 @@ function fwdConstValueHTML(rule, capName, fieldName, _unused) {
   const val = rule && rule.value !== undefined ? rule.value : (type === "boolean" ? false : "");
   if (type === "boolean")
     return `<span class="fwd-const-value"><label><input type="checkbox" class="fwd-const" ${val === true || val === "true" ? "checked" : ""}${title} />(const)</label></span>`;
+  // T-254-r2: object-typed consts (schema case) get a textarea + JSON hint —
+  // the value rides verbatim as a JSON object on the PUT (a string would 422
+  // against the field spec).
+  if (type === "object")
+    return `<span class="fwd-const-value"><textarea class="fwd-const" spellcheck="false" style="width:26rem;min-height:5rem;font-family:var(--mono,monospace);font-size:.8rem;" placeholder='{"type": "object", …}(JSON)'></textarea></span>`;
   return `<span class="fwd-const-value"><input type="${type === "integer" || type === "number" ? "number" : "text"}" class="fwd-const" style="width:12ch;" value="${escAttr(val === null || val === undefined ? "" : String(val))}"${title} placeholder="const…"/></span>`;
 }
 
@@ -1014,7 +1043,17 @@ function fwdHarvestBinding() {
       else {
         const raw = (box.value || "").trim();
         if (raw === "") { incomplete = true; return; }
-        value = box.type === "number" ? Number(raw) : raw;
+        // T-254-r2: an object-typed target (e.g. schema) needs a REAL object —
+        // the textarea JSON parses on harvest; a broken JSON is incomplete.
+        if (box.type === "textarea") {
+          try {
+            const parsed = JSON.parse(raw);
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) { incomplete = true; return; }
+            value = parsed;
+          } catch (_) { incomplete = true; return; }
+        } else {
+          value = box.type === "number" ? Number(raw) : raw;
+        }
       }
       rules.push({ target, value });
       return;
