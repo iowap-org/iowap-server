@@ -41,7 +41,15 @@ async def get_auth_context(
 async def get_approved_context(
     authorization: Optional[str] = Header(None),
 ) -> AuthContext:
-    """Dependency: authenticate and require approved node status."""
+    """Dependency: authenticate and require a live (approved-class) node.
+
+    T-256 (Audit H2): the gate was the hardcoded pair
+    ``(approved, online)``; it now rides the status registry — the same
+    node_live_statuses() set as ``get_alive_context``. The server flips
+    nodes to busy/idle ITSELF (auto-busy, core/discovery.py) and such a
+    node must keep submitting tasks / calling admin APIs. Pending and
+    offline stay out (fail-closed: the registry is a whitelist).
+    """
     token = extract_bearer(authorization)
     if not token:
         raise HTTPException(
@@ -56,7 +64,7 @@ async def get_approved_context(
             detail="Invalid or expired token",
         )
 
-    if info["pending"] or info["status"] not in ("approved", "online"):
+    if info["pending"] or info["status"] not in node_live_statuses():
         status_hint = (
             "awaiting admin approval" if info["pending"] else f"status is {info['status']}"
         )
@@ -205,7 +213,9 @@ async def require_admin_or_dashboard_user(
     if token:
         info = validate_token(token, require_approved=False)
         if info:
-            if info["pending"] or info["status"] not in ("approved", "online"):
+            # T-256 (Audit H2): registry-gate (was the hardcoded
+            # (approved, online) pair — same set as get_alive_context).
+            if info["pending"] or info["status"] not in node_live_statuses():
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Node not approved",
@@ -240,7 +250,10 @@ def check_dashboard_permission(ctx: AuthContext, permission: str) -> None:
         if permission in permissions:
             return
     # Restricted fallback: admin node token may only perform node management.
-    if ctx.role == "admin" and ctx.status in ("approved", "online"):
+    # T-256 (Audit H2): registry-gate, same set as get_alive_context — the
+    # hardcoded (approved, online) pair locked an auto-busy admin node out
+    # of the dashboard permission fallback.
+    if ctx.role == "admin" and ctx.status in node_live_statuses():
         if permission in ADMIN_NODE_PERMISSIONS:
             return
     raise HTTPException(

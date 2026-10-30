@@ -13,7 +13,7 @@ from relay_server.config import settings
 from relay_server.core.db import get_conn, sync_node_capabilities, q
 from relay_server.core.net_guard import validate_endpoint
 from relay_server.core.node_registry import NodeRegistry
-from relay_server.core.status import StatusCategory, get_category
+from relay_server.core.status import StatusCategory, get_category, node_live_statuses
 
 class NodeExistsError(Exception):
     """Raised when a node_id or node_name already exists during registration."""
@@ -504,7 +504,15 @@ def validate_token(token: str, require_approved: bool = True) -> Optional[dict]:
         }
 
         if require_approved:
-            if result["pending"] or result["status"] not in ("approved", "online"):
+            # T-256 (Audit H2): the gate rides the status REGISTRY, not a
+            # hardcoded (approved, online) pair — the server itself flips
+            # nodes to busy/idle (core/discovery.py auto-busy) and such a
+            # node must keep its credential-lifecycle channel
+            # (/auth/refresh, /auth/status). Semantics mirror
+            # get_alive_context (api/v2/security.py): pending stays
+            # forbidden (fail-closed); every LIVE status
+            # (AVAILABLE + BUSY category) passes.
+            if result["pending"] or result["status"] not in node_live_statuses():
                 return None
 
         return result
