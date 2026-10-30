@@ -5,12 +5,13 @@ FIXED value selected in the dashboard („think anhacken", model dropdown) —
 not only field-to-field copies. Contract:
 
 - A rule is EITHER ``{sources: [str, …], target: str}`` (T-247 copy/join)
-  OR a const-rule ``{target: str, value: <primitive>}`` — ``sources``
+  OR a const-rule ``{target: str, value: <JSON value>}`` — ``sources``
   absent means const; ``sources`` AND ``value`` together are invalid;
   ``value`` alone with ``sources`` present is invalid.
-- Const value must be a JSON primitive (str / bool / int / float, not
-  None-with-absent — ``null`` value is an explicit write of ``null``,
-  allowed); objects/arrays are rejected (binding stays scalar).
+- Const value accepts every JSON value: str/bool/int/float AND list/dict
+  (T-255 M1; the previous primitive-only restriction was the dead
+  T-254-r2 editor branch); ``null`` value is an explicit write of
+  ``null``, allowed.
 - PUT hard check (generic): the rule's ``target`` must exist in the
   pinned node's (or slot's) ``input_schema`` (T-247 form); WHEN the
   field spec carries a ``type`` and the rule is const, the value type
@@ -73,11 +74,24 @@ def test_const_rule_with_sources_is_invalid():
     assert "sources' and 'value'" in str(e.value.message) or "sources" in str(e.value.message)
 
 
-def test_const_rule_value_must_be_primitive():
-    for bad in ({"a": 1}, ["x"], {"deep": {"y": 2}}):
+def test_const_list_and_object_values_accepted_m1():
+    """T-255 M1 (decision recorded here): const values accept EVERY JSON
+    value — str/bool/int/float AND list/dict (null = explicit write, see
+    test above). check_binding_schema already declared array/object valid
+    types (:545-556) and the T-254-r2 editor offers an object-typed const
+    textarea, so the primitive-only core rejection was the dead-form;
+    the acceptance is now UNIFORM on both sides (transport + core)."""
+    for value in (["x", 3, {"k": 1}], {"mode": "fast"}, [{"a": 1}]):
+        form = validate_binding_form({"rules": [{"target": "files", "value": value}]})
+        assert form["rules"] == [{"target": "files", "value": value}]
+
+
+def test_const_value_non_json_instances_rejected():
+    """Direct-core callers: non-JSON instances stay rejected (loud)."""
+    for bad in ({"a", 1}, b"bytes"):
         with pytest.raises(ForwardRoutingError) as e:
             validate_binding_form({"rules": [{"target": "files", "value": bad}]})
-        assert "primitive" in str(e.value.message) or "object" in str(e.value.message)
+        assert "JSON" in str(e.value.message)
 
 
 def test_const_rule_mixed_forms_in_one_binding_ok_but_disjoint_targets():

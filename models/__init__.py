@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from relay_server.config import settings
 
@@ -368,24 +368,50 @@ class SimpleTaskResponse(BaseModel):
 
 # ── Forward routing (T-Forward) ────────────────────────────────
 
-class BindingRule(BaseModel):
-    """One binding rule (T-247): copy (1 source) or join (>1 sources)
-    submitter payload fields into one target field."""
+class CopyRule(BaseModel):
+    """One copy/join binding rule (T-247): copy (1 source) or join
+    (>1 sources) submitter payload fields into one target field."""
+
+    model_config = ConfigDict(extra="forbid")
 
     sources: list[str] = Field(..., min_length=1)
     target: str = Field(..., min_length=1, max_length=255)
 
 
+class ConstRule(BaseModel):
+    """One const binding rule (T-252): write a FIXED ``value`` into one
+    target field (``think``/``model`` anhacken).
+
+    T-255 (M1): ``value`` transports EVERY JSON value — str/bool/int/float
+    AND list/dict (plus the implicit/explicit-null write from T-252) —
+    keeping the transport at the same acceptance ``validate_binding_form``
+    (core/forward.py, single semantic authority) now has, so the
+    T-254-r2 editor's object-typed const textarea is no longer a dead
+    branch. The VALUE-vs-SCHEMA type match lives in
+    ``check_binding_schema`` (array→list, object→dict)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: str = Field(..., min_length=1, max_length=255)
+    value: Any
+
+
 class BindingRules(BaseModel):
     """Payload binding of one forward mapping (T-247, Ronny form):
-    ``{"rules": [{sources, target}, …], "separator": "…"}``. Transport
-    shape only (types/lengths) — ALL semantic form rules (distinct
-    sources, disjoint targets, padding, separator type) live in
-    core/forward.py validate_binding_form (single authority, design §3.1);
-    the PUT endpoint hands body.binding over for re-validation."""
+    ``{"rules": [{sources, target} | {target, value}, …], "separator": "…"}``.
 
-    rules: list[BindingRule] = Field(..., min_length=1)
-    separator: str = "\n\n"
+    T-255 (Audit H1): the transport is a union of EXACT rule shapes —
+    ``CopyRule``/``ConstRule``, both ``extra=forbid`` — so a mixed rule
+    (``sources`` AND ``value``) is a LOUD 422 at the transport layer
+    instead of the previous silent ``value``-drop (extra=ignore parsed it
+    as a copy rule). Transport shape only (types/lengths, M7: ≤64 rules,
+    separator ≤64 chars) — ALL semantic form rules (distinct sources,
+    disjoint targets, padding, separator type) live in core/forward.py
+    validate_binding_form (single authority, design §3.1); the PUT
+    endpoint hands body.binding over for re-validation."""
+
+    rules: list[CopyRule | ConstRule] = Field(..., min_length=1, max_length=64)
+    separator: str = Field("\n\n", max_length=64)
 
 
 class ForwardMappingPut(BaseModel):

@@ -227,9 +227,12 @@ def validate_binding_form(binding: Any) -> Optional[dict[str, Any]]:  # noqa: UP
     ``None`` (field omitted / explicit null) returns ``None`` = legacy
     passthrough — callers short-circuit on falsy before the semantic
     checks below. Otherwise the value must be a dict exactly of the
-    Ronny form: ``{"rules": [{"sources": [str, …], "target": str}, …],
-    "separator": str}`. Rules: 1..N entries; each rule a dict with
-    exactly the keys ``sources`` + ``target``; ``sources`` a non-empty
+    Ronny form: ``{"rules": [{"sources": [str, …], "target": str},
+    {"target": str, "value": <JSON value>}, …], "separator": str}``.
+    Rules: 1..N entries; each rule a dict with exactly the keys
+    ``sources`` + ``target`` (copy rule) OR ``target`` + ``value``
+    (const rule, T-252; NO key mix, which would be ambiguous — loud);
+    ``sources`` a non-empty
     list of distinct strings, each 1..BINDING_STRING_MAX_CHARS chars
     with NO leading/trailing whitespace (a padded name could never match
     an exact payload key — loud at PUT instead of a silent dead rule);
@@ -238,6 +241,11 @@ def validate_binding_form(binding: Any) -> Optional[dict[str, Any]]:  # noqa: UP
     plan C2); an optional ``separator`` must be a str (any content,
     incl. "" — adjacent join is a legitimate form; payload bloat is
     bounded by the task payload cap at submit, models/task.py:34-41).
+    T-255 (M1): a const ``value`` may be every JSON value —
+    str/bool/int/float AND list/dict (uniform with the transport models
+    ConstRule/CopyRule and with check_binding_schema's array/object
+    branches; the T-254-r2 editor offers object-typed consts). A None
+    value is an EXPLICIT write of null (distinct from omitting the key).
     The normalized form is returned as
     ``{"rules": [{"sources": […], "target": …}, …], "separator": str}``
     with an absent ``separator`` defaulted to DEFAULT_BINDING_SEPARATOR.
@@ -314,14 +322,19 @@ def validate_binding_form(binding: Any) -> Optional[dict[str, Any]]:  # noqa: UP
                 )
             targets_seen.add(target)
             # const rule: writes value verbatim, consumes nothing. Value
-            # must be a JSON primitive (str/bool/int/float/None) — the
-            # None case is an EXPLICIT write of null (distinct from
-            # omitting the key), objects/arrays stay out of bindings.
+            # may be ANY JSON value (T-255 M1: str/bool/int/float AND
+            # list/dict — uniform with the transport ConstRule and
+            # check_binding_schema's array/object branches; the
+            # T-254-r2 editor offers object-typed consts). The None case
+            # is an EXPLICIT write of null (distinct from omitting the
+            # key). Non-JSON instances (direct core callers) stay loud.
             value = rule["value"]
-            if value is not None and not isinstance(value, (str, bool, int, float)):
+            if value is not None and not isinstance(
+                value, (str, bool, int, float, list, dict)
+            ):
                 raise _bad(
-                    f"rule {i}: constants must be a JSON primitive (str/bool/"
-                    f" int/float or null), got {type(value).__name__}"
+                    f"rule {i}: constants must be a JSON value (str/bool/"
+                    f" int/float/null/list/object), got {type(value).__name__}"
                 )
             normalized_rules.append({"target": target, "value": value})
             continue
