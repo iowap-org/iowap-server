@@ -31,6 +31,11 @@ _LOCKED_RETRIES = 5
 _LOCKED_BASE_DELAY = 0.05
 
 
+# T-257: (task_id, old_status) pairs a real task-transition carries with it
+# (L1 rowcount-gate + true old_status); builtins keep the ruff baseline flat.
+TaskTrans = list[tuple[str, str | None]]
+
+
 def _retry_db_write(func):
     """Retry a DB write on ``database is locked`` with exponential backoff."""
 
@@ -780,13 +785,21 @@ class Scheduler:
                 return None
 
             now = _format_time(_now())
-            conn.execute(
+            # T-257 (Audit M2): the UPDATE carries its own status predicate —
+            # the fail_orphaned_stages :1009 precedent. A stage completed /
+            # failed / re-claimed BETWEEN the SELECT above and this UPDATE
+            # must win: rowcount 0 → the complete never landed, no events,
+            # no task completion (never resurrect a lost race).
+            cur = conn.execute(
                 q("""
                 UPDATE task_stages
                 SET status = 'completed', completed_at = ?, result = ?, updated_at = ?
-                WHERE stage_id = ?
-                """, (now, _serialize(result), now, stage_id)),
+                WHERE stage_id = ? AND claimed_by = ?
+                  AND status IN ('claimed', 'accepted', 'orphaned')
+                """, (now, _serialize(result), now, stage_id, node_id)),
             )
+            if cur.rowcount == 0:
+                return None
 
             # Check if all stages completed (T-189 F-03: "not done" = stage
             # status in the PENDING or BUSY category — accepted/orphaned
@@ -861,7 +874,7 @@ class Scheduler:
         conn = get_conn()
         try:
             rows = conn.execute(
-                q("SELECT stage_id, task_id, retry_count FROM task_stages "
+                q("SELECT stage_id, task_id, retry_count, claimed_at FROM task_stages "
                 "WHERE status = 'claimed' AND claim_expires_at < ?", (now,)),
             ).fetchall()
             if not rows:
@@ -877,29 +890,36 @@ class Scheduler:
                 retry_count = int(row["retry_count"] or 0) + 1
                 if retry_count > settings.max_retries:
                     # Retry budget exhausted → fail the stage permanently.
-                    conn.execute(
+                    # T-257 (Audit M2): the status + claim-freshness
+                    # predicates guard the SELECT→UPDATE race window — a
+                    # stage completed (or re-claimed with a new
+                    # claimed_at) in between WINS; rowcount 0 is a no-op,
+                    # never a resurrection, never a stripped fresh claim.
+                    cur = conn.execute(
                         q("""
                         UPDATE task_stages
                         SET status = 'failed', retry_count = ?, claimed_by = NULL,
                             claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
-                        WHERE stage_id = ?
-                        """, (retry_count, now, stage_id)),
+                        WHERE stage_id = ? AND status = 'claimed' AND claimed_at = ?
+                        """, (retry_count, now, stage_id, row["claimed_at"])),
                     )
-                    failed_stage_ids.append(stage_id)
-                    affected_tasks.add(task_id)
+                    if cur.rowcount:
+                        failed_stage_ids.append(stage_id)
+                        affected_tasks.add(task_id)
                 else:
                     # Still within the retry budget → put back to pending.
-                    conn.execute(
+                    cur = conn.execute(
                         q("""
                         UPDATE task_stages
                         SET status = 'pending', retry_count = ?, claimed_by = NULL,
                             claimed_at = NULL, claim_expires_at = NULL, updated_at = ?
-                        WHERE stage_id = ?
-                        """, (retry_count, now, stage_id)),
+                        WHERE stage_id = ? AND status = 'claimed' AND claimed_at = ?
+                        """, (retry_count, now, stage_id, row["claimed_at"])),
                     )
-                    released.append(stage_id)
+                    if cur.rowcount:
+                        released.append(stage_id)
 
-            tasks_failed = _fail_tasks_if_all_stages_done(
+            tasks_trans = _fail_tasks_if_all_stages_done(
                 conn, affected_tasks, now, terminal_stage_status=("failed",)
             )
             # T-189 F-05: linear failure policy — a single permanently
@@ -932,14 +952,17 @@ class Scheduler:
                         "new_status": "pending",
                     },
                 )
-            for task_id in tasks_failed:
+            # T-257 (L1): only REAL transitions arrive here (rowcount gate
+            # in the helper) and the old_status is the task's true
+            # pre-UPDATE status — was a hardcoded "running" before.
+            for task_id, task_old_status in tasks_trans:
                 event_bus.publish_sync("task_failed", {"task_id": task_id})
                 event_bus.publish_sync(
                     "status_changed",
                     {
                         "entity_type": "task",
                         "entity_id": task_id,
-                        "old_status": "running",
+                        "old_status": task_old_status,
                         "new_status": "failed",
                     },
                 )
@@ -947,7 +970,7 @@ class Scheduler:
             return {
                 "released": released,
                 "failed": failed_stage_ids,
-                "tasks_failed": tasks_failed + linear_tasks_failed,
+                "tasks_failed": [t for t, _ in tasks_trans] + linear_tasks_failed,
             }
         finally:
             conn.close()
@@ -1002,17 +1025,22 @@ class Scheduler:
             for row in rows:
                 stage_id = row["stage_id"]
                 task_id = row["task_id"]
-                conn.execute(
+                # T-257 (L1): the UPDATE here is the :1009 pattern (status
+                # predicate) — the rowcount gate keeps a row the UPDATE
+                # LOST (stage completed in the race window) out of the
+                # ids and off the events.
+                cur = conn.execute(
                     q("""
                     UPDATE task_stages
                     SET status = 'failed', updated_at = ?
                     WHERE stage_id = ? AND status = 'pending'
                     """, (now, stage_id)),
                 )
-                failed_stage_ids.append(stage_id)
-                affected_tasks.add(task_id)
+                if cur.rowcount:
+                    failed_stage_ids.append(stage_id)
+                    affected_tasks.add(task_id)
 
-            tasks_failed = _fail_tasks_if_all_stages_done(
+            tasks_trans = _fail_tasks_if_all_stages_done(
                 conn,
                 affected_tasks,
                 now,
@@ -1041,7 +1069,10 @@ class Scheduler:
                         "new_status": "failed",
                     },
                 )
-            for task_id in tasks_failed:
+            # T-257 (L1): only REAL transitions arrive here (rowcount gate
+            # in the helper) and the old_status is the task's true
+            # pre-UPDATE status — was a hardcoded "running" before.
+            for task_id, task_old_status in tasks_trans:
                 event_bus.publish_sync(
                     "task_failed",
                     {"task_id": task_id, "reason": "orphaned_stages"},
@@ -1051,14 +1082,14 @@ class Scheduler:
                     {
                         "entity_type": "task",
                         "entity_id": task_id,
-                        "old_status": "running",
+                        "old_status": task_old_status,
                         "new_status": "failed",
                     },
                 )
 
             return {
                 "stages_failed": failed_stage_ids,
-                "tasks_failed": tasks_failed + linear_tasks_failed,
+                "tasks_failed": [t for t, _ in tasks_trans] + linear_tasks_failed,
             }
         finally:
             conn.close()
@@ -1097,9 +1128,15 @@ class Scheduler:
                 """, (now,)),
             ).fetchall()
             for r in overdue:
-                conn.execute(
-                    q("UPDATE task_stages SET status = 'orphaned', updated_at = ? WHERE stage_id = ?", (now, r["stage_id"])),
+                # T-257 (Audit M2): status predicate + rowcount gate —
+                # a stage completed in the race window is never resurrected
+                # (no event, no failed-task sweep for it).
+                cur = conn.execute(
+                    q("UPDATE task_stages SET status = 'orphaned', updated_at = ?"
+                      " WHERE stage_id = ? AND status = 'accepted'", (now, r["stage_id"])),
                 )
+                if not cur.rowcount:
+                    continue
                 accepted_orphaned.append(r["stage_id"])
                 affected_tasks.add(r["task_id"])
                 event_bus.publish_sync("status_changed", {
@@ -1117,9 +1154,13 @@ class Scheduler:
                 """, (orphan_deadline,)),
             ).fetchall()
             for r in orphan_dead:
-                conn.execute(
-                    q("UPDATE task_stages SET status = 'failed', updated_at = ? WHERE stage_id = ?", (now, r["stage_id"])),
+                # T-257 (Audit M2): status predicate + rowcount gate.
+                cur = conn.execute(
+                    q("UPDATE task_stages SET status = 'failed', updated_at = ?"
+                      " WHERE stage_id = ? AND status = 'orphaned'", (now, r["stage_id"])),
                 )
+                if not cur.rowcount:
+                    continue
                 orphaned_failed.append(r["stage_id"])
                 affected_tasks.add(r["task_id"])
                 event_bus.publish_sync("status_changed", {
@@ -1154,9 +1195,16 @@ class Scheduler:
                 """, list(live_statuses) + [offline_deadline]),
             ).fetchall()
             for r in node_dead:
-                conn.execute(
-                    q("UPDATE task_stages SET status = 'failed', updated_at = ? WHERE stage_id = ?", (now, r["stage_id"])),
+                # T-257 (Audit M2): status predicate + rowcount gate —
+                # a terminal stage in the race window stays terminal
+                # (and silent).
+                cur = conn.execute(
+                    q("UPDATE task_stages SET status = 'failed', updated_at = ?"
+                      " WHERE stage_id = ? AND status IN ('accepted', 'orphaned')",
+                      (now, r["stage_id"])),
                 )
+                if not cur.rowcount:
+                    continue
                 node_failed.append(r["stage_id"])
                 affected_tasks.add(r["task_id"])
                 event_bus.publish_sync("status_changed", {
@@ -1166,9 +1214,10 @@ class Scheduler:
 
             tasks_failed = []
             if affected_tasks:
-                tasks_failed = _fail_tasks_if_all_stages_done(
+                tasks_trans = _fail_tasks_if_all_stages_done(
                     conn, affected_tasks, now, terminal_stage_status=("failed", "timed_out", "cancelled"),
                 )
+                tasks_failed = [t for t, _ in tasks_trans]
                 for task_id in tasks_failed:
                     event_bus.publish_sync("task_failed", {"task_id": task_id, "reason": "longrun"})
 
@@ -1188,7 +1237,7 @@ def _fail_tasks_if_all_stages_done(
     task_ids: "set[str]",
     now: str,
     terminal_stage_status: tuple[str, ...],
-) -> List[str]:
+) -> "TaskTrans":
     """Mark tasks as ``failed`` when every stage is in a terminal state.
 
     Used by the retry / offline failure paths (T-060, T-061) to fail a
@@ -1197,24 +1246,39 @@ def _fail_tasks_if_all_stages_done(
     as "done" for the purpose of this check (e.g. ``("failed",)`` or
     ``("completed", "failed", "timed_out")``).
 
-    Returns the list of task ids that were transitioned to ``failed``.
-    The caller is responsible for committing the transaction and
-    publishing the ``task_failed`` events.
+    T-257 (L1): the helper previously appended unconditionally — even
+    when its predicate-UPDATE lost a race against a concurrent
+    transactor (the task was already terminal) — and the caller then
+    published ``task_failed``/``status_changed`` with a HARDCODED
+    ``"running"`` old_status. Now the append (and thus the publish) is
+    gated on the UPDATE's rowcount, and the task's TRUE pre-UPDATE
+    status is read before the UPDATE (T-189: "never guess old_status").
+
+    Returns ``(task_id, old_status)`` pairs — only REAL transitions
+    (shape deliberately changed with this task; all three call sites
+    are in this file and publish the old_status from the pair). The
+    caller is responsible for committing the transaction and publishing
+    the ``task_failed`` events.
     """
-    tasks_failed: List[str] = []
+    tasks_trans: "TaskTrans" = []
     for task_id in task_ids:
+        task_before = conn.execute(
+            q("SELECT status FROM tasks WHERE task_id = ?", (task_id,)),
+        ).fetchone()
+        old_status = task_before["status"] if task_before else None
         placeholders = ",".join("?" for _ in terminal_stage_status)
         remaining = conn.execute(
             q(f"SELECT COUNT(*) FROM task_stages "
             f"WHERE task_id = ? AND status NOT IN ({placeholders})", (task_id, *terminal_stage_status)),
         ).fetchone()[0]
         if remaining == 0:
-            conn.execute(
+            cur = conn.execute(
                 q("UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
                 "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
             )
-            tasks_failed.append(task_id)
-    return tasks_failed
+            if cur.rowcount:
+                tasks_trans.append((task_id, old_status))
+    return tasks_trans
 
 
 def _fail_tasks_with_failed_critical_stages(
@@ -1247,10 +1311,15 @@ def _fail_tasks_with_failed_critical_stages(
         if not task_row or task_row["status"] in terminal_tasks:
             continue
         old_status = task_row["status"]
-        conn.execute(
+        cur = conn.execute(
             q("UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
               "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
         )
+        # T-257 (L1): the rowcount gate keeps a lost race (the task became
+        # terminal concurrently) out of the list and off the events — no
+        # duplicate task_failed, no misleading pair.
+        if not cur.rowcount:
+            continue
         tasks_failed.append(task_id)
         # Publish here with the true old_status read above — the frozen
         # return type (list of ids) gives the caller no way to know it.
@@ -1303,17 +1372,22 @@ def fail_stages_of_deleted_node(
         # fail_reason (D-3): no DB column exists — the failure reason
         # travels in the stage_failed event payload (reason='node_deleted')
         # published by the admin handler after commit.
-        conn.execute(
+        # T-257 (Audit M2): the status + owner predicate guard the race
+        # window — a stage the worker completed BETWEEN this SELECT and
+        # the UPDATE stays terminal (no resurrection); rowcount 0 is a
+        # no-op, never a failed-stage entry or event.
+        cur = conn.execute(
             q(
                 "UPDATE task_stages "
                 "SET status = 'failed', updated_at = ?, claimed_by = NULL, "
                 "claimed_at = NULL, claim_expires_at = NULL "
-                "WHERE stage_id = ?",
-                (now, stage_id),
+                "WHERE stage_id = ? AND status = 'claimed' AND claimed_by = ?",
+                (now, stage_id, node_id),
             ),
         )
-        failed_stage_ids.append(stage_id)
-        affected_tasks.add(row["task_id"])
+        if cur.rowcount:
+            failed_stage_ids.append(stage_id)
+            affected_tasks.add(row["task_id"])
     if affected_tasks:
         # Linear failure policy (T-189 F-05): the helper publishes the
         # task-level events inline with the true old_status (D-2).
