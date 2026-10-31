@@ -30,9 +30,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Wheel tag to publish (e.g. wheel-v2.0.1)"
+        description: "Wheel tag to publish (e.g. wheel-v2.0.1). Leave EMPTY to only run the test gate against the ref you dispatch with (e.g. main)."
         required: false
-        default: "wheel-v2.0.1"
+        default: ""
 
 permissions:
   contents: read
@@ -72,6 +72,12 @@ jobs:
 
   publish:
     needs: test
+    # Publish only when a wheel-v* target was explicitly chosen (tag push, or
+    # dispatch WITH a tag input). A plain dispatch (tag input empty) is a
+    # test-gate verification run on the dispatched branch — no publish.
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
