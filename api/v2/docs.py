@@ -15,7 +15,7 @@ from pathlib import Path
 
 import markdown
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 router = APIRouter()
 
@@ -25,10 +25,14 @@ DOCS_DIR = PROJECT_ROOT / "docs"
 # Project-root extras served alongside the docs/ tree. Outside discovery
 # because they are not files under docs/. Missing files simply report
 # available: false in the index (same behaviour as the old whitelist).
+# T-262: "llms.txt" is EXTRA #1 living under docs/ itself — it is a raw
+# .txt the markdown discovery must never match, so it joins the whitelist
+# under its literal slug and is delivered as raw text, not rendered HTML.
 _ALLOW_EXTRAS = {
     "readme": PROJECT_ROOT / "README.md",
     "changelog": PROJECT_ROOT / "CHANGELOG.md",
     "agent-readme": PROJECT_ROOT / "AGENT_README.md",
+    "llms.txt": DOCS_DIR / "llms.txt",
 }
 
 # Established slugs whose mechanical name deviates (dashboard static
@@ -187,11 +191,19 @@ async def docs_index():
 async def docs_page(doc_name: str):
     """Render a discovered Markdown document as HTML.
 
-    Unknown names return 404. Legacy names resolve to their primary
-    slugs' files.
+    T-262: a whitelisted .txt extra (``llms.txt``) is delivered raw as
+    text/plain instead — the md-only rendering does not apply to it, the
+    mechanical *md discovery still never matches it (the t216 contract
+    stands for the docs tree itself). Unknown names return 404; legacy
+    names resolve to their primary slugs' files.
     """
     path = _resolve(doc_name)
     if not path or not path.exists():
         raise HTTPException(status_code=404, detail="Document not found")
+    if path.suffix == ".txt":
+        return PlainTextResponse(
+            path.read_text(encoding="utf-8"),
+            media_type="text/plain; charset=utf-8",
+        )
     content = _render_markdown(path)
     return HTMLResponse(content=content)
