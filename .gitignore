@@ -1,7 +1,6 @@
-__pycache__/
-*.egg-info/
 board
 .hermes/
 .venv/
 build/
 .worktrees/
+dist/
