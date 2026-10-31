@@ -47,6 +47,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        # T-266: docs is a git submodule (iowap-org/iowap-docs); the T-216
+        # docs-discovery tests serve every docs/**.md slug over /relay/v2/docs.
+        # Default submodules: false left the tree empty on CI → 404s.
+        with:
+          submodules: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
