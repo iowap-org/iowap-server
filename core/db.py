@@ -1055,10 +1055,10 @@ def _m017_forward_mapping_pins(conn: DBConn) -> None:
     concrete node; NULL = no pin = legacy "any capable provider" (no backfill:
     existing mappings/stages stay unpinned by definition). Both columns are
     nullable FKs to nodes, declared like ``task_stages.claimed_by``
-    (core/tables.py:243/254); the idempotent ``_column_names`` guard follows
-    the migration-16 pattern (core/db.py:1021-1031). In-place inline FK on the
+    (core/tables.py, `task_stages`); the idempotent ``_column_names`` guard follows
+    the migration-16 pattern (`_m016_forward_slot_types`). In-place inline FK on the
     ALTER is valid on both dialects; ``nodes`` deletes are FK-enforced
-    (core/db.py:242).
+    (the ``nodes`` foreign keys in ``core/db.py``).
     """
     cols = _column_names(conn, "forward_mappings")
     if "target_node_id" not in cols:
@@ -1087,8 +1087,8 @@ def _m018_forward_binding(conn: DBConn) -> None:
     index (lookups are the row's own UNIQUE(node_id, slot) reads; no
     query filters by binding content). The idempotent
     ``_column_names`` guard follows the migration-17 pattern
-    (core/db.py:1047-1053). ``_schema()`` stays untouched — fresh DBs get
-    the column via the baseline migration replay (core/db.py:1111-1133).
+    (`_m017_forward_mapping_pins`). ``_schema()`` stays untouched — fresh DBs get
+    the column via the baseline migration replay (in ``_schema()``).
     Contracts: design.md §2.
     """
     cols = _column_names(conn, "forward_mappings")
