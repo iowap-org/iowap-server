@@ -1,27 +1,18 @@
 name: Publish to PyPI
 
-# Publishes the iowap-server wheel to PyPI whenever a wheel-v* tag is
-# pushed or the workflow is manually dispatched for one (tag: wheel-v<version>).
-# Pipeline shape mirrors iowap-org/iowap-client-mcp T-010b / iowap-node T-228:
-# build the wheel, guard tag-vs-version parity, twine check, then the
-# idempotent token upload. Backend: setuptools (pyproject build-system).
+# publish = the basics: checkout the wheel-v* tag, build the wheel,
+# twine check, idempotent upload. No test matrix here — the suite runs
+# in the local env (410+2 green, 3.11) before every deploy, and the CI
+# matrix channel (3.11/3.12) added red noise without a consumer
+# (T-266 decision, Ronny 2026-10-31: CI stays publish-only).
 #
-# Idempotency (same rule as node's publish-pypi job): PyPI versions are
-# immutable, so an intentional re-run for an already-published version hits
-# "File already exists" — that means 'published successfully earlier' and is
-# treated as success instead of turning the run red.
+# Idempotency: PyPI versions are immutable — an intentional re-run for an
+# already-published version hits "File already exists" and is treated as
+# success instead of turning the run red.
 #
 # Skip behavior: when the PYPI_TOKEN repo secret is missing, the upload step
 # does NOT fail — it skips with a notice and leaves the wheel as a run
-# artifact, so the pipeline reads "wheel built, upload not configured"
-# instead of red noise.
-#
-# T-266: a pytest test job runs BEFORE publish (matrix 3.11 + 3.12) — a red
-# suite must no longer produce a wheel. The lint step mirrors iowap-node
-# T-242's high-signal approach but starts as an explicit exit-zero no-op:
-# the repo carries 793 ruff findings (UP/B/I/SIM/... debt) tracked in T-266
-# sweep B; sharpen this gate to a strict `ruff check .` once that debt is
-# paid. It must not silently block publishing meanwhile.
+# artifact ("wheel built, upload not configured"), keeping the run green.
 
 on:
   push:
@@ -30,54 +21,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Wheel tag to publish (e.g. wheel-v2.0.1). Leave EMPTY to only run the test gate against the ref you dispatch with (e.g. main)."
-        required: false
-        default: ""
+        description: "Wheel tag to publish (e.g. wheel-v2.0.1)"
+        required: true
+        default: "wheel-v2.0.1"
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        # T-266: docs is a git submodule (iowap-org/iowap-docs); the T-216
-        # docs-discovery tests serve every docs/**.md slug over /relay/v2/docs.
-        # Default submodules: false left the tree empty on CI → 404s.
-        with:
-          submodules: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install package + test deps
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --quiet -e .
-          python -m pip install --quiet pytest pytest-asyncio ruff
-
-      - name: Test gate (pytest)
-        run: python -m pytest -q
-
-      - name: Lint gate (exit-zero until T-266 lint debt is paid)
-        run: python -m ruff check . || echo "::warning::ruff findings remain — T-266 sweep will tighten this to a blocking gate"
-
   publish:
-    needs: test
-    # Publish only when a wheel-v* target was explicitly chosen (tag push, or
-    # dispatch WITH a tag input). A plain dispatch (tag input empty) is a
-    # test-gate verification run on the dispatched branch — no publish.
-    if: >-
-      github.event_name == 'push'
-      || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -102,21 +54,12 @@ jobs:
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
           TAG="${DISPATCH_TAG:-$REF_NAME}"
-          echo "Publishing for tag: $TAG"
-          case "$TAG" in
-            wheel-v*)
-              VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-              echo "pyproject version: $VER"
-              if [ "$TAG" != "wheel-v$VER" ]; then
-                echo "::error::tag $TAG does not match package version $VER (expected wheel-v$VER)"
-                exit 1
-              fi
-              ;;
-            *)
-              echo "::error::not a wheel-v* tag: $TAG"
-              exit 1
-              ;;
-          esac
+          VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "Publishing tag $TAG (pyproject version: $VER)"
+          if [ "$TAG" != "wheel-v$VER" ]; then
+            echo "::error::tag $TAG does not match package version $VER (expected wheel-v$VER)"
+            exit 1
+          fi
 
       - name: twine check
         run: |
@@ -124,7 +67,7 @@ jobs:
           python -m twine check dist/*.whl
           ls -la dist/
 
-      - name: Upload wheel as run artifact (always, also when publish is skipped)
+      - name: Upload wheel as run artifact
         uses: actions/upload-artifact@v4
         with:
           name: dist-wheel
