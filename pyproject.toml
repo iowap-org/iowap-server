@@ -59,4 +59,4 @@ package-dir = {relay_server = ".", "relay_server.api" = "api", "relay_server.api
 # the wheel: dashboard.py/docs.py resolve their assets relative to the module
 # (<site-packages>/relay_server/…). Absent from the wheel, the login page 500s
 # (FileNotFoundError, live Docker finding) and the docs endpoints come up empty.
-relay_server = ["static/*", "docs/**/*.md", "README.md"]
+relay_server = ["static/*", "docs/**/*.md", "docs/*.txt", "README.md"]
