@@ -15,6 +15,13 @@ name: Publish to PyPI
 # does NOT fail — it skips with a notice and leaves the wheel as a run
 # artifact, so the pipeline reads "wheel built, upload not configured"
 # instead of red noise.
+#
+# T-266: a pytest test job runs BEFORE publish (matrix 3.11 + 3.12) — a red
+# suite must no longer produce a wheel. The lint step mirrors iowap-node
+# T-242's high-signal approach but starts as an explicit exit-zero no-op:
+# the repo carries 793 ruff findings (UP/B/I/SIM/... debt) tracked in T-266
+# sweep B; sharpen this gate to a strict `ruff check .` once that debt is
+# paid. It must not silently block publishing meanwhile.
 
 on:
   push:
@@ -31,7 +38,35 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --quiet -e .
+          python -m pip install --quiet pytest pytest-asyncio ruff
+
+      - name: Test gate (pytest)
+        run: python -m pytest -q
+
+      - name: Lint gate (exit-zero until T-266 lint debt is paid)
+        run: python -m ruff check . || echo "::warning::ruff findings remain — T-266 sweep will tighten this to a blocking gate"
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
