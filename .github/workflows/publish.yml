@@ -77,6 +77,7 @@ jobs:
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
+          set -euo pipefail
           python -m pip install --quiet twine
           if [ -z "$PYPI_TOKEN" ]; then
             echo "::notice::PYPI_TOKEN secret not set on $GITHUB_REPOSITORY — skipping publish. The wheel is kept as a run artifact; PyPI stays unchanged. To enable: gh secret set PYPI_TOKEN -R $GITHUB_REPOSITORY"
