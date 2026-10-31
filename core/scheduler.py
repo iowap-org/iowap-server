@@ -802,6 +802,7 @@ class Scheduler:
                 q(f"SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status IN ({placeholders})", (row["task_id"], *non_terminal)),
             ).fetchone()[0]
             task_old_status: Optional[str] = None
+            task_completed_now = False
             if pending_count == 0:
                 # T-189: emit the task's real prior status instead of a
                 # hardcoded "running" (Goal: never guess old_status).
@@ -809,16 +810,29 @@ class Scheduler:
                     q("SELECT status FROM tasks WHERE task_id = ?", (row["task_id"],)),
                 ).fetchone()
                 task_old_status = task_before["status"] if task_before else None
-                conn.execute(
-                    q("UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE task_id = ?", (now, now, row["task_id"])),
+                # SF3 (Audit 2026-10-31): the task UPDATE carries its own
+                # terminal-status predicate (T-257 pattern). A task flipped
+                # terminal (failed / cancelled / timed_out) BETWEEN the
+                # pending_count COUNT above and this UPDATE must win — a
+                # linear-failed task is never resurrected to 'completed' by
+                # its last stage's complete: rowcount 0 → the task stays
+                # terminal and no task-level events are published.
+                task_cur = conn.execute(
+                    q("""
+                    UPDATE tasks
+                    SET status = 'completed', completed_at = ?, updated_at = ?
+                    WHERE task_id = ?
+                      AND status NOT IN ('failed', 'completed', 'timed_out', 'cancelled')
+                    """, (now, now, row["task_id"])),
                 )
+                task_completed_now = task_cur.rowcount > 0
             # T-261 L5: the commit comes BEFORE the task-level publishes —
             # subscribers (SSE/webhooks) must never observe a state the DB
             # has not committed yet; a pre-commit publish let a concurrent
             # reader disagree with the event it received.
             conn.commit()
 
-            if pending_count == 0:
+            if pending_count == 0 and task_completed_now:
                 event_bus.publish_sync(
                     "task_completed",
                     {"task_id": row["task_id"]},
