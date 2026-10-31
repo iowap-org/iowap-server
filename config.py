@@ -5,11 +5,22 @@ from typing import Literal, Optional
 
 import yaml
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Server configuration. Env vars with RELAY_ prefix set defaults."""
+
+    # T-261: Pydantic-V3 prep — model_config via SettingsConfigDict replaces
+    # the V1-style ``class Config:`` (deprecated since V2.0, REMOVED in V3.0).
+    model_config = SettingsConfigDict(
+        env_prefix="RELAY_",
+        env_file=".env",
+        # Ignore unknown env vars (e.g. POSTGRES_USER/POSTGRES_DB from the
+        # docker .env) instead of failing validation. The relay only reads
+        # RELAY_-prefixed vars; unrelated vars must not crash startup.
+        extra="ignore",
+    )
 
     # Server
     host: str = "0.0.0.0"
@@ -175,14 +186,6 @@ class Settings(BaseSettings):
 
     # Capabilities
     capabilities_config_path: Path = Path.home() / ".relay" / "capabilities.yaml"
-
-    class Config:
-        env_prefix = "RELAY_"
-        env_file = ".env"
-        # Ignore unknown env vars (e.g. POSTGRES_USER/POSTGRES_DB from the
-        # docker .env) instead of failing validation. The relay only reads
-        # RELAY_-prefixed vars; unrelated vars must not crash startup.
-        extra = "ignore"
 
 
 def _load_yaml_config(path: Optional[Path]) -> dict:

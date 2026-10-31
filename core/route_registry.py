@@ -211,15 +211,19 @@ def _lookup_route(node_id: str, path: str, method: str) -> dict[str, Any] | None
     """
     conn = get_conn()
     try:
-        live = ", ".join(f"'{s}'" for s in node_live_statuses())
+        # T-261 L6: the live-status list travels as bindparams (q() rewrites
+        # the '?' placeholders) — quote-wrapped f-string literals could break
+        # or inject if a status value ever carried a quote.
+        live_statuses = node_live_statuses()
+        live_placeholders = ", ".join("?" for _ in live_statuses) or "''"
         row = conn.execute(
             q(
                 "SELECT r.node_id, r.path, r.method, r.auth, r.upstream, r.description, "
                 "r.expires_at, n.endpoint "
-                f"FROM node_routes r JOIN nodes n ON n.node_id = r.node_id "
+                "FROM node_routes r JOIN nodes n ON n.node_id = r.node_id "
                 "WHERE r.node_id = ? AND r.path = ? AND r.method = ? "
-                f"AND n.status IN ({live})",
-                (node_id, path, method.upper()),
+                f"AND n.status IN ({live_placeholders})",
+                (node_id, path, method.upper(), *live_statuses),
             ),
         ).fetchone()
         if row is None:

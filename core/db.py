@@ -393,6 +393,14 @@ def q(sql: str, params: Any = ()) -> "sa.TextClause":
             i += 1
         else:
             out.append(ch)
+    # T-261 L2: arity mismatch = caller bug. Previously ``zip(names, params)``
+    # silently truncated (and ``q(sql-with-?, ())`` bound nothing at all) —
+    # the statement executed with a silently wrong or missing bind. Loud now.
+    if (params or i) and len(params) != i:
+        raise ValueError(
+            f"q(): placeholder arity mismatch — {i} '?' in SQL "
+            f"but {len(params)} params given: {sql[:120]!r}"
+        )
     text = sa.text("".join(out))
     if params:
         mapping = dict(zip(names, params))
@@ -928,6 +936,14 @@ def _m009_node_routes_columns(conn: DBConn) -> None:
 
 def _m010_nodes_load_source(conn: DBConn) -> None:
     """nodes: load_source (T-210) — which chain rung produced the load value."""
+    # T-261 L7: migration 2 carries the same idempotent ensure-column pattern
+    # for the nodes table (registration secret/description/high-load counter),
+    # so 2 and 10 look like a "duplicate" when read together. This
+    # duplication is HISTORICAL and intentional: entries in MIGRATIONS are an
+    # append-only ledger — apply_migrations replays every body (idempotent by
+    # the _column_names guard) on a database without a ledger row, so
+    # collapsing 10 into 2 would rewrite applied history for no reader
+    # benefit. Do NOT collapse or reorder; new columns go into NEW entries.
     if "nodes" in _table_names(conn):
         n_cols = _column_names(conn, "nodes")
         if "load_source" not in n_cols:

@@ -489,7 +489,16 @@ async function loadForwardMappings() {
           fwdRenderBindingEditor(m.binding && Array.isArray(m.binding.rules)
             ? m.binding : undefined);
           input?.focus?.();
-        })();
+          // T-254-r3: the IIFE is fire-and-forget — without a .catch an
+          // editor error (failed picker fetch etc.) died silently and the
+          // edit stayed invisible. Surface it, same channel as fwdMessage.
+        })().catch((err) => {
+          console.error("[node-profile] forward binding edit failed:", err);
+          fwdMessage(
+            (err && err.message) ? String(err.message) : "Edit failed (see console)",
+            "bad"
+          );
+        });
       });
     document
       .querySelectorAll("#forwardMappingsTable .fwd-add-declared")

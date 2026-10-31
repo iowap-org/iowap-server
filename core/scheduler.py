@@ -344,21 +344,13 @@ class Scheduler:
 
             now = _format_time(_now())
 
-            # T-246 (§1 plan C4): pending stages pinned to a node that no
-            # longer exists are failed here, T-067-style (owner-deleted →
-            # fail, :417-438) — but as a PRE-SELECT sweep, not in the loop:
-            # the SQL pin gate EXCLUDES dead-pinned rows from every
-            # claimer's candidate list, so the loop would never see them.
-            conn.execute(
-                q(
-                    "UPDATE task_stages SET status = 'failed', updated_at = ? "
-                    "WHERE status = 'pending' AND target_node_id IS NOT NULL "
-                    "AND NOT EXISTS ("
-                    "SELECT 1 FROM nodes n WHERE n.node_id = task_stages.target_node_id)",
-                    (now,),
-                )
-            )
-            conn.commit()
+            # T-246 (§1 plan C4) + T-261 L3: pending stages pinned to a dead
+            # node are UNCLAIMABLE via the SQL pin gate below (they can never
+            # enter this loop's candidate list) and are FAILED by the
+            # maintenance scheduler (orphaned_stage_cleanup →
+            # fail_orphaned_stages dead-pin sweep), not here — the claim
+            # loop stays read-only (no per-claimant UPDATE). See
+            # Scheduler.fail_orphaned_stages().
 
             # Determine capabilities of the node if not provided.
             if not capability:
@@ -809,6 +801,7 @@ class Scheduler:
             pending_count = conn.execute(
                 q(f"SELECT COUNT(*) FROM task_stages WHERE task_id = ? AND status IN ({placeholders})", (row["task_id"], *non_terminal)),
             ).fetchone()[0]
+            task_old_status: Optional[str] = None
             if pending_count == 0:
                 # T-189: emit the task's real prior status instead of a
                 # hardcoded "running" (Goal: never guess old_status).
@@ -819,6 +812,13 @@ class Scheduler:
                 conn.execute(
                     q("UPDATE tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE task_id = ?", (now, now, row["task_id"])),
                 )
+            # T-261 L5: the commit comes BEFORE the task-level publishes —
+            # subscribers (SSE/webhooks) must never observe a state the DB
+            # has not committed yet; a pre-commit publish let a concurrent
+            # reader disagree with the event it received.
+            conn.commit()
+
+            if pending_count == 0:
                 event_bus.publish_sync(
                     "task_completed",
                     {"task_id": row["task_id"]},
@@ -833,8 +833,6 @@ class Scheduler:
                             "new_status": "completed",
                         },
                     )
-            conn.commit()
-
             event_bus.publish_sync(
                 "stage_completed",
                 {"task_id": row["task_id"], "stage_id": stage_id, "node_id": node_id},
@@ -987,11 +985,48 @@ class Scheduler:
         fails the owning task too (T-189 F-05: a single permanently
         failed stage suffices — linear failure policy).
 
-        Returns ``{"stages_failed": [...], "tasks_failed": [...]}``.
+        T-261 L3: also carries the T-246 **dead-pin sweep** (moved out of
+        ``claim_stage`` — the claim loop is read-only): pending stages
+        pinned (``target_node_id``) to a node that no longer exists are
+        failed here too (T-067 analog). They can never be claimed (the
+        SQL pin gate excludes them from every claimer's candidate list),
+        so only this maintenance sweep observes them.
+
+        Returns ``{"stages_failed": [...], "dead_pinned_failed": [...], "tasks_failed": [...]}``.
         """
         now = _format_time(_now())
         conn = get_conn()
         try:
+            stage_reasons: Dict[str, str] = {}
+            affected_tasks: set[str] = set()
+
+            # ── dead-pin sweep (T-246 §1 plan C4, relocated by T-261 L3) ──
+            dead_rows = conn.execute(
+                q(
+                    "SELECT ts.stage_id, ts.task_id FROM task_stages ts "
+                    "WHERE ts.status = 'pending' AND ts.target_node_id IS NOT NULL "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM nodes n WHERE n.node_id = ts.target_node_id)"
+                ),
+            ).fetchall()
+            dead_pinned_failed: List[str] = []
+            for dead_row in dead_rows:
+                # T-257 (L1) pattern: status predicate + rowcount gate (the
+                # row may have been claimed/deleted in the race window).
+                cur = conn.execute(
+                    q(
+                        "UPDATE task_stages SET status = 'failed', updated_at = ? "
+                        "WHERE stage_id = ? AND status = 'pending' AND "
+                        "target_node_id IS NOT NULL AND NOT EXISTS ("
+                        "SELECT 1 FROM nodes n WHERE n.node_id = task_stages.target_node_id)",
+                        (now, dead_row["stage_id"]),
+                    )
+                )
+                if cur.rowcount:
+                    dead_pinned_failed.append(dead_row["stage_id"])
+                    stage_reasons[dead_row["stage_id"]] = "dead_pin_target"
+                    affected_tasks.add(dead_row["task_id"])
+
             # Pending stages whose capability is not advertised by any
             # AVAILABLE or BUSY node (T-080: status gate via the central
             # registry). We intentionally do NOT filter on
@@ -1017,11 +1052,10 @@ class Scheduler:
                   )
                 """, live_statuses),
             ).fetchall()
-            if not rows:
-                return {"stages_failed": [], "tasks_failed": []}
+            if not rows and not dead_pinned_failed:
+                return {"stages_failed": [], "dead_pinned_failed": [], "tasks_failed": []}
 
             failed_stage_ids: List[str] = []
-            affected_tasks: set[str] = set()
             for row in rows:
                 stage_id = row["stage_id"]
                 task_id = row["task_id"]
@@ -1038,6 +1072,7 @@ class Scheduler:
                 )
                 if cur.rowcount:
                     failed_stage_ids.append(stage_id)
+                    stage_reasons[stage_id] = "orphaned_capability"
                     affected_tasks.add(task_id)
 
             tasks_trans = _fail_tasks_if_all_stages_done(
@@ -1055,10 +1090,10 @@ class Scheduler:
             )
             conn.commit()
 
-            for stage_id in failed_stage_ids:
+            for stage_id in dead_pinned_failed + failed_stage_ids:
                 event_bus.publish_sync(
                     "stage_failed",
-                    {"stage_id": stage_id, "reason": "orphaned_capability"},
+                    {"stage_id": stage_id, "reason": stage_reasons[stage_id]},
                 )
                 event_bus.publish_sync(
                     "status_changed",
@@ -1089,6 +1124,7 @@ class Scheduler:
 
             return {
                 "stages_failed": failed_stage_ids,
+                "dead_pinned_failed": dead_pinned_failed,
                 "tasks_failed": [t for t, _ in tasks_trans] + linear_tasks_failed,
             }
         finally:
