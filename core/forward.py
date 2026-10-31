@@ -580,8 +580,10 @@ def load_slot_declaration(conn: DBConn, node_id: str, slot: str) -> Optional[str
     Returns the RAW stored value: ``None`` when the node has no
     declaration row for ``slot`` or the row predates migration 16
     (``slot_type IS NULL``). Takes the caller's connection — no second
-    SQLite handle inside the validation loop (precedes
-    core/discovery.py:327-329 connection-contention rationale). Single
+    SQLite handle inside the validation loop (same pattern as the
+    T-026 sync: ``sync_node_capabilities`` runs after ``conn.close()``
+    in ``core/discovery.py`` to avoid contending for the same SQLite
+    handle). Single
     query shape: ``SELECT slot_type FROM forward_slots WHERE node_id = ?
     AND slot = ?``. Callers treat ``None`` as the ``forward`` default; the
     refuse decision is ``decl_type is not None and decl_type !=
