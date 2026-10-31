@@ -248,15 +248,24 @@ def _expired(expires_at: str) -> bool:
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
-    """Forward headers, stripping hop-by-hop headers.
+    """Forward headers, stripping hop-by-hop headers and caller credentials.
 
     T-129: ``content-length`` is **kept** so a streaming request body
     (``request.stream()``) lets the upstream know the body size. The
     hop-by-hop headers (host, transfer-encoding, connection) are still
     stripped per RFC 7230.
+
+    T-258: ``cookie`` and ``authorization`` are stripped too — caller
+    credentials the upstream node can do nothing with. The node API
+    authenticates with node tokens (which a browser caller never has), so a
+    forwarded dashboard session cookie is a pure leak, and the caller's
+    Bearer token is consumed BY THE RELAY (``node_token`` bridge /
+    dashboard session) before the upstream call — it is not an upstream
+    credential. A caller that genuinely needs node auth must use the node
+    endpoint directly.
     """
     headers = dict(request.headers)
-    for h in ("host", "transfer-encoding", "connection"):
+    for h in ("host", "transfer-encoding", "connection", "cookie", "authorization"):
         headers.pop(h, None)
     return headers
 
