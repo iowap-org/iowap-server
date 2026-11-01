@@ -724,13 +724,13 @@ def mark_offline_nodes() -> List[str]:
         # only mark offline if last_seen is STILL below threshold.
         # SQLAlchemy 2.0: pass a list of param dicts to a single execute()
         # for executemany semantics (Connection.executemany was removed).
-        conn.execute(
-            q("""
-            UPDATE nodes SET status = 'offline', available = FALSE
-            WHERE node_id = ? AND last_seen < ?
-            """),
-            [{"p0": nid, "p1": threshold} for nid in candidate_ids],
-        )
+        for nid in candidate_ids:
+            conn.execute(
+                q("""
+                UPDATE nodes SET status = 'offline', available = FALSE
+                WHERE node_id = ? AND last_seen < ?
+                """, (nid, threshold)),
+            )
 
         # Determine which nodes were actually updated (the UPDATE may have
         # matched 0 rows if a heartbeat came in between SELECT and UPDATE).
@@ -752,16 +752,25 @@ def mark_offline_nodes() -> List[str]:
             ).fetchall()
             now = _format_time(_now())
             for r in stage_rows:
-                conn.execute(
+                # SF4 (audit 2026-10-31): this UPDATE carried no status
+                # predicate — a stage the worker completed BETWEEN the
+                # SELECT above and this UPDATE was flipped to 'failed'
+                # (the worker's result buried, the task failed by the
+                # remaining==0 branch). T-257 pattern (T-189 F-05 /
+                # fail_orphaned_stages :1009 precedent): the UPDATE
+                # carries its own status predicate — rowcount 0 → the
+                # race was lost, NOTHING happens.
+                cur = conn.execute(
                     q("""
                     UPDATE task_stages
                     SET status = 'failed', claimed_by = NULL, claimed_at = NULL,
                         claim_expires_at = NULL, updated_at = ?
-                    WHERE stage_id = ?
+                    WHERE stage_id = ? AND status = 'claimed'
                     """, (now, r["stage_id"])),
                 )
-                failed_stages.append({"stage_id": r["stage_id"], "task_id": r["task_id"]})
-                affected_tasks.add(r["task_id"])
+                if cur.rowcount:
+                    failed_stages.append({"stage_id": r["stage_id"], "task_id": r["task_id"]})
+                    affected_tasks.add(r["task_id"])
 
             # Fail tasks where every stage has reached a terminal state.
             tasks_failed: list[str] = []

@@ -195,3 +195,101 @@ def test_sf3_complete_stage_task_completed_happy_path_intact():
     task_events = _task_status_changes()
     assert task_events[-1]["payload"]["old_status"] == "running"
     assert task_events[-1]["payload"]["new_status"] == "completed"
+
+# ── SF4: offline sweep — SELECT-based stage UPDATE needs the predicate ──
+
+
+def _interleave_get_conn(action, match: str = "UPDATE task_stages"):
+    """Patch target for ``discovery.get_conn`` (test_t257 pattern): the
+    proxy fires ``action`` right before the first statement matching
+    ``match`` — by default the sweep's stage-fail UPDATE, i.e. after the
+    ``status = 'claimed'`` SELECT has returned and ``offline_ids`` is
+    determined: the deterministic "between SELECT and UPDATE" window the
+    SF4 predicate must protect.
+
+    SQLite is single-writer, so the second-connection write of test_t257
+    is not available here: the sweep holds the only write transaction
+    while it runs; ``action`` is executed on the proxy's own connection
+    — the row state the predicated UPDATE must cope with is identical."""
+    fired = {"done": False}
+
+    def _factory():
+        real = real_get_conn()
+
+        class _Proxy:
+            def execute(self, sql, *a, **k):
+                text = str(sql)
+                if not fired["done"] and match in text:
+                    fired["done"] = True
+                    action(real)
+                    # SQLite: the sweep holds one write transaction for the
+                    # whole call — the action's statement only becomes
+                    # visible after it commits. The winning transactor of
+                    # the audited races has its commit, so has the proxy's.
+                    real.commit()
+                return real.execute(sql, *a, **k)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        return _Proxy()
+
+    return _factory
+
+
+def _complete_now(stage_id: str):
+    """Winning worker: the stage completes with its result between the
+    sweep's SELECT and its stage-fail UPDATE."""
+    def action(conn):
+        conn.execute(
+            q("UPDATE task_stages SET status = 'completed', completed_at = ?,"
+              " result = '{\"ok\": true}' WHERE stage_id = ?",
+              (STALE, stage_id)),
+        )
+
+    return action
+
+
+def test_sf4_offline_sweep_never_fails_a_concurrently_completed_stage():
+    """SF4 (audit 2026-10-31): mark_offline_nodes SELECTs claimed stages of
+    dead nodes, then UPDATEd each by bare ``stage_id`` — a stage the worker
+    completed BETWEEN the SELECT and the sweep's UPDATE was flipped to
+    'failed': the worker's result was buried and the task was failed by the
+    remaining==0 branch (T-257's "in every SELECT-based stage UPDATE" claim
+    held only for scheduler.py; discovery.mark_offline_nodes was missed).
+    Fix: the UPDATE carries ``AND status = 'claimed'`` and the appends are
+    gated on rowcount — a lost race yields rowcount 0 and NOTHING happens.
+    """
+    from unittest import mock
+
+    from relay_server.core import discovery as disc
+
+    # W1 seeded stale last_seen + online → offline candidate; its claimed
+    # stage stC completes in the SELECT→UPDATE window.
+    _seed("tC", "stC", stage_status="claimed", claimed_by="W1", task_status="running")
+    factory = _interleave_get_conn(_complete_now("stC"))
+    with mock.patch.object(disc, "get_conn", factory):
+        offline = disc.mark_offline_nodes()
+
+    assert "W1" in offline, "the node itself still went offline (the sweep ran)"
+    assert _stage("stC")["status"] == "completed", "a completed stage is never re-failed by the sweep"
+    assert _stage("stC")["result"] == '{"ok": true}', "the worker's result survives"
+    assert _stage("stC")["claimed_by"] == "W1", "the claim is not stripped from a completed stage"
+    assert _changes("stage_failed") == [], "no lying stage_failed event for a lost race"
+    assert _changes("task_failed") == [], "no task_failed caused by a buried result"
+    assert _task("tC") == "running", "the task is not failed off its completed stage"
+
+
+def test_sf4_offline_sweep_happy_path_still_fails_a_claimed_stage():
+    """The predicate must not over-block: a genuinely dead node's claimed
+    stage is still failed by the sweep (events + task failure intact)."""
+    from relay_server.core import discovery as disc
+
+    _seed("tD", "stD", stage_status="claimed", claimed_by="W2", task_status="running")
+    offline = disc.mark_offline_nodes()
+
+    assert "W2" in offline
+    assert _stage("stD")["status"] == "failed"
+    assert _stage("stD")["claimed_by"] is None, "the dead claim is released"
+    assert _task("tD") == "failed"
+    assert len(_changes("stage_failed")) == 1
