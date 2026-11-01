@@ -202,10 +202,18 @@ def test_sf3_complete_stage_task_completed_happy_path_intact():
 def _interleave_get_conn(action, match: str = "UPDATE task_stages"):
     """Patch target for ``discovery.get_conn`` (test_t257 pattern): the
     proxy fires ``action`` right before the first statement matching
-    ``match`` — by default the sweep's stage-fail UPDATE, i.e. after the
-    ``status = 'claimed'`` SELECT has returned and ``offline_ids`` is
-    determined: the deterministic "between SELECT and UPDATE" window the
-    SF4 predicate must protect.
+    ``match``:
+
+    - default ``UPDATE task_stages``: right before the sweep's stage-fail
+      UPDATE — after the ``status = 'claimed'`` SELECT has returned and
+      ``offline_ids`` is determined. The deterministic "between SELECT and
+      UPDATE" window the SF4 predicate must protect (matching the earlier
+      per-node offline UPDATE instead would flip the stage to 'completed'
+      BEFORE the sweep's selective SELECT — the sweep would never see the
+      row and the test would prove nothing).
+    - ``UPDATE tasks``: right before the task-fail branch — between the
+      sweep's stage-fail UPDATE and the helper's ``remaining`` COUNT /
+      task UPDATE, the SF5 rowcount-gate window.
 
     SQLite is single-writer, so the second-connection write of test_t257
     is not available here: the sweep holds the only write transaction
@@ -237,6 +245,36 @@ def _interleave_get_conn(action, match: str = "UPDATE task_stages"):
     return _factory
 
 
+def _interleave_get_conn_before_task_fail(action):
+    """SF5 window: fire ``action`` right before the task-fail branch
+    reads/updates the task — i.e. AFTER the sweep's stage-fail UPDATE
+    committed its own statement, BETWEEN the sweep's stage transition and
+    its ``remaining`` COUNT / task UPDATE. Matched via the helper's
+    ``SELECT status FROM tasks`` (the first task-level statement of the
+    branch); the cancel commit lands durably, so the row state the
+    helper must cope with is exactly the audited one."""
+    fired = {"done": False}
+
+    def _factory():
+        real = real_get_conn()
+
+        class _Proxy:
+            def execute(self, sql, *a, **k):
+                text = str(sql)
+                if not fired["done"] and "SELECT status FROM tasks WHERE task_id" in text:
+                    fired["done"] = True
+                    action(real)
+                    real.commit()
+                return real.execute(sql, *a, **k)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        return _Proxy()
+
+    return _factory
+
+
 def _complete_now(stage_id: str):
     """Winning worker: the stage completes with its result between the
     sweep's SELECT and its stage-fail UPDATE."""
@@ -245,6 +283,19 @@ def _complete_now(stage_id: str):
             q("UPDATE task_stages SET status = 'completed', completed_at = ?,"
               " result = '{\"ok\": true}' WHERE stage_id = ?",
               (STALE, stage_id)),
+        )
+
+    return action
+
+
+def _cancel_task_now(task_id: str):
+    """Winning transactor: the task goes terminal ('cancelled') between
+    the sweep's stage-fail UPDATE and its task-fail UPDATE."""
+
+    def action(conn):
+        conn.execute(
+            q("UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE task_id = ?",
+              (STALE, task_id)),
         )
 
     return action
@@ -293,3 +344,53 @@ def test_sf4_offline_sweep_happy_path_still_fails_a_claimed_stage():
     assert _stage("stD")["claimed_by"] is None, "the dead claim is released"
     assert _task("tD") == "failed"
     assert len(_changes("stage_failed")) == 1
+
+
+# ── SF5: sweep task-fail branch → the helper (rowcount gate + true old_status) ──
+
+
+def test_sf5_offline_sweep_never_fails_an_already_terminal_task():
+    """SF5 (audit 2026-10-31): the sweep's task-fail branch was an inline
+    duplicate of scheduler._fail_tasks_if_all_stages_done whose append ran
+    WITHOUT the helper's rowcount gate — a task flipped terminal (here:
+    'cancelled') by a concurrent transactor between the sweep's
+    remaining==0 COUNT and the UPDATE was appended anyway (the inline
+    predicate exempted 'completed'/'failed'/'timed_out' but NOT
+    'cancelled'), the task was flipped to 'failed' on top of a terminal
+    status and the publishes stamped a HARDCODED old_status 'running'.
+    With the helper: rowcount 0 → no append, no events, and the terminal
+    status of the winning transactor stands."""
+    from unittest import mock
+
+    from relay_server.core import discovery as disc
+
+    _seed("t5", "st5", stage_status="claimed", claimed_by="W1", task_status="running")
+    factory = _interleave_get_conn_before_task_fail(_cancel_task_now("t5"))
+    with mock.patch.object(disc, "get_conn", factory):
+        offline = disc.mark_offline_nodes()
+
+    assert "W1" in offline
+    assert _stage("st5")["status"] == "failed", "the dead claim is still released (SF4 predicate)"
+    assert _task("t5") == "cancelled", "the concurrent transactor's terminal status wins"
+    assert _changes("task_failed") == [], "a task already terminal was never 'failed' by the sweep"
+    assert _task_status_changes() == [], "no lying task-level status_changed from the sweep"
+
+
+def test_sf5_offline_sweep_task_failed_event_carries_true_old_status():
+    """The helper's (task_id, old_status) pairs replace the hardcoded
+    'running': a REAL transition publishes the task's true pre-UPDATE
+    status (T-189: never guess old_status)."""
+    from relay_server.core import discovery as disc
+
+    _seed("t6", "st6", stage_status="claimed", claimed_by="W3", task_status="running")
+    offline = disc.mark_offline_nodes()
+
+    assert "W3" in offline
+    assert _task("t6") == "failed"
+    assert [e["payload"] for e in _changes("task_failed")] == [{"task_id": "t6"}]
+    task_events = _task_status_changes()
+    assert len(task_events) == 1
+    assert task_events[-1]["payload"]["old_status"] == "running", (
+        f"true pre-UPDATE status, not a guess — got {task_events[-1]['payload']}"
+    )
+    assert task_events[-1]["payload"]["new_status"] == "failed"

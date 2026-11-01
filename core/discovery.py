@@ -670,6 +670,12 @@ def get_capability_by_name(name: str) -> Optional[dict]:
     return all_caps[0]
 
 
+def _fail_tasks_if_all_stages_done(*args, **kwargs):
+    from relay_server.core.scheduler import _fail_tasks_if_all_stages_done as _impl
+
+    return _impl(*args, **kwargs)
+
+
 def mark_offline_nodes() -> List[str]:
     """Mark alive nodes as offline if heartbeat timeout exceeded (T-080).
 
@@ -773,18 +779,18 @@ def mark_offline_nodes() -> List[str]:
                     affected_tasks.add(r["task_id"])
 
             # Fail tasks where every stage has reached a terminal state.
-            tasks_failed: list[str] = []
-            for task_id in affected_tasks:
-                remaining = conn.execute(
-                    q("SELECT COUNT(*) FROM task_stages "
-                    "WHERE task_id = ? AND status NOT IN ('completed', 'failed', 'timed_out')", (task_id,)),
-                ).fetchone()[0]
-                if remaining == 0:
-                    conn.execute(
-                        q("UPDATE tasks SET status = 'failed', updated_at = ?, completed_at = ? "
-                        "WHERE task_id = ? AND status NOT IN ('failed', 'completed', 'timed_out')", (now, now, task_id)),
-                    )
-                    tasks_failed.append(task_id)
+            # SF5 (audit 2026-10-31): this was an inline duplicate of
+            # scheduler._fail_tasks_if_all_stages_done whose append ran
+            # unconditionally (rowcount lost to a concurrent transactor →
+            # task already terminal) and the task_failed/status_changed
+            # publishes below used a HARDCODED old_status "running". The
+            # helper (T-257 L1) gates on the UPDATE's rowcount and
+            # returns (task_id, old_status) pairs read from the DB.
+            tasks_trans: list = _fail_tasks_if_all_stages_done(
+                conn, affected_tasks, now,
+                terminal_stage_status=("completed", "failed", "timed_out"),
+            )
+            tasks_failed = [t for t, _ in tasks_trans]
 
         conn.commit()
 
@@ -818,14 +824,14 @@ def mark_offline_nodes() -> List[str]:
                     "new_status": "failed",
                 },
             )
-        for task_id in tasks_failed:
-            event_bus.publish_sync("task_failed", {"task_id": task_id})
+        for t, old in tasks_trans:
+            event_bus.publish_sync("task_failed", {"task_id": t})
             event_bus.publish_sync(
                 "status_changed",
                 {
                     "entity_type": "task",
-                    "entity_id": task_id,
-                    "old_status": "running",
+                    "entity_id": t,
+                    "old_status": old,
                     "new_status": "failed",
                 },
             )

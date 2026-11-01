@@ -1316,6 +1316,12 @@ def _fail_tasks_if_all_stages_done(
             q("SELECT status FROM tasks WHERE task_id = ?", (task_id,)),
         ).fetchone()
         old_status = task_before["status"] if task_before else None
+        # SF5 (audit 2026-10-31): the inline duplicate this helper replaces
+        # also guarded only failed/completed/timed_out — 'cancelled' (also
+        # terminal, see StatusCategory.TERMINAL) slipped through and a
+        # cancelled task was flipped to 'failed' here.
+        if task_before is not None and task_before["status"] in task_statuses_in_category(StatusCategory.TERMINAL):
+            continue
         placeholders = ",".join("?" for _ in terminal_stage_status)
         remaining = conn.execute(
             q(f"SELECT COUNT(*) FROM task_stages "
