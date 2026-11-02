@@ -191,7 +191,19 @@ class Scheduler:
                 )
 
             conn.commit()
-            event_bus.publish_sync("task_created", {"task_id": task_id, "task_name": task_name})
+            event_bus.publish_sync(
+                "task_created",
+                {
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    # T-245: sorted, deduped capability set of the task's
+                    # stages — node-side targeted claim skips the cap-blind
+                    # broadside sweep (N × claim-latency when N is large).
+                    "capabilities": sorted(
+                        {rec["capability"] for rec in stage_records}
+                    ),
+                },
+            )
             event_bus.publish_sync(
                 "status_changed",
                 {
@@ -506,7 +518,14 @@ class Scheduler:
 
                 event_bus.publish_sync(
                     "stage_claimed",
-                    {"task_id": row["task_id"], "stage_id": stage_id, "node_id": node_id},
+                    {
+                        "task_id": row["task_id"],
+                        "stage_id": stage_id,
+                        "node_id": node_id,
+                        # T-245: the stage's capability — node-side targeted
+                        # claim needs it in the broadcast payload.
+                        "capability": row["capability"],
+                    },
                 )
                 event_bus.publish_sync(
                     "status_changed",
