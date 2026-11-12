@@ -1,5 +1,6 @@
 """Scheduler router for task submission, claim, complete, and artifact upload."""
 
+from datetime import UTC, datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -98,15 +99,115 @@ async def scheduler_create_task(
     return _task_to_view(task)
 
 
+# T-268: task statuses a client may filter the list endpoint by. Task rows
+# only ever carry these five values (stage-only values such as timed_out or
+# orphaned never surface on tasks — timeouts mark tasks failed).
+_LISTABLE_TASK_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
+
+
+def _parse_task_statuses(raw: str | None) -> list[str] | None:
+    """T-268: normalize ``?status`` into a status list for the SQL filter.
+
+    A single value stays valid (backwards compatible); a comma-separated
+    list filters the union. Unknown values fail loud with 422 instead of
+    the previous silent ignore (the exact finding this task fixes).
+    """
+    if raw is None:
+        return None
+    values = [part.strip() for part in raw.split(",")]
+    unknown = sorted({v for v in values if v not in _LISTABLE_TASK_STATUSES})
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Unknown task status: "
+                + ", ".join(unknown)
+                + ". Valid statuses: "
+                + ", ".join(_LISTABLE_TASK_STATUSES)
+            ),
+        )
+    return values
+
+
+def _normalize_created_bound(raw: str | None, param: str) -> str | None:
+    """T-268: ISO-8601 input -> canonical UTC string for the SQL comparison.
+
+    ``tasks.created_at`` rows are timezone-aware UTC ISO strings
+    (``datetime.now(timezone.utc).isoformat()``), so a canonical ``+00:00``
+    form compares correctly lexicographically. Naive input is treated as
+    UTC. Invalid input fails loud with 422.
+    """
+    if raw is None:
+        return None
+    value = raw.strip()
+    if value.endswith(("Z", "z")):
+        value = value[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"{param}: invalid ISO-8601 timestamp: {raw!r}"
+        ) from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    return parsed.isoformat()
+
+
 @router.get("/tasks")
 async def scheduler_list_tasks(
-    status: Optional[str] = Query(None),
+    status: str | None = Query(None),
+    submitted_by: str | None = Query(None),
+    owner_node_id: str | None = Query(None),
+    created_since: str | None = Query(None),
+    created_until: str | None = Query(None),
     ctx: AuthContext = Depends(get_approved_context),
 ):
     # T-005g + T-227: non-admin nodes see their own tasks, the tasks they
     # submitted (sender view) and ownerless ones (fan-out contract).
-    scope = None if ctx.is_admin else ctx.node_id
-    return {"tasks": Scheduler.list_tasks(status=status, owner_node_id=scope, submitted_by=scope), "viewer": ctx.node_id}
+    # T-268: optional query filters AND-combine on top of that scope and
+    # only narrow, never widen, the visible set — all of them in SQL.
+    statuses = _parse_task_statuses(status)
+    since = _normalize_created_bound(created_since, "created_since")
+    until = _normalize_created_bound(created_until, "created_until")
+    if ctx.is_admin:
+        # Admin path: the filters are standalone AND filters. ``submitted_by``
+        # may NOT ride the owner_node_id scope mechanism here — admin filters
+        # are strict, they must not re-introduce the ownerless OR arm.
+        tasks = Scheduler.list_tasks(
+            status=statuses,
+            filter_owner_node_id=owner_node_id or None,
+            filter_submitted_by=submitted_by or None,
+            created_since=since,
+            created_until=until,
+        )
+    else:
+        # Non-admin path: filters deviating from the caller's own node id
+        # are rejected loudly (400). Silently rewriting them to the own id
+        # would widen the result beyond what the caller asked for; silently
+        # ignoring them was the exact T-268 finding.
+        if submitted_by and submitted_by != ctx.node_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Non-admin clients may only filter submitted_by by their own node id",
+            )
+        if owner_node_id and owner_node_id != ctx.node_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Non-admin clients may only filter owner_node_id by their own node id",
+            )
+        scope = ctx.node_id
+        tasks = Scheduler.list_tasks(
+            status=statuses,
+            owner_node_id=scope,
+            submitted_by=scope,
+            filter_owner_node_id=owner_node_id or None,
+            filter_submitted_by=submitted_by or None,
+            created_since=since,
+            created_until=until,
+        )
+    return {"tasks": tasks, "viewer": ctx.node_id}
 
 
 @router.get("/tasks/{task_id}", response_model=TaskView)

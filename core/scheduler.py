@@ -219,9 +219,13 @@ class Scheduler:
 
     @staticmethod
     def list_tasks(
-        status: Optional[str] = None,
+        status: str | list[str] | None = None,
         owner_node_id: Optional[str] = None,
         submitted_by: Optional[str] = None,
+        created_since: str | None = None,
+        created_until: str | None = None,
+        filter_owner_node_id: str | None = None,
+        filter_submitted_by: str | None = None,
     ) -> List[Dict[str, Any]]:
         conn = get_conn()
         try:
@@ -231,11 +235,28 @@ class Scheduler:
             # ownerless sub-tasks to any capable node until the first
             # claim flips the owner (T-227). ``owner_node_id=None`` is the
             # admin view (unscoped).
+            #
+            # T-268: the query filters live in SQL and AND-combine on top of
+            # that scope — they only narrow, never widen, the visible set.
+            # ``filter_owner_node_id``/``filter_submitted_by`` are strict
+            # equality filters: the admin path uses them as standalone AND
+            # filters, the non-admin path as a narrowing of the scope OR
+            # set. ``created_since``/``created_until`` compare
+            # lexicographically against the ISO-8601 ``created_at`` strings;
+            # callers must pass canonical UTC strings (the endpoint
+            # normalizes naive input as UTC).
             where: List[str] = []
             args: List[Any] = []
             if status:
-                where.append("status = ?")
-                args.append(status)
+                if isinstance(status, (list, tuple)):
+                    values = [str(v) for v in status]
+                    if values:
+                        slots = ", ".join("?" for _ in values)
+                        where.append(f"status IN ({slots})")
+                        args.extend(values)
+                else:
+                    where.append("status = ?")
+                    args.append(status)
             if owner_node_id is not None:
                 clause = "(owner_node_id IS NULL OR owner_node_id = ?"
                 cargs: List[Any] = [owner_node_id]
@@ -245,6 +266,18 @@ class Scheduler:
                 clause += ")"
                 where.append(clause)
                 args.extend(cargs)
+            if filter_owner_node_id:
+                where.append("owner_node_id = ?")
+                args.append(filter_owner_node_id)
+            if filter_submitted_by:
+                where.append("submitted_by = ?")
+                args.append(filter_submitted_by)
+            if created_since:
+                where.append("created_at >= ?")
+                args.append(created_since)
+            if created_until:
+                where.append("created_at <= ?")
+                args.append(created_until)
             sql = "SELECT * FROM tasks"
             if where:
                 sql += " WHERE " + " AND ".join(where)
