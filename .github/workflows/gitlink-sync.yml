@@ -1,0 +1,95 @@
+name: gitlink-sync
+
+# Auto-bump the docs submodule gitlink on this repo's main to docs main HEAD.
+#
+# Counterpart to the docs repo's `submodule-drift` gate (that job is loud but
+# does NOT push — deliberate: no cross-repo token trust from docs). This
+# workflow runs HERE, where a same-repo GITHUB_TOKEN push is enough, so the
+# drift is healed automatically and the docs gate stays green.
+#
+# Cadence: hourly, picked up right after the docs daily drift cron (04:23 ->
+# the 04:53 hourly run), plus manual dispatch.
+#
+# Direct push to main is safe here: the publish workflow is version-gated and
+# idempotent (T-266) — a gitlink-only commit builds a wheel that skips upload.
+# If main moved during the run, the job re-pulls once and re-applies; only a
+# real conflict fails loud.
+
+on:
+  schedule:
+    - cron: "53 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gitlink-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Bump docs gitlink when docs main moved
+        run: |
+          set -euo pipefail
+
+          git config user.name  "gitlink-sync"
+          git config user.email "actions@github.com"
+
+          # fresh remote state; re-applied inside the race-retry loop too
+          pull_main() {
+            git fetch -q origin main
+            git checkout -q main
+            git reset --hard -q origin/main
+          }
+          pull_main
+
+          cd docs
+          git fetch -q origin
+          DOCS_SHA="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          cd ..
+
+          GITLINK="$(git ls-tree HEAD docs | awk '{print $3}')"
+          echo "docs main HEAD:  $DOCS_SHA"
+          echo "server gitlink:  $GITLINK"
+
+          if [ "$GITLINK" = "$DOCS_SHA" ]; then
+            echo "in sync — nothing to do"
+            exit 0
+          fi
+
+          echo "drift: bumping gitlink to $DOCS_SHA (docs moved ahead)"
+          git -C docs checkout -q "$DOCS_SHA"
+          git add docs
+          if git diff --quiet --cached HEAD -- docs; then
+            echo "no staged diff — nothing to commit"
+            exit 0
+          fi
+          git commit -q -m "docs: auto-bump gitlink ${GITLINK:0:7} -> ${DOCS_SHA:0:7} (gitlink-sync)
+
+          [skip ci]"
+
+          # race-safe push: re-pull and re-apply; the gitlink commit only
+          # touches docs/, so rebase-free replay after reset is conflict-free
+          ok=0
+          for attempt in 1 2 3; do
+            if git push origin main 2>/dev/null; then ok=1; break; fi
+            pull_main
+            git -C docs checkout -q "$DOCS_SHA"
+            git add docs
+            if git diff --quiet --cached HEAD -- docs; then
+              echo "another run already synced — done"
+              ok=1; break
+            fi
+            git commit -q -m "docs: auto-bump gitlink -> ${DOCS_SHA:0:7} (gitlink-sync)
+
+          [skip ci]" || { ok=1; break; }
+          done
+          [ "$ok" = "1" ] || { echo "push failed after retries"; exit 1; }
