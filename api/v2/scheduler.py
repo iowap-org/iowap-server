@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from relay_server.api.v2.security import get_alive_context, get_approved_context
 from relay_server.core.artifacts import store_artifact
 from relay_server.core.db import get_conn, q
+from relay_server.core.discovery import get_node
 from relay_server.core.events import event_bus
 from relay_server.core.forward import (
     ForwardRoutingError,
@@ -73,6 +74,27 @@ def _apply_forward_redirects(submitter_node_id: str, stages: list[dict[str, Any]
         ) from exc
 
 
+def _ensure_owner_node_exists(owner_node_id: Optional[str]) -> None:
+    """Parked-Row v5 Punkt 5: unknown owner_node_id -> clean 404 (was: 500).
+
+    ``Scheduler.create_task`` inserts blindly; ``tasks.owner_node_id``
+    carries an FK to ``nodes(node_id)`` (``PRAGMA foreign_keys=ON``), so an
+    unknown owner surfaced downstream as an unhandled
+    ``sqlite3.IntegrityError`` — an HTTP 500 without a detail body that
+    wrappers cannot distinguish from a relay fault (blind retry or silent
+    drop). The id is format-valid, the object is missing: 404 with the
+    node_id in the detail. ``None`` (ownerless fan-out) is valid and
+    skipped. Known owners and the schema stay untouched.
+    """
+    if not owner_node_id:
+        return
+    if get_node(owner_node_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Owner node '{owner_node_id}' not found",
+        )
+
+
 @router.post("/tasks", response_model=TaskView)
 async def scheduler_create_task(
     body: TaskRequest,
@@ -82,6 +104,7 @@ async def scheduler_create_task(
     stages = [s.model_dump() for s in body.stages]
     # T-Forward: resolve 'forward' stages against the submitter's mappings.
     _apply_forward_redirects(ctx.node_id, stages)
+    _ensure_owner_node_exists(body.owner_node_id)
     result = Scheduler.create_task(
         task_name=body.task_name,
         stages=stages,
@@ -402,6 +425,11 @@ async def scheduler_create_simple_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Capability '{capability}' not found",
         )
+
+    # Parked-Row v5 Punkt 5: an unknown owner_node_id must fail here with a
+    # clean 404, never as the downstream FK IntegrityError (500 without a
+    # detail body). Runs after the capability check to keep its precedence.
+    _ensure_owner_node_exists(body.owner_node_id)
 
     result = Scheduler.create_task(
         task_name=task_name,
