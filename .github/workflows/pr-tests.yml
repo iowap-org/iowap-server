@@ -34,6 +34,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # docs/ is a submodule and part of the tested surface
+          # (package-data + test_t216 docs discovery): checkout it too,
+          # otherwise those tests fail instead of arriving at the known
+          # "2 skipped (docs-checkout)" state the suite documents.
+          submodules: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
