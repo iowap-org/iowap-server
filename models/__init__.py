@@ -13,6 +13,31 @@ from relay_server.config import settings
 # created_at ASC, sequence ASC (FIFO among equal priority).
 PRIORITY_TOP = 10
 
+# T-274 P8: board_task_id transport limits (metadata validation is loud 422).
+BOARD_TASK_ID_MAX_CHARS = 255
+
+
+def _validate_board_task_id_metadata(metadata: Optional[Dict[str, Any]]) -> None:
+    """T-274 P8: loud 422 for a set-but-invalid ``metadata.board_task_id``.
+
+    Valid = a non-empty string of at most 255 characters (a board row label
+    the submitter wants linked). Wrong types (numbers, dicts), empty strings
+    and overlong labels are rejected at the transport layer — they never
+    reach the tasks row silently mangled. An absent metadata / key stays
+    valid: board linking is opt-in.
+    """
+    if metadata is None or "board_task_id" not in metadata:
+        return
+    value = metadata["board_task_id"]
+    if (
+        not isinstance(value, str)
+        or not (1 <= len(value) <= BOARD_TASK_ID_MAX_CHARS)
+    ):
+        raise ValueError(
+            "metadata.board_task_id must be a non-empty string of at most "
+            f"{BOARD_TASK_ID_MAX_CHARS} characters"
+        )
+
 # ── Capability (server-side, for API requests/responses) ──────
 
 class Capability(BaseModel):
@@ -163,6 +188,16 @@ class TaskRequest(BaseModel):
     priority: int = Field(default=0, ge=0, le=10)
     owner_node_id: Optional[str] = None
     timeout_seconds: Optional[int] = None
+    # T-274 P8: optional task metadata. ``metadata.board_task_id`` carries
+    # the project-board row label to link the relay task to (persisted on
+    # tasks.board_task_id, readable in TaskView/API); other keys are kept
+    # but have no relay-side meaning. An absent metadata stays the old shape.
+    metadata: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_board_task_id(self):
+        _validate_board_task_id_metadata(self.metadata)
+        return self
 
 
 class TaskSummary(BaseModel):
@@ -176,6 +211,9 @@ class TaskSummary(BaseModel):
         description="Node that submitted the task (T-227 sender view; server-derived "
                     "from the auth context, not client-suppliable). NULL for legacy tasks.",
     )
+    # T-274 P8: project-board row label from the submit-time
+    # ``metadata.board_task_id``; NULL = no board link.
+    board_task_id: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -202,6 +240,13 @@ class StageSummary(BaseModel):
         description="How many times this stage has been released back to pending "
                     "after a failed/expired claim (T-060). Once it exceeds "
                     "max_retries the stage is failed permanently.",
+    )
+    # T-274 P7: schema warn — {"state": "schema_violation", ...violations} or
+    # {"state": "unvalidated", ...reason}. NULL means validated: absence of a
+    # warn IS the validated state.
+    schema_violation: Optional[Dict[str, Any]] = Field(
+        None,
+        description="T-274 P7 submit-time schema warn on this stage; NULL = validated.",
     )
     capability_details: Optional[Dict[str, Any]] = Field(
         None,
@@ -347,6 +392,9 @@ class SimpleTaskRequest(BaseModel):
         None,
         description="Unique key – prevents duplicates on retries",
     )
+    # T-274 P8: optional metadata — ``board_task_id`` links the relay task
+    # to a project-board row (persisted, readable in TaskView/API).
+    metadata: Optional[Dict[str, Any]] = None
 
     @model_validator(mode='after')
     def validate_payload_size(self):
@@ -355,6 +403,7 @@ class SimpleTaskRequest(BaseModel):
             raise ValueError(
                 f"Payload exceeds maximum size of {settings.max_payload_bytes} bytes"
             )
+        _validate_board_task_id_metadata(self.metadata)
         return self
 
 
@@ -365,6 +414,9 @@ class SimpleTaskResponse(BaseModel):
     stage_id: str
     status: str  # pending
     capability: str
+    # T-274 P7: the submit-time schema warn of the stage — never raises.
+    # NULL = validated; {"state": "schema_violation"|"unvalidated", ...}.
+    schema_violation: Optional[Dict[str, Any]] = None
 
 # ── Forward routing (T-Forward) ────────────────────────────────
 
@@ -472,6 +524,10 @@ class CapabilityStatus(BaseModel):
     type: Optional[str] = None
     description: Optional[str] = None
     input_schema: Optional[dict[str, Any]] = None
+    # T-274 P7: SHA-256 over the canonical input_schema JSON, carried by the
+    # same heartbeat. The submit-time warn gate vouches for a schema basis
+    # only when the heartbeat shipped hash AND schema together.
+    schema_hash: Optional[str] = None
     # T-164: supported file-transfer modes (inline/artifact/bridge). Stored
     # in node_capabilities.upload_modes so file send/file get can pick the
     # right rung without an extra discovery round-trip.
@@ -510,6 +566,17 @@ class HeartbeatRequest(BaseModel):
     # (``[{slot: "1", label: ..., description: ...}, ...]``). Optional;
     # when present the relay replaces the node's declared rows.
     forward_slots: Optional[List[Dict[str, Any]]] = None
+    # T-274 P4/P6: aggregated bridge outcome counters, keyed by bridge
+    # (``{"a2a": {"delivered": …, "dropped": …, "failed": …,
+    # "pending_count": …, "oldest_pending_age_seconds": …}}``). Counters
+    # only (K3) — the raw ledger stays on the node. Persisted on the nodes
+    # row and exposed via the node-status API / dashboard.
+    bridge_outcomes: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Wrapper outcome counters per bridge (delivered/dropped/"
+                    "failed, pending count + oldest pending age). Counters only, "
+                    "no message bodies.",
+    )
 
 
 class NodeHeartbeatRequest(BaseModel):
@@ -531,6 +598,14 @@ class NodeHeartbeatRequest(BaseModel):
     # T-Forward-2: node-declared forward slots (same shape/semantics as
     # HeartbeatRequest).
     forward_slots: Optional[List[Dict[str, Any]]] = None
+    # T-274 P4/P6: aggregated bridge outcome counters (same shape/semantics
+    # as HeartbeatRequest.bridge_outcomes) — counters only, no message data.
+    bridge_outcomes: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Wrapper outcome counters per bridge (delivered/dropped/"
+                    "failed, pending count + oldest pending age). Counters only, "
+                    "no message bodies.",
+    )
 
 
 # ── Presence ────────────────────────────────────────────────────

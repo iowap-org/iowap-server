@@ -154,6 +154,10 @@ nodes = sa.Table(
     sa.Column("description", sa.Text, nullable=True),
     # T-081: auto-busy counter.
     sa.Column("consecutive_high_load", sa.Integer, default=0),
+    # T-274 P4/P6: aggregated bridge outcome counters per bridge (JSON TEXT;
+    # NULL = no outcomes reported). Counters only (K3) — the raw delivery
+    # ledger stays on the node and is pulled via correlation ids.
+    sa.Column("bridge_outcomes", sa.Text, nullable=True),
 )
 
 # Normalized capability index (T-026).
@@ -165,6 +169,10 @@ node_capabilities = sa.Table(
     sa.Column("capability_version", sa.String(64), default="1.0.0"),
     sa.Column("description", sa.Text, nullable=True),
     sa.Column("input_schema", sa.Text, nullable=True),
+    # T-274 P7: schema_hash — freshness signal carried by the last heartbeat;
+    # submit-time schema checks only vouch for a basis with both schema and
+    # hash (schema without hash → unvalidated, never warn-false).
+    sa.Column("schema_hash", sa.Text, nullable=True),
     sa.Column("available", sa.Boolean, default=True),
     sa.Column("updated_at", sa.String(64), nullable=False),
     sa.PrimaryKeyConstraint("node_id", "capability_name"),
@@ -225,6 +233,9 @@ tasks = sa.Table(
     sa.Column("created_at", sa.String(64), nullable=False),
     sa.Column("updated_at", sa.String(64), nullable=False),
     sa.Column("completed_at", sa.String(64), nullable=True),
+    # T-274 P8: project-board row label submitted as metadata.board_task_id.
+    # Plain TEXT, no FK — the linked row lives in another system.
+    sa.Column("board_task_id", sa.Text, nullable=True),
     sa.ForeignKeyConstraint(["owner_node_id"], ["nodes.node_id"]),
 )
 
@@ -252,6 +263,9 @@ task_stages = sa.Table(
     sa.Column("forward_slot", sa.String(64), nullable=True),
     # T-246: execution-address pin copied from the mapping at submit time.
     sa.Column("target_node_id", sa.String(64), nullable=True),
+    # T-274 P7: persisted submit-time schema warn (JSON TEXT; NULL =
+    # validated — absence of a warn is the validated state).
+    sa.Column("schema_violation", sa.Text, nullable=True),
     sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"]),
     sa.ForeignKeyConstraint(["claimed_by"], ["nodes.node_id"]),
     sa.ForeignKeyConstraint(["target_node_id"], ["nodes.node_id"]),

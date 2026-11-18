@@ -432,7 +432,7 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
         now = datetime.now(timezone.utc)
         DASHBOARD_ADMIN_NODE = "__dashboard_admin__"
         node_rows = conn.execute(
-            q("SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen, first_heartbeat_seen, load, queue_depth "
+            q("SELECT node_id, node_name, endpoint, capabilities, status, role, last_seen, first_heartbeat_seen, load, queue_depth, bridge_outcomes "
             "FROM nodes ORDER BY registered_at DESC")
         ).fetchall()
         nodes = []
@@ -457,6 +457,9 @@ async def dashboard_overview(request: Request, ctx: AuthContext = Depends(requir
                     "first_heartbeat_seen": r["first_heartbeat_seen"],
                     "load": r["load"],
                     "queue_depth": r["queue_depth"],
+                    # T-274 P4/P6: aggregated bridge outcome counters (the
+                    # node cards render them); None = never reported.
+                    "bridge_outcomes": _safe_json(r["bridge_outcomes"], None),
                     "online": r["status"] == "online",
                 }
             )

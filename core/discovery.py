@@ -121,6 +121,7 @@ def heartbeat(
     load_cap: Optional[float] = None,
     load_source: Optional[str] = None,
     forward_slots: Optional[List[Dict[str, Any]]] = None,  # T-Forward-2
+    bridge_outcomes: Optional[Dict[str, Any]] = None,  # T-274 P4/P6
 ) -> bool:
     """Process a node heartbeat. Returns True if node was updated.
 
@@ -142,6 +143,15 @@ def heartbeat(
     :data:`settings.auto_busy_consecutive_heartbeats` heartbeats in a
     row, the node is automatically transitioned to ``busy`` (and back
     to ``idle`` once the load drops).
+
+    T-274 P4/P6: ``bridge_outcomes`` carries the wrapper's aggregated
+    bridge outcome counters (delivered / dropped / failed, pending count
+    + oldest pending age, keyed by bridge). It rides the EXISTING
+    heartbeat (no new channel — T-053/T-056 field convention) and is
+    persisted on the ``nodes`` row for the node-status API. K3: counters
+    only — the raw delivery ledger stays on the node and is pulled via
+    correlation ids. A heartbeat WITHOUT the field never wipes the last
+    known counters (the field is optional, ``None`` = no update).
     """
     conn = get_conn()
     merged = None
@@ -199,6 +209,12 @@ def heartbeat(
         if description is not None:
             updates.append("description = ?")
             params.append(description)
+        if bridge_outcomes is not None:
+            # T-274 P4/P6: persisted counters — JSON round-trip must return
+            # exactly what the node sent. Absent field → no update (the
+            # last known counters survive, see docstring).
+            updates.append("bridge_outcomes = ?")
+            params.append(json.dumps(bridge_outcomes))
         if capabilities is not None:
             if replace_capabilities:
                 # Full replace – worker sends complete capability set
@@ -391,13 +407,13 @@ def list_nodes(status: Optional[str] = None) -> List[Dict[str, Any]]:
         if status and status.lower() != "all":
             rows = conn.execute(
                 q("SELECT node_id, node_name, description, endpoint, capabilities, load, load_source, queue_depth, "
-                "available, last_seen, registered_at, status, role "
+                "available, last_seen, registered_at, status, role, bridge_outcomes "
                 "FROM nodes WHERE status = ? ORDER BY registered_at DESC", (status,)),
             ).fetchall()
         else:
             rows = conn.execute(
                 q("SELECT node_id, node_name, description, endpoint, capabilities, load, load_source, queue_depth, "
-                "available, last_seen, registered_at, status, role "
+                "available, last_seen, registered_at, status, role, bridge_outcomes "
                 "FROM nodes ORDER BY registered_at DESC")
             ).fetchall()
 
@@ -412,7 +428,7 @@ def get_node(node_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = conn.execute(
             q("SELECT node_id, node_name, description, endpoint, capabilities, load, load_source, queue_depth, "
-            "available, last_seen, registered_at, status, role "
+            "available, last_seen, registered_at, status, role, bridge_outcomes "
             "FROM nodes WHERE node_id = ?", (node_id,)),
         ).fetchone()
         return _node_row_to_dict(row) if row else None
@@ -841,6 +857,17 @@ def mark_offline_nodes() -> List[str]:
         conn.close()
 
 
+def _parse_json_object(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse a stored JSON object column; None-safe, corrupt → None."""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
 def _node_row_to_dict(row: Any) -> Dict[str, Any]:
     return {
         "node_id": row["node_id"],
@@ -855,4 +882,11 @@ def _node_row_to_dict(row: Any) -> Dict[str, Any]:
         "registered_at": row["registered_at"],
         "status": row["status"],
         "role": row["role"],
+        # T-274 P4/P6: aggregated bridge outcome counters (or NULL for
+        # nodes that never reported them).
+        "bridge_outcomes": (
+            _parse_json_object(row["bridge_outcomes"])
+            if "bridge_outcomes" in row.keys()
+            else None
+        ),
     }

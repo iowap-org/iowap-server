@@ -17,6 +17,7 @@ from relay_server.core.forward import (
     resolve_forward_stages,
 )
 from relay_server.core.scheduler import Scheduler
+from relay_server.core.schema_check import build_stage_warn
 from relay_server.models import (
     ArtifactUploadResponse,
     AuthContext,
@@ -95,6 +96,35 @@ def _ensure_owner_node_exists(owner_node_id: Optional[str]) -> None:
         )
 
 
+def _board_task_id_from_metadata(
+    metadata: Optional[dict[str, Any]],
+) -> Optional[str]:
+    """T-274 P8: extract ``metadata.board_task_id`` from the submit body.
+
+    The transport model 422s invalid values (models.__init__
+    ``_validate_board_task_id_metadata``); here only the extraction happens.
+    """
+    if not metadata:
+        return None
+    value = metadata.get("board_task_id")
+    return value if isinstance(value, str) and value else None
+
+
+def _apply_schema_warns(stages: list[dict[str, Any]]) -> None:
+    """T-274 P7: compute and attach the schema warn per stage, in place.
+
+    The check runs against the capability's last-heartbeat schema basis
+    (``node_capabilities.schema_hash`` — the freshness signal). The warn
+    path NEVER gates the submit: violations and missing bases are marked
+    on the stage (``schema_violation``, persisted verbatim) and the task
+    runs normally. Validated stages stay clean (None = validated).
+    """
+    for stage in stages:
+        stage["schema_violation"] = build_stage_warn(
+            stage["capability"], stage.get("payload") or {}
+        )
+
+
 @router.post("/tasks", response_model=TaskView)
 async def scheduler_create_task(
     body: TaskRequest,
@@ -105,6 +135,10 @@ async def scheduler_create_task(
     # T-Forward: resolve 'forward' stages against the submitter's mappings.
     _apply_forward_redirects(ctx.node_id, stages)
     _ensure_owner_node_exists(body.owner_node_id)
+    # T-274 P7: schema warn per stage (mark, never gate) — computed after
+    # the forward redirects so the resolved target capability is the one
+    # checked. T-274 P8: board link from metadata rides the task.
+    _apply_schema_warns(stages)
     result = Scheduler.create_task(
         task_name=body.task_name,
         stages=stages,
@@ -112,6 +146,7 @@ async def scheduler_create_task(
         owner_node_id=body.owner_node_id,
         timeout_seconds=body.timeout_seconds,
         submitted_by=ctx.node_id,
+        board_task_id=_board_task_id_from_metadata(body.metadata),
     )
     task = Scheduler.get_task(result["task_id"])
     if not task:
@@ -431,6 +466,11 @@ async def scheduler_create_simple_task(
     # detail body). Runs after the capability check to keep its precedence.
     _ensure_owner_node_exists(body.owner_node_id)
 
+    # T-274 P7: schema warn of the single stage, computed after forward
+    # redirects — marked on the response and persisted on the stage, never
+    # gated. T-274 P8: board link from metadata rides the task.
+    _apply_schema_warns(stages)
+
     result = Scheduler.create_task(
         task_name=task_name,
         stages=stages,
@@ -439,6 +479,7 @@ async def scheduler_create_simple_task(
         timeout_seconds=body.timeout_seconds,
         idempotency_key=body.idempotency_key,
         submitted_by=ctx.node_id,
+        board_task_id=_board_task_id_from_metadata(body.metadata),
     )
 
     task_detail = Scheduler.get_task(result["task_id"])
@@ -453,4 +494,7 @@ async def scheduler_create_simple_task(
         stage_id=task_detail["stages"][0]["stage_id"],
         status="pending",
         capability=capability,
+        # T-274 P7: the persisted stage warn of the single stage (None =
+        # validated absence).
+        schema_violation=task_detail["stages"][0].get("schema_violation"),
     )

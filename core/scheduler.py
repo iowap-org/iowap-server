@@ -96,12 +96,19 @@ class Scheduler:
         timeout_seconds: Optional[int] = None,
         idempotency_key: Optional[str] = None,
         submitted_by: Optional[str] = None,
+        board_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new task and decompose it into stages.
 
         T-045: When ``idempotency_key`` is given and a task with the same
         key already exists, that existing task is returned unchanged
         (duplicate suppression on client retries).
+
+        T-274 P8: ``board_task_id`` is the project-board row label submitted
+        as ``metadata.board_task_id`` (server-persisted, no link resolution).
+        T-274 P7: stages may carry a ``schema_violation`` warn dict, persisted
+        verbatim on the stage row (JSON) — the warn path never gates the
+        submit.
         """
         # Idempotency check: same key → return existing task.
         if idempotency_key:
@@ -125,9 +132,10 @@ class Scheduler:
                 conn.execute(
                 q("""
                 INSERT INTO tasks (task_id, task_name, status, priority, owner_node_id,
-                                   submitted_by, timeout_seconds, idempotency_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (task_id, task_name, "pending", priority, owner_node_id, submitted_by, default_timeout, idempotency_key, now, now)),
+                                   submitted_by, timeout_seconds, idempotency_key,
+                                   board_task_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (task_id, task_name, "pending", priority, owner_node_id, submitted_by, default_timeout, idempotency_key, board_task_id, now, now)),
                 )
             except sqlite3.IntegrityError:
                 # Lost a race against a concurrent submit with the same key —
@@ -157,6 +165,9 @@ class Scheduler:
                         "payload": _serialize(stage.get("payload")),
                         "forward_slot": stage.get("forward_slot"),
                         "target_node_id": stage.get("target_node_id"),
+                        # T-274 P7: submit-time schema warn (JSON) — carried
+                        # in verbatim, absent/None stays NULL = validated.
+                        "schema_violation": _serialize(stage.get("schema_violation")),
                     }
                 )
 
@@ -171,8 +182,8 @@ class Scheduler:
                     INSERT INTO task_stages
                     (stage_id, task_id, stage_name, capability, depends_on, status,
                      sequence, timeout_seconds, payload, forward_slot, target_node_id,
-                     created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     schema_violation, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         rec["stage_id"],
                         task_id,
@@ -185,6 +196,7 @@ class Scheduler:
                         rec["payload"],
                         rec.get("forward_slot"),
                         rec.get("target_node_id"),
+                        rec.get("schema_violation"),
                         now,
                         now,
                     )),
@@ -1511,6 +1523,8 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "priority": row["priority"],
         "owner_node_id": row["owner_node_id"],
         "submitted_by": row["submitted_by"],
+        # T-274 P8: board row label from the submit-time metadata.
+        "board_task_id": row["board_task_id"] if "board_task_id" in row.keys() else None,
         "timeout_seconds": row["timeout_seconds"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -1538,4 +1552,7 @@ def _stage_row_to_dict(row: Any) -> Dict[str, Any]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "retry_count": int(row["retry_count"] or 0),
+        # T-274 P7: persisted submit-time schema warn (parsed JSON; NULL =
+        # validated — absence of a warn IS the validated state).
+        "schema_violation": _parse(row["schema_violation"]),
     }

@@ -1096,6 +1096,62 @@ def _m018_forward_binding(conn: DBConn) -> None:
         _exec(conn, "ALTER TABLE forward_mappings ADD COLUMN binding TEXT")
 
 
+def _m019_nodes_bridge_outcomes(conn: DBConn) -> None:
+    """nodes (T-274 P4/P6): bridge_outcomes — wrapper outcome counters.
+
+    Heartbeat-mitgetragene aggregated bridge outcome counters (delivered /
+    dropped / failed, pending count + oldest pending age) per bridge, stored
+    as ``json.dumps`` TEXT; NULL = keine Outcomes gemeldet (Legacy-Nodes).
+    K3: nur COUNTERS — die Rohdaten (Ledger) bleiben am Node und werden per
+    correlation_id gepullt. Kein Backfill: existierende Rows sind
+    outcomes-frei per Definition.
+    """
+    cols = _column_names(conn, "nodes")
+    if "bridge_outcomes" not in cols:
+        _exec(conn, "ALTER TABLE nodes ADD COLUMN bridge_outcomes TEXT")
+
+
+def _m020_tasks_board_task_id(conn: DBConn) -> None:
+    """tasks (T-274 P8): board_task_id — Board-Link via task metadata.
+
+    Optionaler project-board Row-Bezug, den der Submitter als
+    ``metadata.board_task_id`` beim Submit mitliefert; NULL = kein Link
+    (löst die Name-Präfix-Konvention ab). Kein FK — der Board-Kontext
+    lebt in einem anderen System, kein referenzieller Anspruch.
+    """
+    cols = _column_names(conn, "tasks")
+    if "board_task_id" not in cols:
+        _exec(conn, "ALTER TABLE tasks ADD COLUMN board_task_id TEXT")
+
+
+def _m021_node_capabilities_schema_hash(conn: DBConn) -> None:
+    """node_capabilities (T-274 P7): schema_hash — Freshness-Signal.
+
+    Das Submit-Warn-Gate validiert nur gegen ein Schema, dessen
+    ``schema_hash`` vom letzten Heartbeat mitgeliefert wurde. Schema ohne
+    Hash = keine vouchbare Basis -> ``unvalidated`` statt warn-falsch.
+    Nullable; Legacy-Rows (Schema ohne Hash) lesen als no_schema_basis.
+    """
+    if "node_capabilities" in _table_names(conn):
+        cols = _column_names(conn, "node_capabilities")
+        if "schema_hash" not in cols:
+            _exec(conn, "ALTER TABLE node_capabilities ADD COLUMN schema_hash TEXT")
+
+
+def _m022_task_stages_schema_violation(conn: DBConn) -> None:
+    """task_stages (T-274 P7): schema_violation — Warn-Pfad persistiert.
+
+    Das Submit prüft den Stage-Payload gegen die input_schema-Basis des
+    Ziel-Capabilitys; Violation/keine Basis wird als Warn-Dict
+    (state: schema_violation | unvalidated) je Stage als JSON TEXT
+    gespeichert und in der TaskView/API gelesen. NULL = validated
+    (Abwesenheit = validiert). KEIN 422 — der Warn-Pfad failt nie.
+    """
+    cols = _column_names(conn, "task_stages")
+    if "schema_violation" not in cols:
+        _exec(conn, "ALTER TABLE task_stages ADD COLUMN schema_violation TEXT")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -1115,6 +1171,10 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (16, "forward_slot_types", _m016_forward_slot_types),
     (17, "forward_mapping_pins", _m017_forward_mapping_pins),
     (18, "forward_binding", _m018_forward_binding),
+    (19, "nodes_bridge_outcomes", _m019_nodes_bridge_outcomes),
+    (20, "tasks_board_task_id", _m020_tasks_board_task_id),
+    (21, "node_capabilities_schema_hash", _m021_node_capabilities_schema_hash),
+    (22, "task_stages_schema_violation", _m022_task_stages_schema_violation),
 ]
 
 
@@ -1271,6 +1331,7 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 input_schema = None
                 upload_modes = None
                 result_path_hints = None
+                schema_hash = None
             else:
                 name = cap.get("name")
                 if not name:
@@ -1291,12 +1352,17 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                 # dot paths into the task result (e.g. ["result.answer"]).
                 hints = cap.get("result_path_hints")
                 result_path_hints = json.dumps(hints) if hints is not None else None
+                # T-274 P7: schema_hash rides the JSON → index reconcile the
+                # same way, so a legacy resync does not blank the freshness
+                # signal for capabilities whose heartbeat carried it.
+                schema_hash = cap.get("schema_hash")
             _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 description, input_schema, upload_modes, result_path_hints, available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 description, input_schema, upload_modes, result_path_hints,
+                 schema_hash, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(node_id, capability_name) DO UPDATE SET
                     capability_type = excluded.capability_type,
                     capability_version = excluded.capability_version,
@@ -1304,11 +1370,12 @@ def _migrate_node_capabilities(conn: DBConn) -> None:
                     input_schema = excluded.input_schema,
                     upload_modes = excluded.upload_modes,
                     result_path_hints = excluded.result_path_hints,
+                    schema_hash = excluded.schema_hash,
                     available = excluded.available,
                     updated_at = excluded.updated_at
                 """,
                 (node_id, name, cap_type, version, description, input_schema,
-                 upload_modes, result_path_hints, available, now),
+                 upload_modes, result_path_hints, schema_hash, available, now),
             )
 
 
@@ -1485,6 +1552,10 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 # dot paths into the task result (e.g. ["result.answer"]).
                 hints = cap.get("result_path_hints")
                 result_path_hints = json.dumps(hints) if hints is not None else None
+                # T-274 P7: schema_hash — freshness signal; the submit-time
+                # warn gate only vouches for a basis whose hash the heartbeat
+                # carried verbatim (schema without hash → no vouchable basis).
+                schema_hash = cap.get("schema_hash")
             else:
                 name = str(cap)
                 cap_type = None
@@ -1494,15 +1565,17 @@ def sync_node_capabilities(node_id: str, capabilities: list) -> None:
                 input_schema = None
                 upload_modes = None
                 result_path_hints = None
+                schema_hash = None
             _exec(conn, 
                 """
                 INSERT INTO node_capabilities
                 (node_id, capability_name, capability_type, capability_version,
-                 description, input_schema, upload_modes, result_path_hints, available, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 description, input_schema, upload_modes, result_path_hints,
+                 schema_hash, available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (node_id, name, cap_type, version, description, input_schema,
-                 upload_modes, result_path_hints, available, now),
+                 upload_modes, result_path_hints, schema_hash, available, now),
             )
         conn.commit()
     finally:
