@@ -1,0 +1,51 @@
+name: PR Tests
+
+# T-274 P3: CI duty for PRs against iowap-server. PR #2 ran without a
+# single check run — the suite (green locally before every deploy, see
+# publish.yml) was the only gate, and it lived only in Felix's shell.
+#
+# Mirror of the local contract: Python 3.11 (same as publish.yml),
+# `pip install -e .` for the package, then the exact command the repo
+# documents everywhere: `env -u PYTHONPATH .venv/bin/python -m pytest`.
+# The venv exists so the command matches the docs/CT-deploy form 1:1 —
+# `env -u PYTHONPATH` keeps a poisoned PYTHONPATH from faking green.
+#
+# No matrix: the CI matrix channel (3.11/3.12) was dropped in the T-266
+# decision (Ronny 2026-10-31 — matrix noise without a consumer).
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create venv and install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
+
+      - name: Run test suite (same command as local/CT deploy)
+        run: |
+          env -u PYTHONPATH .venv/bin/python -m pytest
