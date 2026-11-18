@@ -20,6 +20,11 @@ on:
       - synchronize
       - reopened
   workflow_dispatch:
+    inputs:
+      pytest_args:
+        description: "Extra pytest args (e.g. 'tests/test_t215_summary_capabilities.py -x' for a single-file debug run); default: full suite"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -54,4 +59,4 @@ jobs:
 
       - name: Run test suite (same command as local/CT deploy)
         run: |
-          env -u PYTHONPATH .venv/bin/python -m pytest
+          env -u PYTHONPATH .venv/bin/python -m pytest ${{ inputs.pytest_args }}
