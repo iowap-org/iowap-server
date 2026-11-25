@@ -1152,6 +1152,35 @@ def _m022_task_stages_schema_violation(conn: DBConn) -> None:
         _exec(conn, "ALTER TABLE task_stages ADD COLUMN schema_violation TEXT")
 
 
+def _m023_artifact_links_table(conn: DBConn) -> None:
+    """artifact_links (T-033): signed short-lived artifact download links.
+
+    A row is created by POST /storage/files/{id}/link and consumed by
+    GET /storage/files/{id}/dl/{token}. ``token_hash`` is the SHA-256 hex
+    of the URL token — the plain token is NEVER persisted (same rule as
+    the API keys). No hard FK to artifacts: the artifacts table is a
+    transient transfer buffer whose rows are purged by TTL while link
+    rows stay behind until their own purge for audit.
+    """
+    if "artifact_links" not in _table_names(conn):
+        _exec(conn, """
+            CREATE TABLE IF NOT EXISTS artifact_links (
+                link_id TEXT PRIMARY KEY,
+                artifact_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_by TEXT,
+                max_downloads INTEGER NOT NULL DEFAULT 1,
+                downloads INTEGER NOT NULL DEFAULT 0,
+                expires_at REAL NOT NULL,
+                created_at REAL NOT NULL
+            )
+        """)
+        _exec(conn,
+            "CREATE INDEX IF NOT EXISTS idx_artifact_links_artifact "
+            "ON artifact_links(artifact_id)"
+        )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (1, "users_columns", _m001_users_columns),
     (2, "nodes_columns", _m002_nodes_columns),
@@ -1175,6 +1204,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[DBConn], None]]] = [
     (20, "tasks_board_task_id", _m020_tasks_board_task_id),
     (21, "node_capabilities_schema_hash", _m021_node_capabilities_schema_hash),
     (22, "task_stages_schema_violation", _m022_task_stages_schema_violation),
+    (23, "artifact_links_table", _m023_artifact_links_table),
 ]
 
 

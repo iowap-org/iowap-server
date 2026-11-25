@@ -1,17 +1,27 @@
 """Generic storage router for worker uploads/downloads and storage-node handoff."""
 
+import hashlib
 import logging
 import pathlib
 import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 
 from relay_server.api.v2.security import get_alive_context
 from relay_server.config import settings
 from relay_server.core.artifacts import (
+    ARTIFACT_LINK_DOWNLOADS_CAP,
+    ARTIFACT_LINK_DOWNLOADS_DEFAULT,
+    ARTIFACT_LINK_TTL_DEFAULT_SECONDS,
+    ARTIFACT_LINK_TTL_MAX_SECONDS,
+    ARTIFACT_LINK_TTL_MIN_SECONDS,
     _artifact_row_to_dict,
+    create_artifact_link,
     get_artifact_metadata,
     list_artifacts,
     store_artifact_from_file,
@@ -20,6 +30,7 @@ from relay_server.core.chunked_upload import ChunkedUploadError, chunked_manager
 from relay_server.core.db import get_conn, q
 from relay_server.core.scheduler import Scheduler
 from relay_server.models import (
+    ArtifactLinkCreateRequest,
     ArtifactReference,
     ArtifactUploadResponse,
     AuthContext,
@@ -170,6 +181,148 @@ async def storage_file_download(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Artifact file missing from storage",
         )
+
+    return FileResponse(
+        path=path,
+        filename=meta["name"],
+        media_type=meta.get("mime_type") or "application/octet-stream",
+    )
+
+
+# ── T-033: signed short-lived download links ──────────────────────
+
+
+def _link_error(code: int, detail: str) -> HTTPException:
+    """404-style raise for the unauthenticated link path.
+
+    The link GET is deliberately UNAUTHENTICATED — every failure mode
+    answers 404 with a distinguishing detail, so probing a nonexistent
+    token cannot distinguish 401/403 classes (no auth oracle).
+    """
+    return HTTPException(status_code=code, detail=detail)
+
+
+@router.post("/files/{artifact_id}/link")
+async def storage_file_link_create(
+    artifact_id: str,
+    data: ArtifactLinkCreateRequest,
+    request: Request,
+    ctx: AuthContext = Depends(get_alive_context),
+):
+    """Create a short-lived signed download link for an artifact (T-033).
+
+    Same gate as the plain download (``get_alive_context``: any live token,
+    no owner scope — the link never grants more than the creation right).
+    Defaults: ttl 900 s, max_downloads 1; both clamp LOUD (422 on
+    out-of-range, never silently softened). The plain URL token is sent
+    back exactly once — only its SHA-256 hash is stored.
+    """
+    meta = get_artifact_metadata(artifact_id)
+    if not meta:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+
+    ttl = (
+        data.ttl_seconds
+        if data.ttl_seconds is not None
+        else ARTIFACT_LINK_TTL_DEFAULT_SECONDS
+    )
+    if not (ARTIFACT_LINK_TTL_MIN_SECONDS <= ttl <= ARTIFACT_LINK_TTL_MAX_SECONDS):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"ttl_seconds out of range: {ttl} (accepted: "
+                f"{ARTIFACT_LINK_TTL_MIN_SECONDS}..{ARTIFACT_LINK_TTL_MAX_SECONDS})"
+            ),
+        )
+    max_downloads = (
+        data.max_downloads
+        if data.max_downloads is not None
+        else ARTIFACT_LINK_DOWNLOADS_DEFAULT
+    )
+    if not (1 <= max_downloads <= ARTIFACT_LINK_DOWNLOADS_CAP):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"max_downloads out of range: {max_downloads} (accepted: "
+                f"1..{ARTIFACT_LINK_DOWNLOADS_CAP})"
+            ),
+        )
+
+    link = create_artifact_link(
+        artifact_id,
+        ttl_seconds=ttl,
+        max_downloads=max_downloads,
+        created_by="admin" if ctx.is_admin else ctx.node_id,
+    )
+    # The storage router is mounted under /relay/v2 — a shareable URL must
+    # carry that prefix, otherwise every browser click 404s.
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/relay/v2/storage/files/{artifact_id}/dl/{link['token']}"
+    return {
+        "artifact_id": artifact_id,
+        "url": url,
+        "expires_at": datetime.fromtimestamp(link["expires_at"], tz=timezone.utc).isoformat(),
+        "max_downloads": max_downloads,
+        "ttl_seconds": ttl,
+        "max_downloads_cap": ARTIFACT_LINK_DOWNLOADS_CAP,
+    }
+
+
+@router.get("/files/{artifact_id}/dl/{token}")
+async def storage_file_link_download(
+    artifact_id: str,
+    token: str,
+):
+    """Consume a signed download link — NO auth dependency (T-033).
+
+    The URL itself is the bearer token. Every failure mode below is 404
+    (never 401/403): a dead link and a wrong token are indistinguishable
+    classes, so there is no token-probing oracle on this path.
+    """
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            q(
+                "SELECT link_id, expires_at, max_downloads FROM artifact_links"
+                " WHERE artifact_id = ? AND token_hash = ?",
+                (artifact_id, token_hash),
+            ),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise _link_error(status.HTTP_404_NOT_FOUND, "link not found")
+    if time.time() >= row["expires_at"]:
+        raise _link_error(status.HTTP_404_NOT_FOUND, "link expired")
+
+    meta = get_artifact_metadata(artifact_id)
+    if not meta:
+        raise _link_error(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    path = Path(meta["storage_path"])
+    if not path.exists():
+        raise _link_error(
+            status.HTTP_404_NOT_FOUND, "Artifact file missing from storage"
+        )
+
+    # Atomic consume: one UPDATE with a guard clause. Two racing requests
+    # can never both pass the guard, so max_downloads is exact even under
+    # concurrency; the row survives exhaustion until the purge task.
+    conn = get_conn()
+    try:
+        result = conn.execute(
+            q(
+                "UPDATE artifact_links SET downloads = downloads + 1"
+                " WHERE link_id = ? AND downloads < max_downloads",
+                (row["link_id"],),
+            ),
+        )
+        conn.commit()
+        consumed = result.rowcount or 0
+    finally:
+        conn.close()
+    if consumed < 1:
+        raise _link_error(status.HTTP_404_NOT_FOUND, "link exhausted")
 
     return FileResponse(
         path=path,

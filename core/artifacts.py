@@ -368,6 +368,113 @@ def cleanup_expired_artifacts(max_age_days: float = 7.0) -> Dict[str, Any]:
     }
 
 
+# ── T-033: signed short-lived download links ──────────────────────
+
+# Defaults + clamps (DEC 2026-11-25): both the TTL and the download cap are
+# client-suppliable optionals; out-of-range values are REJECTED (HTTP 422),
+# never silently softened — consistent with every other loud-clamp endpoint.
+ARTIFACT_LINK_TTL_DEFAULT_SECONDS = 900
+ARTIFACT_LINK_TTL_MIN_SECONDS = 30
+ARTIFACT_LINK_TTL_MAX_SECONDS = 86_400
+ARTIFACT_LINK_DOWNLOADS_DEFAULT = 1
+ARTIFACT_LINK_DOWNLOADS_CAP = 10
+# Once a link expired, its row survives one more day for audit, then the
+# purge task removes it.
+ARTIFACT_LINK_AUDIT_GRACE_SECONDS = 86_400
+
+
+def _hash_link_token(token: str) -> str:
+    """SHA-256 hex of the URL token — the DB never sees the plain token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_artifact_link(
+    artifact_id: str,
+    *,
+    ttl_seconds: int,
+    max_downloads: int,
+    created_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mint a signed download link for an artifact (T-033).
+
+    Returns ``{"link_id", "artifact_id", "token", "expires_at", "created_at",
+    "max_downloads"}`` with ``token`` being the plain URL token — carried
+    ONLY in the response, never persisted (the DB stores its SHA-256 hash,
+    same rule as the API keys). Callers validate and clamp ``ttl_seconds``
+    / ``max_downloads`` before calling; the row is created as-is.
+    """
+    link_id = _generate_id("lnk")
+    token = secrets.token_urlsafe(32)
+    now = _now().timestamp()
+    conn = get_conn()
+    try:
+        conn.execute(
+            q("""
+            INSERT INTO artifact_links
+            (link_id, artifact_id, token_hash, created_by, max_downloads, downloads, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+            """, (
+                link_id,
+                artifact_id,
+                _hash_link_token(token),
+                created_by,
+                max_downloads,
+                now + ttl_seconds,
+                now,
+            )),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(
+        "artifact link created: artifact=%s link=%s ttl=%ss max_downloads=%d by=%s",
+        artifact_id, link_id, ttl_seconds, max_downloads, created_by,
+    )
+    return {
+        "link_id": link_id,
+        "artifact_id": artifact_id,
+        "token": token,
+        "expires_at": now + ttl_seconds,
+        "created_at": now,
+        "max_downloads": max_downloads,
+    }
+
+
+def purge_expired_artifact_links(older_than_days: float = 1.0) -> Dict[str, Any]:
+    """Delete artifact-link rows whose expiry ended more than a day ago (T-033).
+
+    The row intentionally survives its expiration for one day (audit trail:
+    who created the link, how many downloads happened); the maintenance
+    watchdog calls this on its hourly sweep. Links carry no files of their
+    own, so ``freed_bytes``/``failed_bytes`` stay at 0 and the return shape
+    mirrors ``cleanup_expired_artifacts``.
+    """
+    from datetime import timedelta
+
+    epoch_now = _now().timestamp()
+    cutoff = epoch_now - timedelta(days=older_than_days).total_seconds()
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            q("""
+            SELECT link_id FROM artifact_links
+            WHERE expires_at < ?
+            """, (cutoff,)),
+        ).fetchall()
+        if not rows:
+            return {"deleted": 0, "freed_bytes": 0, "failed": 0, "failed_bytes": 0}
+        ids = [r["link_id"] for r in rows]
+        for link_id in ids:
+            conn.execute(
+                q("DELETE FROM artifact_links WHERE link_id = ?", (link_id,)),
+            )
+        conn.commit()
+        logger.info("purged %d expired artifact links", len(ids))
+        return {"deleted": len(ids), "freed_bytes": 0, "failed": 0, "failed_bytes": 0}
+    finally:
+        conn.close()
+
+
 def _artifact_row_to_dict(row: Any, include_storage_path: bool = False) -> Dict[str, Any]:
     # T-005g: storage_path is a server-internal absolute filesystem path and
     # must never appear in API responses. It stays available only for

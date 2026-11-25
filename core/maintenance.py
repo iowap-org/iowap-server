@@ -262,7 +262,10 @@ class MaintenanceScheduler:
         ``init_db`` has run — and so tests can selectively replace
         individual tasks with mocks.
         """
-        from relay_server.core.artifacts import cleanup_expired_artifacts
+        from relay_server.core.artifacts import (
+            cleanup_expired_artifacts,
+            purge_expired_artifact_links,
+        )
         from relay_server.core.chunked_upload import chunked_manager
         from relay_server.core.discovery import mark_offline_nodes
         from relay_server.core.scheduler import Scheduler
@@ -329,6 +332,15 @@ class MaintenanceScheduler:
             "temp_route_cleanup",
             _temp_route_cleanup,
             settings.temp_route_cleanup_interval_seconds,
+        )
+
+        # T-033: artifact-link purge — link rows survive their expiry by one
+        # full day for audit (who minted it, how many downloads), then this
+        # hourly task reaps them.
+        self.register(
+            "purge_artifact_links",
+            lambda: purge_expired_artifact_links(older_than_days=1.0),
+            3600,
         )
 
 

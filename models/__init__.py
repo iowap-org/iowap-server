@@ -316,6 +316,19 @@ class ArtifactUploadResponse(BaseModel):
     created_by: str
 
 
+class ArtifactLinkCreateRequest(BaseModel):
+    """Body for POST /relay/v2/storage/files/{id}/link (T-033).
+
+    Both fields optional: absent ttl_seconds → server default (900 s),
+    absent max_downloads → server default (1). Range validation happens
+    endpoint-side (422), not here — the limits are owned by the storage
+    router so the defaults live in core/artifacts.py in one place.
+    """
+
+    ttl_seconds: Optional[int] = None
+    max_downloads: Optional[int] = None
+
+
 # ── Discovery models ────────────────────────────────────────────
 
 class DiscoveryNode(BaseModel):
